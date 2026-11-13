@@ -279,3 +279,35 @@ def test_image_background_removal_and_tight_crop(api_client, user_a):
     )
     assert bg_resp.status_code == 200
 
+
+@pytest.mark.django_db
+def test_media_files_served_when_debug_false(api_client, user_a, settings):
+    settings.DEBUG = False
+
+    img = Image.new("RGB", (50, 50), color=(212, 175, 55))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+
+    _, _, token_a = user_a
+    headers_a = {"HTTP_AUTHORIZATION": f"Bearer {token_a}"}
+    item = api_client.post(
+        "/api/v1/catalog/items",
+        data=json.dumps({"title": "Silver Bar", "category": "BAR"}),
+        content_type="application/json",
+        **headers_a,
+    ).json()
+
+    upload = SimpleUploadedFile("bar.png", buf.getvalue(), content_type="image/png")
+    p_resp = api_client.post(
+        f"/api/v1/catalog/items/{item['id']}/photos",
+        data={"file": upload, "label": "OBVERSE", "is_primary": "true", "remove_background": "false"},
+        **headers_a,
+    )
+    assert p_resp.status_code == 201
+    photo_url = p_resp.json()["url"]
+    assert photo_url.startswith("/media/")
+
+    media_resp = api_client.get(photo_url)
+    assert media_resp.status_code == 200
+    assert media_resp["Content-Type"] == "image/png"
+
