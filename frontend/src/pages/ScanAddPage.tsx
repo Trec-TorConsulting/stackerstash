@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { GuidedCameraModal, type GuidedCameraResult } from "../components/GuidedCameraModal";
 import { api, type ContainerNode } from "../lib/api";
 import { CATEGORY_LABELS, METAL_LABELS } from "../lib/format";
+import { normalizeImageFileForUpload } from "../lib/imageUtils";
 
 function flattenContainers(nodes: ContainerNode[], depth = 0): Array<{ id: string; label: string }> {
   const out: Array<{ id: string; label: string }> = [];
@@ -24,10 +25,6 @@ export function ScanAddPage() {
   const { data: containers = [] } = useQuery({
     queryKey: ["containers"],
     queryFn: api.getContainers,
-  });
-  const { data: presets = [] } = useQuery({
-    queryKey: ["presets"],
-    queryFn: api.getPresets,
   });
 
   const [files, setFiles] = useState<Array<{ file: File; label: string; preview: string }>>([]);
@@ -119,24 +116,6 @@ export function ScanAddPage() {
     setFiles(next);
   }
 
-  function applyPreset(preset: Record<string, unknown>) {
-    setForm((f) => ({
-      ...f,
-      category: String(preset.category || "COIN"),
-      title: String(preset.title || ""),
-      country: String(preset.country || ""),
-      mint_or_refiner: String(preset.mint_or_refiner || ""),
-      denomination: String(preset.denomination || ""),
-      metal_type: String(preset.metal_type || "NONE"),
-      weight_value: String(preset.weight_value || "0"),
-      weight_unit: String(preset.weight_unit || "OZ_T"),
-      purity: String(preset.purity || "0.999000"),
-      grading_service: String(preset.grading_service || "NONE"),
-      quantity: Number(preset.quantity || 1),
-      tagsText: Array.isArray(preset.tags) ? preset.tags.join(", ") : "",
-    }));
-  }
-
   const needsFrontBack =
     intakeSource === "UPLOAD" && (form.category === "COIN" || form.category === "PAPER");
   const hasObverse = files.some((f) => f.label === "OBVERSE");
@@ -149,8 +128,11 @@ export function ScanAddPage() {
     setAiNotice(null);
     setError(null);
     try {
+      const normalizedFiles = await Promise.all(
+        files.map((f) => normalizeImageFileForUpload(f.file))
+      );
       const res = await api.identifyImages(
-        files.map((f) => f.file),
+        normalizedFiles,
         barcodeHint || undefined,
         intakeSource === "CAMERA" ? "camera" : "upload"
       );
@@ -254,25 +236,6 @@ export function ScanAddPage() {
         <p className="text-sm text-slate-400">
           Snap or upload coins, paper bills, 1kg copper, Geiger bars, or graded slabs.
         </p>
-      </div>
-
-      {/* Quick Presets */}
-      <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-2.5">
-        <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-          Quick-Add Presets
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {presets.map((p) => (
-            <button
-              key={String(p.key)}
-              type="button"
-              onClick={() => applyPreset(p)}
-              className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-amber-500/40 text-xs font-medium text-slate-200 transition"
-            >
-              {String(p.label)}
-            </button>
-          ))}
-        </div>
       </div>
 
       {/* Camera & Photo Intake */}

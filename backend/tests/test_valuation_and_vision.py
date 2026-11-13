@@ -132,3 +132,93 @@ def test_vision_gemini_fallback_to_ollama_and_manual(api_client, user_a):
     assert body["candidate"]["title"] == "Geiger 100g Silver Bar"
     assert body["candidate"]["cert_number"] == ""
 
+
+@pytest.mark.django_db
+@respx.mock
+def test_vision_gemini_thought_part_and_large_image_normalization(api_client, user_a):
+    import io
+
+    from PIL import Image
+
+    _, ws, token = user_a
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    c1 = ProviderCredential(workspace=ws, provider="GEMINI")
+    c1.set_secret("test-gemini-secret-key")
+    c1.save()
+
+    # Simulate a large iPhone-sized image (3000x2000 PNG)
+    buf = io.BytesIO()
+    Image.new("RGB", (3000, 2000), color=(200, 180, 120)).save(buf, format="PNG")
+    large_png = SimpleUploadedFile("iphone.png", buf.getvalue(), content_type="application/octet-stream")
+
+    gemini_route = respx.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {"thought": True, "text": "Let me examine the coin..."},
+                                {
+                                    "text": json.dumps({
+                                        "category": "COIN",
+                                        "title": "1921 Morgan Silver Dollar",
+                                        "metal_type": "SILVER",
+                                        "ai_confidence": 0.95,
+                                    })
+                                },
+                            ]
+                        }
+                    }
+                ]
+            },
+        )
+    )
+
+    resp = api_client.post("/api/v1/vision/identify", data={"files": [large_png]}, **headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["provider_used"] == "GEMINI"
+    assert body["candidate"]["title"] == "1921 Morgan Silver Dollar"
+
+    # Verify the payload sent to Gemini was normalized to image/jpeg and downscaled
+    sent_payload = json.loads(gemini_route.calls[0].request.content)
+    inline_data = sent_payload["contents"][0]["parts"][1]["inline_data"]
+    assert inline_data["mime_type"] == "image/jpeg"
+
+
+@pytest.mark.django_db
+@respx.mock
+def test_vision_reports_sanitized_provider_errors_when_all_fail(api_client, user_a):
+    _, ws, token = user_a
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    c1 = ProviderCredential(workspace=ws, provider="GEMINI")
+    c1.set_secret("super-secret-gemini-key")
+    c1.save()
+    c2 = ProviderCredential(workspace=ws, provider="OLLAMA_URL")
+    c2.set_secret("http://localhost:11434")
+    c2.save()
+
+    respx.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    ).mock(return_value=httpx.Response(400, json={"error": {"message": "API key not valid"}}))
+    respx.post("http://localhost:11434/api/chat").mock(
+        side_effect=httpx.ConnectError("Connection refused")
+    )
+
+    img = SimpleUploadedFile("coin.jpg", b"fake-jpeg-bytes", content_type="image/jpeg")
+    resp = api_client.post("/api/v1/vision/identify", data={"files": [img]}, **headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["provider_used"] == "MANUAL"
+    assert "super-secret-gemini-key" not in body["warning"]
+    assert "Gemini:" in body["warning"]
+    assert "Ollama:" in body["warning"]
+    assert len(body["provider_errors"]) == 2
+
+

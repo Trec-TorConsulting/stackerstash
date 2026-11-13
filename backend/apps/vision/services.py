@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
+import re
 from decimal import Decimal
 from typing import Any
 
 import httpx
+from PIL import Image, ImageOps
 
 from apps.accounts.models import ProviderCredential, Workspace
 from apps.catalog.models import CollectionItem
@@ -106,8 +109,79 @@ def _normalize_candidate(raw: dict[str, Any], barcode_hint: str | None = None) -
     return candidate
 
 
+def _sanitize_error_message(message: str) -> str:
+    """Redact API keys from URLs before logging or returning error diagnostics."""
+    return re.sub(r"([?&]key=)[^&\s]+", r"\1***", str(message))
+
+
+def _infer_image_mime(img_bytes: bytes, declared_mime: str | None) -> str:
+    mime = (declared_mime or "").strip().lower()
+    if mime and mime != "application/octet-stream":
+        return mime
+    if img_bytes.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if img_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if len(img_bytes) >= 12 and img_bytes[:4] == b"RIFF" and img_bytes[8:12] == b"WEBP":
+        return "image/webp"
+    if len(img_bytes) >= 12 and img_bytes[4:8] == b"ftyp":
+        brand = img_bytes[8:12]
+        if brand in {b"heic", b"heix", b"hevc", b"hevx", b"mif1"}:
+            return "image/heic"
+        if brand in {b"heif", b"msf1"}:
+            return "image/heif"
+    return "image/jpeg"
+
+
+def _prepare_images_for_vision(
+    images: list[tuple[bytes, str]], max_dimension: int = 1600
+) -> list[tuple[bytes, str]]:
+    """
+    Normalize orientation, downscale large mobile/camera photos, and re-encode as JPEG
+    so both Gemini and Ollama receive compact, standard image payloads.
+    """
+    prepared: list[tuple[bytes, str]] = []
+    for img_bytes, mime_type in images:
+        try:
+            with Image.open(io.BytesIO(img_bytes)) as opened:
+                img = ImageOps.exif_transpose(opened)
+                if max(img.size) > max_dimension:
+                    img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+                if img.mode in {"RGBA", "LA", "P"}:
+                    rgba = img.convert("RGBA")
+                    bg = Image.new("RGB", rgba.size, (255, 255, 255))
+                    bg.paste(rgba, mask=rgba.split()[-1])
+                    rgb = bg
+                elif img.mode != "RGB":
+                    rgb = img.convert("RGB")
+                else:
+                    rgb = img
+                out = io.BytesIO()
+                rgb.save(out, format="JPEG", quality=88, optimize=True)
+                prepared.append((out.getvalue(), "image/jpeg"))
+        except Exception:
+            prepared.append((img_bytes, _infer_image_mime(img_bytes, mime_type)))
+    return prepared
+
+
+def _extract_gemini_text(data: dict[str, Any]) -> str:
+    candidates = data.get("candidates") or []
+    if not candidates:
+        block_reason = (data.get("promptFeedback") or {}).get("blockReason")
+        raise ValueError(f"Gemini returned no candidates (blockReason={block_reason or 'unknown'})")
+    parts = ((candidates[0].get("content") or {}).get("parts")) or []
+    for part in parts:
+        if not part.get("thought") and isinstance(part.get("text"), str) and part["text"].strip():
+            return part["text"]
+    for part in reversed(parts):
+        if isinstance(part.get("text"), str) and part["text"].strip():
+            return part["text"]
+    finish_reason = candidates[0].get("finishReason")
+    raise ValueError(f"Gemini candidate contained no text (finishReason={finish_reason or 'unknown'})")
+
+
 def _call_gemini_vision(
-    images: list[tuple[bytes, str]], api_key: str, prompt: str, timeout: float = 25.0
+    images: list[tuple[bytes, str]], api_key: str, prompt: str, timeout: float = 45.0
 ) -> dict[str, Any]:
     parts: list[dict[str, Any]] = [{"text": prompt}]
     for img_bytes, mime_type in images:
@@ -125,13 +199,21 @@ def _call_gemini_vision(
     )
     payload = {
         "contents": [{"parts": parts}],
-        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "temperature": 0.1,
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
     }
     with httpx.Client(timeout=timeout) as client:
         resp = client.post(url, json=payload)
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = _sanitize_error_message(exc.response.text[:300])
+            raise RuntimeError(f"HTTP {exc.response.status_code}: {detail}") from exc
         data = resp.json()
-    text = data["candidates"][0]["content"]["parts"][0]["text"]
+    text = _extract_gemini_text(data)
     return {"parsed": _extract_json_block(text), "raw": data}
 
 
@@ -140,7 +222,7 @@ def _call_ollama_vision(
     ollama_url: str,
     model_name: str,
     prompt: str,
-    timeout: float = 45.0,
+    timeout: float = 60.0,
 ) -> dict[str, Any]:
     b64_images = [base64.b64encode(b).decode("ascii") for b, _ in images]
     endpoint = f"{ollama_url.rstrip('/')}/api/chat"
@@ -158,7 +240,10 @@ def _call_ollama_vision(
     }
     with httpx.Client(timeout=timeout) as client:
         resp = client.post(endpoint, json=payload)
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(f"HTTP {exc.response.status_code}: {exc.response.text[:300]}") from exc
         data = resp.json()
     text = data["message"]["content"]
     return {"parsed": _extract_json_block(text), "raw": data}
@@ -212,10 +297,12 @@ def identify_images(
         _get_secret(workspace, ProviderCredential.Provider.OLLAMA_MODEL) or "llama3.2-vision"
     )
 
-    last_error = ""
+    vision_images = _prepare_images_for_vision(images)
+    provider_errors: list[str] = []
+
     if gemini_key:
         try:
-            res = _call_gemini_vision(images, gemini_key, prompt)
+            res = _call_gemini_vision(vision_images, gemini_key, prompt)
             candidate = _normalize_candidate(res["parsed"], barcode_hint)
             job = IdentificationJob.objects.create(
                 workspace=workspace,
@@ -236,12 +323,13 @@ def identify_images(
                 "verification_warnings": verification_warnings,
             }
         except Exception as exc:
-            logger.warning("Gemini vision failed, checking Ollama fallback: %s", exc)
-            last_error = str(exc)
+            err_msg = _sanitize_error_message(str(exc))
+            logger.warning("Gemini vision failed, checking Ollama fallback: %s", err_msg)
+            provider_errors.append(f"Gemini: {err_msg}")
 
     if ollama_url:
         try:
-            res = _call_ollama_vision(images, ollama_url, ollama_model, prompt)
+            res = _call_ollama_vision(vision_images, ollama_url, ollama_model, prompt)
             candidate = _normalize_candidate(res["parsed"], barcode_hint)
             job = IdentificationJob.objects.create(
                 workspace=workspace,
@@ -262,27 +350,33 @@ def identify_images(
                 "verification_warnings": verification_warnings,
             }
         except Exception as exc:
-            logger.warning("Ollama vision failed: %s", exc)
-            last_error = str(exc)
+            err_msg = _sanitize_error_message(str(exc))
+            logger.warning("Ollama vision failed: %s", err_msg)
+            provider_errors.append(f"Ollama: {err_msg}")
 
     fallback_candidate = _normalize_candidate({}, barcode_hint)
+    combined_error = "; ".join(provider_errors)
     job = IdentificationJob.objects.create(
         workspace=workspace,
         status=IdentificationJob.Status.MANUAL_FALLBACK,
         provider_used="MANUAL",
         parsed_candidate=fallback_candidate,
-        error_message=last_error,
+        error_message=combined_error,
     )
     verification_status, verification_warnings = _run_image_verification(
         images, None, intake_mode
+    )
+    warning_msg = (
+        f"No AI vision provider succeeded ({combined_error}). Complete item details manually or configure Gemini/Ollama in Settings."
+        if combined_error
+        else "No AI vision provider succeeded. Complete item details manually or configure Gemini/Ollama in Settings."
     )
     return {
         "job_id": str(job.id),
         "provider_used": "MANUAL",
         "candidate": fallback_candidate,
-        "warning": (
-            "No AI vision provider succeeded. Complete item details manually or configure Gemini/Ollama in Settings."
-        ),
+        "warning": warning_msg,
+        "provider_errors": provider_errors,
         "verification_status": verification_status,
         "verification_warnings": verification_warnings,
     }
@@ -447,18 +541,24 @@ def estimate_item_value_with_ai(
         for use_grounding in (True, False):
             payload_body: dict[str, Any] = {
                 "contents": [{"parts": parts}],
-                "generationConfig": {"temperature": 0.1}
-                if use_grounding
-                else {"responseMimeType": "application/json", "temperature": 0.1},
+                "generationConfig": (
+                    {"temperature": 0.1, "thinkingConfig": {"thinkingBudget": 0}}
+                    if use_grounding
+                    else {
+                        "responseMimeType": "application/json",
+                        "temperature": 0.1,
+                        "thinkingConfig": {"thinkingBudget": 0},
+                    }
+                ),
             }
             if use_grounding:
                 payload_body["tools"] = [{"google_search": {}}]
             try:
-                with httpx.Client(timeout=20.0) as client:
+                with httpx.Client(timeout=30.0) as client:
                     resp = client.post(url, json=payload_body)
                     resp.raise_for_status()
                     data = resp.json()
-                text_out = data["candidates"][0]["content"]["parts"][0]["text"]
+                text_out = _extract_gemini_text(data)
                 parsed = _extract_json_block(text_out)
                 grounded = _extract_gemini_grounded_sources(data) if use_grounding else []
                 val, normalized = _normalize_ai_appraisal(
@@ -470,7 +570,11 @@ def estimate_item_value_with_ai(
                 if val is not None:
                     return val, normalized
             except Exception as exc:
-                logger.warning("Gemini AI appraisal (grounding=%s) failed: %s", use_grounding, exc)
+                logger.warning(
+                    "Gemini AI appraisal (grounding=%s) failed: %s",
+                    use_grounding,
+                    _sanitize_error_message(str(exc)),
+                )
 
     if ollama_url:
         try:
