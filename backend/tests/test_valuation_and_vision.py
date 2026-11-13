@@ -95,9 +95,10 @@ def test_vision_gemini_fallback_to_ollama_and_manual(api_client, user_a):
     c2.set_secret("http://ollama.local:11434")
     c2.save()
 
-    respx.post(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
-    ).mock(return_value=httpx.Response(429, json={"error": "rate limit"}))
+    for m in ("gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"):
+        respx.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
+        ).mock(return_value=httpx.Response(429, json={"error": "rate limit"}))
 
     respx.post("http://ollama.local:11434/api/chat").mock(
         return_value=httpx.Response(
@@ -220,5 +221,185 @@ def test_vision_reports_sanitized_provider_errors_when_all_fail(api_client, user
     assert "Gemini:" in body["warning"]
     assert "Ollama:" in body["warning"]
     assert len(body["provider_errors"]) == 2
+
+
+@pytest.mark.django_db
+@respx.mock
+def test_vision_gemini_model_cascade_and_groq_openrouter_fallback(api_client, user_a):
+    _, ws, token = user_a
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    c1 = ProviderCredential(workspace=ws, provider="GEMINI")
+    c1.set_secret("gemini-secret")
+    c1.save()
+
+    # 1. Gemini 2.5-flash returns 429 -> cascades to 2.5-flash-lite -> succeeds
+    respx.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    ).mock(return_value=httpx.Response(429, json={"error": "quota"}))
+    respx.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": json.dumps(
+                                        {
+                                            "category": "PAPER",
+                                            "title": "$1 Silver Certificate 1957",
+                                            "year": "1957",
+                                            "denomination": "$1",
+                                            "ai_confidence": 0.91,
+                                        }
+                                    )
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+        )
+    )
+
+    img = SimpleUploadedFile("note.jpg", b"fake-jpeg-bytes", content_type="image/jpeg")
+    resp = api_client.post("/api/v1/vision/identify", data={"files": [img]}, **headers)
+    assert resp.status_code == 200
+    assert resp.json()["provider_used"] == "GEMINI"
+    assert resp.json()["candidate"]["title"] == "$1 Silver Certificate 1957"
+
+    # 2. All Gemini models 429 + Groq 429 -> OpenRouter succeeds
+    for m in ("gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"):
+        respx.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
+        ).mock(return_value=httpx.Response(429, json={"error": "quota"}))
+
+    c_groq = ProviderCredential(workspace=ws, provider="GROQ_API_KEY")
+    c_groq.set_secret("gsk_secret_token")
+    c_groq.save()
+    c_or = ProviderCredential(workspace=ws, provider="OPENROUTER_API_KEY")
+    c_or.set_secret("sk-or-secret-token")
+    c_or.save()
+
+    respx.post("https://api.groq.com/openai/v1/chat/completions").mock(
+        return_value=httpx.Response(429, json={"error": "rate limit"})
+    )
+    respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "category": "ROUND",
+                                    "title": "1 oz Buffalo Silver Round",
+                                    "metal_type": "SILVER",
+                                    "weight_value": 1,
+                                    "weight_unit": "OZ_T",
+                                    "ai_confidence": 0.88,
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+    )
+
+    img2 = SimpleUploadedFile("round.jpg", b"fake-jpeg-bytes", content_type="image/jpeg")
+    resp2 = api_client.post("/api/v1/vision/identify", data={"files": [img2]}, **headers)
+    assert resp2.status_code == 200
+    assert resp2.json()["provider_used"] == "OPENROUTER"
+    assert resp2.json()["candidate"]["title"] == "1 oz Buffalo Silver Round"
+
+
+@pytest.mark.django_db
+@respx.mock
+def test_vision_ocr_catalog_and_text_only_fallback(api_client, user_a, monkeypatch):
+    _, ws, token = user_a
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    # 1. No AI providers configured, but OCR extracts PCGS slab text + PCGS token enriches value
+    c_pcgs = ProviderCredential(workspace=ws, provider="PCGS")
+    c_pcgs.set_secret("pcgs-token-123")
+    c_pcgs.save()
+
+    monkeypatch.setattr(
+        "apps.vision.services.extract_text_from_images",
+        lambda _imgs: "PCGS\n1921 MORGAN $1\nMS65\nCERT #45678901",
+    )
+    respx.get("https://api.pcgs.com/publicapi/coindetails/GetCoinFactsByCertNo/45678901").mock(
+        return_value=httpx.Response(200, json={"PriceGuideValue": 185.0})
+    )
+
+    img = SimpleUploadedFile("slab.jpg", b"fake-jpeg-bytes", content_type="image/jpeg")
+    resp = api_client.post("/api/v1/vision/identify", data={"files": [img]}, **headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["provider_used"] == "OCR_CATALOG"
+    assert body["candidate"]["grading_service"] == "PCGS"
+    assert body["candidate"]["cert_number"] == "45678901"
+    assert body["candidate"]["grade"] == "MS65"
+    assert body["candidate"]["estimated_value_usd"] == 185.0
+
+    # 2. Groq vision fails (429), OCR extracts paper note text -> Groq text-only (no image) succeeds
+    c_groq = ProviderCredential(workspace=ws, provider="GROQ_API_KEY")
+    c_groq.set_secret("gsk_test_key")
+    c_groq.save()
+
+    monkeypatch.setattr(
+        "apps.vision.services.extract_text_from_images",
+        lambda _imgs: "FEDERAL RESERVE NOTE\nONE DOLLAR\nSERIES 2017A\nB12345678C",
+    )
+
+    groq_calls = []
+
+    def groq_handler(request):
+        payload = json.loads(request.content)
+        groq_calls.append(payload)
+        content = payload["messages"][0]["content"]
+        # First call is vision (list content with image_url) -> 429; second call is text-only (str content) -> 200
+        if isinstance(content, list):
+            return httpx.Response(429, json={"error": "vision quota exceeded"})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "category": "PAPER",
+                                    "title": "2017A $1 Federal Reserve Note",
+                                    "country": "United States",
+                                    "year": "2017A",
+                                    "denomination": "$1",
+                                    "serial_number": "B12345678C",
+                                    "ai_confidence": 0.85,
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    respx.post("https://api.groq.com/openai/v1/chat/completions").mock(side_effect=groq_handler)
+
+    img2 = SimpleUploadedFile("bill.jpg", b"fake-jpeg-bytes", content_type="image/jpeg")
+    resp2 = api_client.post("/api/v1/vision/identify", data={"files": [img2]}, **headers)
+    assert resp2.status_code == 200
+    body2 = resp2.json()
+    assert body2["provider_used"] == "OCR_TEXT"
+    assert body2["candidate"]["serial_number"] == "B12345678C"
+    assert body2["candidate"]["title"] == "2017A $1 Federal Reserve Note"
+    # Verify second call sent text only (no image_url)
+    assert isinstance(groq_calls[1]["messages"][0]["content"], str)
 
 
