@@ -490,27 +490,33 @@ def detect_rectangular_subject(
     if fg_area < w * h * 0.03:
         return None
 
-    # If the foreground mask is irregular (extent < 0.85), leftover background mat may still be attached
+    # If the foreground mask is irregular or has leftover mat (extent < 0.92), refine via LAB-distance Otsu
     extent = _contour_extent(fg_mask)
-    if extent < 0.85:
+    if extent < 0.92:
         bgr = cv2.cvtColor(arr[:, :, :3], cv2.COLOR_RGB2BGR)
-        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         L = lab[:, :, 0]
         opaque = alpha > 128
         if int(opaque.sum()) >= 64:
-            otsu_t, _ = cv2.threshold(L[opaque], 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            cand = np.where((L > otsu_t) & opaque, 255, 0).astype(np.uint8)
-            k = max(5, int(min(h, w) * 0.02) | 1)
-            cand = cv2.morphologyEx(cand, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
-            cnts, _ = cv2.findContours(cand, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if cnts:
-                largest = max(cnts, key=cv2.contourArea)
-                filled = np.zeros_like(cand)
-                cv2.drawContours(filled, [largest], -1, 255, thickness=cv2.FILLED)
-                cand_area = int((filled > 0).sum())
-                cand_extent = _contour_extent(filled)
-                if cand_area >= fg_area * 0.15 and cand_extent > extent + 0.05:
-                    fg_mask = filled
+            dark_thresh = float(np.percentile(L[opaque], 20))
+            dark_mask = opaque & (L <= dark_thresh)
+            bg_lab = np.median(lab[dark_mask], axis=0) if dark_mask.any() else np.median(lab[opaque], axis=0)
+            ldist = np.linalg.norm(lab - bg_lab, axis=2)
+            ldist_u8 = np.clip(ldist, 0, 255).astype(np.uint8)
+            otsu_t, _ = cv2.threshold(ldist_u8[opaque], 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            if extent < 0.85 or otsu_t >= 35.0:
+                cand = np.where((ldist_u8 > otsu_t) & opaque, 255, 0).astype(np.uint8)
+                k = max(5, int(min(h, w) * 0.02) | 1)
+                cand = cv2.morphologyEx(cand, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+                cnts, _ = cv2.findContours(cand, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if cnts:
+                    largest = max(cnts, key=cv2.contourArea)
+                    filled = np.zeros_like(cand)
+                    cv2.drawContours(filled, [largest], -1, 255, thickness=cv2.FILLED)
+                    cand_area = int((filled > 0).sum())
+                    cand_extent = _contour_extent(filled)
+                    if cand_area >= fg_area * 0.15 and cand_extent > extent:
+                        fg_mask = filled
 
     rect = _fit_tight_rect_from_mask(fg_mask)
     if rect is None:
