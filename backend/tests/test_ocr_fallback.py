@@ -67,3 +67,18 @@ def test_extract_text_from_images_preprocesses_and_filters_confidence():
 
     assert text == "PCGS\n1921"
 
+
+def test_preprocess_image_for_ocr_outputs_downscaled_jpeg():
+    from apps.vision.ocr import _preprocess_image_for_ocr
+
+    img = Image.new("RGB", (2400, 1800), color=(200, 200, 200))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+
+    processed = _preprocess_image_for_ocr(buf.getvalue())
+    assert processed is not None
+    with Image.open(io.BytesIO(processed)) as out:
+        assert out.format == "JPEG"
+        assert max(out.size) <= 1200
+
+

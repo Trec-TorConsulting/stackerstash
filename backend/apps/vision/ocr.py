@@ -31,7 +31,7 @@ def _get_ocr_engine() -> Any:
         return None
 
 
-def _preprocess_image_for_ocr(img_bytes: bytes, max_dimension: int = 1600) -> bytes | None:
+def _preprocess_image_for_ocr(img_bytes: bytes, max_dimension: int = 1200) -> bytes | None:
     """Normalize EXIF orientation, enhance contrast, and resize for local OCR."""
     try:
         with Image.open(io.BytesIO(img_bytes)) as opened:
@@ -41,7 +41,7 @@ def _preprocess_image_for_ocr(img_bytes: bytes, max_dimension: int = 1600) -> by
             gray = ImageOps.grayscale(img)
             enhanced = ImageOps.autocontrast(gray, cutoff=1).convert("RGB")
             out = io.BytesIO()
-            enhanced.save(out, format="PNG")
+            enhanced.save(out, format="JPEG", quality=85)
             return out.getvalue()
     except Exception:
         return None

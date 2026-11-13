@@ -425,4 +425,34 @@ def test_merge_enriched_specs_truncates_char_fields():
     assert len(item.variety) <= 120
 
 
+def test_gemini_vision_models_excludes_retired_models():
+    from apps.vision.services import GEMINI_VISION_MODELS
+
+    assert "gemini-2.0-flash" not in GEMINI_VISION_MODELS
+    assert "gemini-2.5-flash" in GEMINI_VISION_MODELS
+
+
+def test_parse_ollama_response_handles_json_ndjson_empty_and_non_json():
+    from apps.vision.services import _parse_ollama_response
+
+    text, raw = _parse_ollama_response('{"message": {"content": "{\\"title\\": \\"Eagle\\"}"}}')
+    assert '"Eagle"' in text
+    assert raw["message"]["content"]
+
+    ndjson = (
+        '{"message": {"content": "{\\"title\\": "}}\n'
+        '{"message": {"content": "\\"Morgan\\"}"}}\n'
+    )
+    nd_text, nd_raw = _parse_ollama_response(ndjson)
+    assert nd_text == '{"title": "Morgan"}'
+    assert len(nd_raw["chunks"]) == 2
+
+    with pytest.raises(ValueError, match="empty response body"):
+        _parse_ollama_response("   \n")
+
+    with pytest.raises(ValueError, match="non-JSON response"):
+        _parse_ollama_response("<html>502 Bad Gateway</html>")
+
+
+
 

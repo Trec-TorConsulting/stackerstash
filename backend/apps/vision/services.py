@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import re
+import time
 from decimal import Decimal
 from typing import Any
 
@@ -22,7 +23,6 @@ logger = logging.getLogger(__name__)
 GEMINI_VISION_MODELS: tuple[str, ...] = (
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
 )
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
@@ -326,26 +326,64 @@ def _call_openai_compat_chat(
     return {"parsed": _extract_json_block(str(text)), "raw": data}
 
 
+def _parse_ollama_response(raw_body: str) -> tuple[str, Any]:
+    """Parse an Ollama /api/chat response from either JSON or NDJSON chunks."""
+    stripped = (raw_body or "").strip()
+    if not stripped:
+        raise ValueError("Ollama returned empty response body")
+
+    try:
+        data = json.loads(stripped)
+        if isinstance(data, dict):
+            text = (data.get("message") or {}).get("content") or data.get("response") or ""
+            if not str(text).strip():
+                raise ValueError("Ollama returned empty completion text")
+            return str(text), data
+    except json.JSONDecodeError:
+        pass
+
+    chunks: list[dict[str, Any]] = []
+    parts: list[str] = []
+    for line in stripped.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            chunks = []
+            break
+        if isinstance(obj, dict):
+            chunks.append(obj)
+            chunk_text = (obj.get("message") or {}).get("content") or obj.get("response") or ""
+            if chunk_text:
+                parts.append(str(chunk_text))
+
+    if chunks:
+        joined = "".join(parts)
+        if not joined.strip():
+            raise ValueError("Ollama returned empty completion text")
+        return joined, {"chunks": chunks}
+
+    raise ValueError(f"Ollama returned non-JSON response: {stripped[:200]}")
+
+
 def _call_ollama_vision(
     images: list[tuple[bytes, str]],
     ollama_url: str,
     model_name: str,
     prompt: str,
-    timeout: float = 60.0,
+    timeout: float = 25.0,
 ) -> dict[str, Any]:
-    b64_images = [base64.b64encode(b).decode("ascii") for b, _ in images]
     endpoint = f"{ollama_url.rstrip('/')}/api/chat"
+    message: dict[str, Any] = {"role": "user", "content": prompt}
+    if images:
+        message["images"] = [base64.b64encode(b).decode("ascii") for b, _ in images]
     payload = {
         "model": model_name or "llama3.2-vision",
         "stream": False,
         "format": "json",
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt,
-                "images": b64_images,
-            }
-        ],
+        "messages": [message],
     }
     with httpx.Client(timeout=timeout) as client:
         resp = client.post(endpoint, json=payload)
@@ -353,8 +391,8 @@ def _call_ollama_vision(
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise RuntimeError(f"HTTP {exc.response.status_code}: {exc.response.text[:300]}") from exc
-        data = resp.json()
-    text = data["message"]["content"]
+        raw_body = resp.text
+    text, data = _parse_ollama_response(raw_body)
     return {"parsed": _extract_json_block(text), "raw": data}
 
 
@@ -431,6 +469,7 @@ def _attempt_ocr_fallback(
     ollama_url: str,
     ollama_model: str,
     provider_errors: list[str],
+    skip_ollama_text: bool = False,
 ) -> dict[str, Any] | None:
     """Run local OCR, optional text-only LLM structuring, and deterministic catalog enrichment."""
     ocr_text = extract_text_from_images(vision_images)
@@ -488,11 +527,11 @@ def _attempt_ocr_fallback(
                 ),
             )
         )
-    if ollama_url:
+    if ollama_url and not skip_ollama_text:
         text_attempts.append(
             (
                 "Ollama-Text",
-                lambda: _call_ollama_vision([], ollama_url, ollama_model, ocr_prompt),
+                lambda: _call_ollama_vision([], ollama_url, ollama_model, ocr_prompt, timeout=15.0),
             )
         )
 
@@ -582,6 +621,8 @@ def identify_images(
 
     vision_images = _prepare_images_for_vision(images)
     provider_errors: list[str] = []
+    deadline = time.monotonic() + 75.0
+    ollama_failed = False
 
     if gemini_key:
         try:
@@ -626,15 +667,28 @@ def identify_images(
             provider_errors.append(f"OpenRouter: {err_msg}")
 
     if ollama_url:
-        try:
-            res = _call_ollama_vision(vision_images, ollama_url, ollama_model, prompt)
-            return _record_vision_success(
-                workspace, "OLLAMA", res, images, barcode_hint, intake_mode
-            )
-        except Exception as exc:
-            err_msg = _sanitize_error_message(str(exc))
-            logger.warning("Ollama vision failed: %s", err_msg)
-            provider_errors.append(f"Ollama: {err_msg}")
+        remaining = deadline - time.monotonic()
+        if remaining < 5.0:
+            ollama_failed = True
+            logger.warning("Skipping Ollama vision fallback: request time budget exhausted")
+            provider_errors.append("Ollama: Skipped (request time budget exhausted)")
+        else:
+            try:
+                res = _call_ollama_vision(
+                    vision_images,
+                    ollama_url,
+                    ollama_model,
+                    prompt,
+                    timeout=min(25.0, remaining),
+                )
+                return _record_vision_success(
+                    workspace, "OLLAMA", res, images, barcode_hint, intake_mode
+                )
+            except Exception as exc:
+                ollama_failed = True
+                err_msg = _sanitize_error_message(str(exc))
+                logger.warning("Ollama vision failed: %s", err_msg)
+                provider_errors.append(f"Ollama: {err_msg}")
 
     ocr_result = _attempt_ocr_fallback(
         workspace=workspace,
@@ -648,6 +702,7 @@ def identify_images(
         ollama_url=ollama_url,
         ollama_model=ollama_model,
         provider_errors=provider_errors,
+        skip_ollama_text=ollama_failed or (deadline - time.monotonic() < 5.0),
     )
     if ocr_result is not None:
         return ocr_result
