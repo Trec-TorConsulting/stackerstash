@@ -485,6 +485,7 @@ def _download_and_validate_photo(
     item_title: str,
     url: str,
     remove_background: bool = True,
+    shape_hint: str | None = None,
 ) -> tuple[tuple[bytes, int, int, str] | None, str | None]:
     """Download, validate, and process a remote image URL. Returns ((content, width, height, ext), warning)."""
     if not url.startswith(("http://", "https://")):
@@ -498,7 +499,10 @@ def _download_and_validate_photo(
         with Image.open(io.BytesIO(content)) as img:
             img.verify()
         processed, width, height, ext = process_item_image(
-            content, remove_background=remove_background, enhance=True
+            content,
+            remove_background=remove_background,
+            enhance=True,
+            shape_hint=shape_hint,
         )
         return (processed, width, height, ext), None
     except Exception as exc:
@@ -633,6 +637,13 @@ def import_mapped_csv(
                             task[0].title,
                             task[1],
                             remove_background=remove_background,
+                            shape_hint=(
+                                "bar"
+                                if task[0].category == CollectionItem.Category.BAR
+                                else "note"
+                                if task[0].category == CollectionItem.Category.PAPER
+                                else None
+                            ),
                         ),
                         pending_photos,
                     )

@@ -398,3 +398,67 @@ def test_patterned_background_removal_and_slab_coin_extraction(api_client, user_
     assert slab_photo["is_primary"] is False
 
 
+@pytest.mark.django_db
+def test_bar_and_note_cropping_on_textured_dark_mat(api_client, user_a):
+    from PIL import ImageDraw
+
+    from apps.catalog.image_processing import process_item_image
+
+    # Build a dark woven mat background (simulating carbon-fiber mat)
+    mat = Image.new("RGB", (500, 650), color=(24, 24, 26))
+    mat_draw = ImageDraw.Draw(mat)
+    for y in range(0, 650, 8):
+        for x in range(0, 500, 8):
+            if ((x // 8) + (y // 8)) % 2 == 0:
+                mat_draw.rectangle((x, y, x + 5, y + 5), fill=(46, 46, 50))
+
+    # 1. Off-center horizontal silver bar with dark mirror reflection inside
+    bar_img = mat.copy()
+    bar_draw = ImageDraw.Draw(bar_img)
+    bar_draw.rounded_rectangle((35, 90, 465, 320), radius=20, fill=(190, 192, 196), outline=(228, 230, 234), width=5)
+    bar_draw.rectangle((90, 200, 410, 295), fill=(32, 34, 38))
+    bar_buf = io.BytesIO()
+    bar_img.save(bar_buf, format="JPEG", quality=95)
+
+    bar_bytes, bw, bh, bext = process_item_image(
+        bar_buf.getvalue(), remove_background=True, enhance=True, shape_hint="bar"
+    )
+    assert bext == "png"
+    assert 390 <= bw <= 455
+    assert 205 <= bh <= 255
+    bar_out = Image.open(io.BytesIO(bar_bytes))
+    assert bar_out.getpixel((0, 0))[3] == 0
+    assert bar_out.getpixel((bw - 1, bh - 1))[3] == 0
+    # Interior dark reflection must remain opaque
+    assert bar_out.getpixel((bw // 2, int(bh * 0.72)))[3] > 200
+
+    # 2. Banknote (PAPER) on dark woven mat via API upload + remove-background
+    note_img = mat.copy()
+    note_draw = ImageDraw.Draw(note_img)
+    note_draw.rectangle((40, 130, 460, 310), fill=(210, 215, 195), outline=(85, 115, 80), width=6)
+    note_draw.ellipse((190, 175, 310, 265), fill=(65, 80, 65))
+    note_buf = io.BytesIO()
+    note_img.save(note_buf, format="JPEG", quality=95)
+
+    _, _, token_a = user_a
+    headers_a = {"HTTP_AUTHORIZATION": f"Bearer {token_a}"}
+    item = api_client.post(
+        "/api/v1/catalog/items",
+        data=json.dumps({"title": "1934 $10 Silver Certificate", "category": "PAPER"}),
+        content_type="application/json",
+        **headers_a,
+    ).json()
+
+    upload = SimpleUploadedFile("note.jpg", note_buf.getvalue(), content_type="image/jpeg")
+    p_resp = api_client.post(
+        f"/api/v1/catalog/items/{item['id']}/photos",
+        data={"file": upload, "label": "OBVERSE", "is_primary": "true", "remove_background": "true"},
+        **headers_a,
+    )
+    assert p_resp.status_code == 201
+    p_data = p_resp.json()
+    assert 390 <= p_data["width"] <= 445
+    assert 165 <= p_data["height"] <= 205
+
+
+

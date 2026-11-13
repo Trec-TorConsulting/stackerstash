@@ -881,6 +881,20 @@ def _should_extract_coin_from_slab(item: CollectionItem, label: str) -> bool:
     return True
 
 
+def _item_shape_hint(item: CollectionItem, label: str) -> str | None:
+    """Return 'bar' or 'note' for rectangular items so cropping/masking snaps cleanly to their edges."""
+    if label == ItemPhoto.Label.RECEIPT:
+        return None
+    if item.category == CollectionItem.Category.BAR:
+        return "bar"
+    if item.category == CollectionItem.Category.PAPER or item.grading_service in (
+        CollectionItem.GradingService.PMG,
+        CollectionItem.GradingService.PCGS_BANKNOTE,
+    ):
+        return "note"
+    return None
+
+
 @catalog_router.post("/items/{item_id}/photos", response={201: PhotoOut})
 @transaction.atomic
 def upload_item_photo(
@@ -912,6 +926,7 @@ def upload_item_photo(
                 raw_bytes,
                 remove_background=should_remove_bg,
                 enhance=True,
+                shape_hint=_item_shape_hint(item, label),
             )
         upload_content = ContentFile(processed_bytes, name=f"photo-{label.lower()}.{ext}")
     except Exception:
@@ -974,7 +989,10 @@ def remove_photo_background(request, item_id: UUID, photo_id: UUID):
         processed_bytes, width, height, ext = primary_result
     else:
         processed_bytes, width, height, ext = process_item_image(
-            raw_bytes, remove_background=True, enhance=True
+            raw_bytes,
+            remove_background=True,
+            enhance=True,
+            shape_hint=_item_shape_hint(item, photo.label),
         )
 
     old_name = photo.image.name

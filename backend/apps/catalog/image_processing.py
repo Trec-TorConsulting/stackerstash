@@ -140,6 +140,63 @@ def _remove_background_floodfill(img: Image.Image) -> Image.Image:
     return Image.merge("RGBA", (r, g, b, full_mask))
 
 
+def _salient_foreground_mask(
+    lab: np.ndarray,
+    border_lab: np.ndarray,
+    bx: int,
+    by: int,
+) -> np.ndarray:
+    """Build a hole-filled binary saliency mask from LAB distance to the border distribution."""
+    h, w = lab.shape[:2]
+    bg_lab = np.median(border_lab, axis=0)
+    lab_dist = np.linalg.norm(lab - bg_lab, axis=2)
+    border_dists = np.linalg.norm(border_lab - bg_lab, axis=1)
+    bg_spread = float(np.percentile(border_dists, 90)) if len(border_dists) else 0.0
+
+    dist_u8 = np.clip(lab_dist, 0, 255).astype(np.uint8)
+    otsu_t, _ = cv2.threshold(dist_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    thresh = max(16.0, min(55.0, max(float(otsu_t), bg_spread * 1.45)))
+
+    salient = (lab_dist > thresh).astype(np.uint8) * 255
+    salient[:by, :] = 0
+    salient[-by:, :] = 0
+    salient[:, :bx] = 0
+    salient[:, -bx:] = 0
+
+    # Erode/open slightly so disconnected background speckles don't bridge to the main subject
+    salient = cv2.morphologyEx(salient, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    cnts, _ = cv2.findContours(salient, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    filled = np.zeros_like(salient)
+    if cnts:
+        # Prefer the largest contour that overlaps the central region
+        cx0, cx1 = w * 0.20, w * 0.80
+        cy0, cy1 = h * 0.20, h * 0.80
+
+        def _score_cnt(c: np.ndarray) -> float:
+            x, y, cw, ch = cv2.boundingRect(c)
+            area = float(cv2.contourArea(c))
+            in_center = not (x + cw < cx0 or x > cx1 or y + ch < cy0 or y > cy1)
+            return area * (2.0 if in_center else 0.25)
+
+        best_cnt = max(cnts, key=_score_cnt)
+        cv2.drawContours(filled, [best_cnt], -1, 255, thickness=cv2.FILLED)
+    return filled
+
+
+def _contour_extent(mask_u8: np.ndarray) -> float:
+    """Return area / minAreaRect_area for the largest contour in mask_u8."""
+    cnts, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return 0.0
+    cnt = max(cnts, key=cv2.contourArea)
+    area = float(cv2.contourArea(cnt))
+    _, (rw, rh), _ = cv2.minAreaRect(cnt)
+    rect_area = float(rw * rh)
+    if rect_area <= 1.0:
+        return 0.0
+    return area / rect_area
+
+
 def _remove_background_grabcut(img: Image.Image) -> Image.Image:
     """
     Remove exterior background (including textured/patterned surfaces) using OpenCV GrabCut,
@@ -194,13 +251,22 @@ def _remove_background_grabcut(img: Image.Image) -> Image.Image:
             gc_mask[eroded > 0] = cv2.GC_FGD
             gc_mask[~main_comp] = cv2.GC_BGD
     else:
-        y1, y2 = int(work_h * 0.12), int(work_h * 0.88)
-        x1, x2 = int(work_w * 0.12), int(work_w * 0.88)
-        gc_mask[y1:y2, x1:x2] = cv2.GC_PR_FGD
-        gc_mask[(lab_dist > 18) & (gc_mask != cv2.GC_BGD)] = cv2.GC_PR_FGD
-        cy1, cy2 = int(work_h * 0.30), int(work_h * 0.70)
-        cx1, cx2 = int(work_w * 0.30), int(work_w * 0.70)
-        gc_mask[cy1:cy2, cx1:cx2] = cv2.GC_FGD
+        salient = _salient_foreground_mask(lab, border_lab, bx, by)
+        salient_ratio = float((salient > 0).mean())
+        if 0.02 <= salient_ratio <= 0.95:
+            gc_mask[(salient > 0) & (gc_mask != cv2.GC_BGD)] = cv2.GC_PR_FGD
+            kernel = np.ones((5, 5), np.uint8)
+            eroded = cv2.erode((salient > 0).astype(np.uint8), kernel, iterations=2)
+            if (eroded > 0).sum() >= 16:
+                gc_mask[eroded > 0] = cv2.GC_FGD
+            else:
+                gc_mask[salient > 0] = cv2.GC_FGD
+        else:
+            # Conservative fallback for very low-contrast or full-frame subjects
+            gc_mask[(lab_dist > 18) & (gc_mask != cv2.GC_BGD)] = cv2.GC_PR_FGD
+            cy1, cy2 = int(work_h * 0.35), int(work_h * 0.65)
+            cx1, cx2 = int(work_w * 0.35), int(work_w * 0.65)
+            gc_mask[cy1:cy2, cx1:cx2] = cv2.GC_FGD
 
     if (gc_mask == cv2.GC_BGD).any() and (
         (gc_mask == cv2.GC_FGD).any() or (gc_mask == cv2.GC_PR_FGD).any()
@@ -350,6 +416,145 @@ def extract_coin_cutout(rgba: Image.Image, cx: int, cy: int, r: int) -> Image.Im
     return _crop_to_subject(Image.fromarray(arr, mode="RGBA"))
 
 
+def _fit_tight_rect_from_mask(mask_u8: np.ndarray) -> tuple[float, float, float, float, float] | None:
+    """Fit an oriented rectangle (cx, cy, rw, rh, angle) tightly to a binary mask, trimming low-occupancy fringes."""
+    h, w = mask_u8.shape
+    k = max(3, int(min(h, w) * 0.025) | 1)
+    opened = cv2.morphologyEx(mask_u8, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+    if int((opened > 0).sum()) < int((mask_u8 > 0).sum() * 0.5):
+        opened = mask_u8
+
+    cnts, _ = cv2.findContours(opened, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return None
+    cnt = max(cnts, key=cv2.contourArea)
+    (cx, cy), (rw, rh), angle = cv2.minAreaRect(cnt)
+    if rw < 16 or rh < 16:
+        return None
+
+    # Normalize so rw >= rh and angle is in [-45, 45]
+    if rw < rh:
+        rw, rh = rh, rw
+        angle += 90.0
+    while angle > 45.0:
+        angle -= 90.0
+    while angle < -45.0:
+        angle += 90.0
+
+    rot_mat = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+    aligned = cv2.warpAffine(mask_u8, rot_mat, (w, h), flags=cv2.INTER_NEAREST)
+    x0 = max(0, int(round(cx - rw / 2.0)))
+    x1 = min(w, int(round(cx + rw / 2.0)))
+    y0 = max(0, int(round(cy - rh / 2.0)))
+    y1 = min(h, int(round(cy + rh / 2.0)))
+    if x1 <= x0 or y1 <= y0:
+        return float(cx), float(cy), float(rw), float(rh), float(angle)
+
+    roi = (aligned[y0:y1, x0:x1] > 127).astype(np.float32)
+    row_occ = roi.mean(axis=1)
+    col_occ = roi.mean(axis=0)
+    valid_rows = np.where(row_occ >= 0.45)[0]
+    valid_cols = np.where(col_occ >= 0.45)[0]
+    if len(valid_rows) > 8 and len(valid_cols) > 8:
+        ny0 = y0 + int(valid_rows[0])
+        ny1 = y0 + int(valid_rows[-1]) + 1
+        nx0 = x0 + int(valid_cols[0])
+        nx1 = x0 + int(valid_cols[-1]) + 1
+        dcx_aligned = (nx0 + nx1) / 2.0 - cx
+        dcy_aligned = (ny0 + ny1) / 2.0 - cy
+        rad = np.deg2rad(angle)
+        cx += dcx_aligned * np.cos(rad) - dcy_aligned * np.sin(rad)
+        cy += dcx_aligned * np.sin(rad) + dcy_aligned * np.cos(rad)
+        rw = float(nx1 - nx0)
+        rh = float(ny1 - ny0)
+
+    return float(cx), float(cy), float(rw), float(rh), float(angle)
+
+
+def detect_rectangular_subject(
+    rgba: Image.Image,
+) -> tuple[float, float, float, float, float] | None:
+    """
+    Detect a rectangular bar or banknote (cx, cy, rw, rh, angle) from an RGBA image.
+    If the opaque region is irregular (e.g. leftover dark mat), refines it using Otsu luminance/LAB
+    separation before fitting the tight oriented rectangle.
+    """
+    arr = np.array(rgba.convert("RGBA"))
+    h, w = arr.shape[:2]
+    if w < 24 or h < 24:
+        return None
+
+    alpha = arr[:, :, 3]
+    fg_mask = np.where(alpha > 32, 255, 0).astype(np.uint8)
+    fg_area = int((fg_mask > 0).sum())
+    if fg_area < w * h * 0.03:
+        return None
+
+    # If the foreground mask is irregular (extent < 0.85), leftover background mat may still be attached
+    extent = _contour_extent(fg_mask)
+    if extent < 0.85:
+        bgr = cv2.cvtColor(arr[:, :, :3], cv2.COLOR_RGB2BGR)
+        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+        L = lab[:, :, 0]
+        opaque = alpha > 128
+        if int(opaque.sum()) >= 64:
+            otsu_t, _ = cv2.threshold(L[opaque], 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            cand = np.where((L > otsu_t) & opaque, 255, 0).astype(np.uint8)
+            k = max(5, int(min(h, w) * 0.02) | 1)
+            cand = cv2.morphologyEx(cand, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+            cnts, _ = cv2.findContours(cand, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if cnts:
+                largest = max(cnts, key=cv2.contourArea)
+                filled = np.zeros_like(cand)
+                cv2.drawContours(filled, [largest], -1, 255, thickness=cv2.FILLED)
+                cand_area = int((filled > 0).sum())
+                cand_extent = _contour_extent(filled)
+                if cand_area >= fg_area * 0.15 and cand_extent > extent + 0.05:
+                    fg_mask = filled
+
+    rect = _fit_tight_rect_from_mask(fg_mask)
+    if rect is None:
+        return None
+    _, _, rw, rh, _ = rect
+    if rw < 24 or rh < 24 or (rw * rh) < (w * h * 0.04):
+        return None
+    return rect
+
+
+def extract_rectangular_cutout(
+    rgba: Image.Image,
+    rect: tuple[float, float, float, float, float],
+    *,
+    corner_ratio: float = 0.04,
+) -> Image.Image:
+    """Apply a clean anti-aliased rounded-rectangle alpha mask and crop tightly around the subject."""
+    cx, cy, rw, rh, angle = rect
+    arr = np.array(rgba.convert("RGBA"))
+    h, w = arr.shape[:2]
+
+    yy, xx = np.mgrid[:h, :w].astype(np.float32)
+    dx = xx - cx
+    dy = yy - cy
+    rad = np.deg2rad(-angle)
+    rx = dx * np.cos(rad) - dy * np.sin(rad)
+    ry = dx * np.sin(rad) + dy * np.cos(rad)
+
+    hw = rw / 2.0
+    hh = rh / 2.0
+    cr = max(1.0, min(hw, hh) * corner_ratio * 2.0)
+
+    qx = np.abs(rx) - (hw - cr)
+    qy = np.abs(ry) - (hh - cr)
+    sdf = (
+        np.sqrt(np.maximum(qx, 0.0) ** 2 + np.maximum(qy, 0.0) ** 2)
+        + np.minimum(np.maximum(qx, qy), 0.0)
+        - cr
+    )
+    mask = np.clip((0.75 - sdf) / 1.5, 0.0, 1.0) * 255.0
+    arr[:, :, 3] = np.minimum(arr[:, :, 3], mask.astype(np.uint8))
+    return _crop_to_subject(Image.fromarray(arr, mode="RGBA"))
+
+
 def _crop_to_subject(rgba: Image.Image) -> Image.Image:
     """Crop tightly around non-transparent subject with minimal padding."""
     alpha = rgba.getchannel("A")
@@ -417,16 +622,24 @@ def _encode_processed_image(
     return out.getvalue(), width, height, ext
 
 
+_RECT_CORNER_RATIOS = {
+    "bar": 0.075,
+    "note": 0.015,
+    "rect": 0.04,
+}
+
+
 def process_item_image(
     raw_bytes: bytes,
     *,
     remove_background: bool = True,
     enhance: bool = True,
     max_dimension: int = MAX_IMAGE_DIMENSION,
+    shape_hint: str | None = None,
 ) -> tuple[bytes, int, int, str]:
     """
     Normalize orientation, preserve high resolution, optionally remove background & crop tightly,
-    and enhance coin/slab detail. Returns (processed_bytes, width, height, extension).
+    and enhance coin/slab/bar/note detail. Returns (processed_bytes, width, height, extension).
     """
     with Image.open(io.BytesIO(raw_bytes)) as opened:
         img = ImageOps.exif_transpose(opened)
@@ -437,7 +650,16 @@ def process_item_image(
 
         if remove_background:
             rgba = _remove_background_grabcut(img)
-            img = _crop_to_subject(rgba)
+            if shape_hint in _RECT_CORNER_RATIOS:
+                rect = detect_rectangular_subject(rgba)
+                if rect is not None:
+                    img = extract_rectangular_cutout(
+                        rgba, rect, corner_ratio=_RECT_CORNER_RATIOS[shape_hint]
+                    )
+                else:
+                    img = _crop_to_subject(rgba)
+            else:
+                img = _crop_to_subject(rgba)
 
         if enhance:
             img = _enhance_detail(img)
