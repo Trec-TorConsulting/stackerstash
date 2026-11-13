@@ -83,14 +83,14 @@ export function evaluateFrameMetrics(
   const meanEdge = edgeCount > 0 ? edgeSum / edgeCount : 0;
   const innerEdge = innerCount > 0 ? innerEdgeSum / innerCount : 0;
   const ringEdge = ringCount > 0 ? ringEdgeSum / ringCount : 0;
-  const isSteady = prevLuma !== null && meanFrameDiff < 6.0;
+  const isSteady = prevLuma !== null && meanFrameDiff < 11.5;
 
   let quality: FrameQuality;
-  if (meanLuma < 50) {
+  if (meanLuma < 45) {
     quality = { label: 'Too dark — add more light', tone: 'warn', isGood: false };
-  } else if (meanLuma > 235) {
+  } else if (meanLuma > 238) {
     quality = { label: 'Too bright — reduce glare', tone: 'warn', isGood: false };
-  } else if (meanEdge < 10) {
+  } else if (meanEdge < 7.5) {
     quality = { label: 'Hold steady & focus closer', tone: 'warn', isGood: false };
   } else if (!isSteady) {
     quality = { label: 'Hold steady — stabilizing', tone: 'warn', isGood: false };

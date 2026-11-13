@@ -116,7 +116,7 @@ export function GuidedCameraModal({
     }
   }, [zoom]);
 
-  // Live sharpness, exposure, and stability guidance every 450ms
+  // Live sharpness, exposure, and stability guidance every 220ms
   useEffect(() => {
     if (!open || !cameraReady) return;
     const timer = window.setInterval(() => {
@@ -143,7 +143,7 @@ export function GuidedCameraModal({
       const metrics = evaluateFrameMetrics(luma, prevLumaRef.current, sampleW, sampleH, zoom);
       prevLumaRef.current = luma;
       setQuality(metrics.quality);
-    }, 450);
+    }, 220);
 
     return () => window.clearInterval(timer);
   }, [open, cameraReady, zoom]);
@@ -162,11 +162,19 @@ export function GuidedCameraModal({
     const sx = Math.round((vw - cropW) / 2);
     const sy = Math.round((vh - cropH) / 2);
 
-    canvas.width = cropW;
-    canvas.height = cropH;
+    // Normalize output size (max 1600px) with high-quality resampling for clean uploads & fast AI/OCR
+    const maxDim = 1600;
+    const scale = Math.min(1, maxDim / Math.max(cropW, cropH));
+    const outW = Math.max(1, Math.round(cropW * scale));
+    const outH = Math.max(1, Math.round(cropH * scale));
+
+    canvas.width = outW;
+    canvas.height = outH;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, outW, outH);
 
     canvas.toBlob(
       (blob) => {
@@ -176,7 +184,7 @@ export function GuidedCameraModal({
         handleCapturedFile(file);
       },
       'image/jpeg',
-      0.92,
+      0.94,
     );
   };
 
