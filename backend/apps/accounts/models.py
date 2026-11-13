@@ -104,6 +104,8 @@ class ProviderCredential(models.Model):
 
     class Provider(models.TextChoices):
         GEMINI = "GEMINI", "Google Gemini API"
+        GROQ_API_KEY = "GROQ_API_KEY", "Groq API Key (Free Tier)"
+        OPENROUTER_API_KEY = "OPENROUTER_API_KEY", "OpenRouter API Key (Free Models)"
         PCGS = "PCGS", "PCGS API Token"
         GREYSHEET_KEY = "GREYSHEET_KEY", "Greysheet API Key"
         GREYSHEET_TOKEN = "GREYSHEET_TOKEN", "Greysheet API Token"

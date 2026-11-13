@@ -15,8 +15,21 @@ from apps.accounts.models import ProviderCredential, Workspace
 from apps.catalog.models import CollectionItem
 
 from .models import IdentificationJob
+from .ocr import extract_text_from_images, parse_ocr_numismatic_hints
 
 logger = logging.getLogger(__name__)
+
+GEMINI_VISION_MODELS: tuple[str, ...] = (
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+)
+GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+GROQ_TEXT_MODEL = "llama-3.3-70b-versatile"
+OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_VISION_MODEL = "qwen/qwen2.5-vl-72b-instruct:free"
+OPENROUTER_TEXT_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
 
 IDENTIFICATION_PROMPT = """You are an expert numismatist, paper-currency specialist, and precious-metals bullion authenticator.
 Analyze the provided image(s) of a collectible or bullion item (which may be a coin, paper banknote, bar/ingot such as Geiger or 1kg copper, round, coin flip, or PCGS/NGC/PMG/CACG/ANACS graded slab).
@@ -110,8 +123,20 @@ def _normalize_candidate(raw: dict[str, Any], barcode_hint: str | None = None) -
 
 
 def _sanitize_error_message(message: str) -> str:
-    """Redact API keys from URLs before logging or returning error diagnostics."""
-    return re.sub(r"([?&]key=)[^&\s]+", r"\1***", str(message))
+    """Redact API keys and bearer tokens before logging or returning error diagnostics."""
+    cleaned = re.sub(r"([?&]key=)[^&\s]+", r"\1***", str(message))
+    return re.sub(r"(Bearer\s+)[^\s\"']+", r"\1***", cleaned, flags=re.IGNORECASE)
+
+
+def _is_retryable_quota_error(exc: Exception) -> bool:
+    """Return True if an exception represents an HTTP 429/503 quota or transient rate-limit error."""
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {429, 503}:
+        return True
+    cause = getattr(exc, "__cause__", None)
+    if isinstance(cause, httpx.HTTPStatusError) and cause.response.status_code in {429, 503}:
+        return True
+    msg = str(exc)
+    return "HTTP 429:" in msg or "HTTP 503:" in msg or "429 Too Many Requests" in msg
 
 
 def _infer_image_mime(img_bytes: bytes, declared_mime: str | None) -> str:
@@ -180,8 +205,12 @@ def _extract_gemini_text(data: dict[str, Any]) -> str:
     raise ValueError(f"Gemini candidate contained no text (finishReason={finish_reason or 'unknown'})")
 
 
-def _call_gemini_vision(
-    images: list[tuple[bytes, str]], api_key: str, prompt: str, timeout: float = 45.0
+def _call_gemini_vision_model(
+    images: list[tuple[bytes, str]],
+    api_key: str,
+    prompt: str,
+    model_name: str,
+    timeout: float = 45.0,
 ) -> dict[str, Any]:
     parts: list[dict[str, Any]] = [{"text": prompt}]
     for img_bytes, mime_type in images:
@@ -195,7 +224,7 @@ def _call_gemini_vision(
         )
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.5-flash:generateContent?key={api_key}"
+        f"{model_name}:generateContent?key={api_key}"
     )
     payload = {
         "contents": [{"parts": parts}],
@@ -215,6 +244,86 @@ def _call_gemini_vision(
         data = resp.json()
     text = _extract_gemini_text(data)
     return {"parsed": _extract_json_block(text), "raw": data}
+
+
+def _call_gemini_vision(
+    images: list[tuple[bytes, str]],
+    api_key: str,
+    prompt: str,
+    timeout: float = 45.0,
+    models: tuple[str, ...] = GEMINI_VISION_MODELS,
+) -> dict[str, Any]:
+    """Call Gemini Vision, cascading through fallback models on HTTP 429/503 quota errors."""
+    last_exc: Exception | None = None
+    for idx, model_name in enumerate(models):
+        try:
+            return _call_gemini_vision_model(images, api_key, prompt, model_name, timeout=timeout)
+        except Exception as exc:
+            last_exc = exc
+            if _is_retryable_quota_error(exc) and idx < len(models) - 1:
+                logger.warning(
+                    "Gemini model %s hit quota/rate-limit, cascading to next model: %s",
+                    model_name,
+                    _sanitize_error_message(str(exc)),
+                )
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("No Gemini vision models configured")
+
+
+def _call_openai_compat_chat(
+    endpoint: str,
+    api_key: str,
+    model_name: str,
+    prompt: str,
+    images: list[tuple[bytes, str]] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    timeout: float = 45.0,
+) -> dict[str, Any]:
+    """Call an OpenAI-compatible chat/completions endpoint (Groq or OpenRouter) for vision or text."""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+
+    if images:
+        content: Any = [{"type": "text", "text": prompt}]
+        for img_bytes, mime_type in images:
+            b64 = base64.b64encode(img_bytes).decode("ascii")
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type or 'image/jpeg'};base64,{b64}"},
+                }
+            )
+    else:
+        content = prompt
+
+    payload: dict[str, Any] = {
+        "model": model_name,
+        "messages": [{"role": "user", "content": content}],
+        "temperature": 0.1,
+        "response_format": {"type": "json_object"},
+    }
+    with httpx.Client(timeout=timeout) as client:
+        resp = client.post(endpoint, headers=headers, json=payload)
+        if resp.status_code == 400 and "response_format" in resp.text:
+            payload.pop("response_format", None)
+            resp = client.post(endpoint, headers=headers, json=payload)
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = _sanitize_error_message(exc.response.text[:300])
+            raise RuntimeError(f"HTTP {exc.response.status_code}: {detail}") from exc
+        data = resp.json()
+    text = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+    if not str(text).strip():
+        raise ValueError("Provider returned empty completion text")
+    return {"parsed": _extract_json_block(str(text)), "raw": data}
 
 
 def _call_ollama_vision(
@@ -280,18 +389,192 @@ def _run_image_verification(
     return status, warnings
 
 
+def _enrich_candidate_from_catalog(
+    candidate: dict[str, Any], workspace: Workspace
+) -> dict[str, Any]:
+    """Enrich an OCR-derived candidate using PCGS cert or Numista catalog APIs when configured."""
+    from apps.valuation.providers import lookup_numista_specs, lookup_pcgs_cert
+
+    pcgs_token = _get_secret(workspace, ProviderCredential.Provider.PCGS)
+    if candidate.get("grading_service") == "PCGS" and candidate.get("cert_number") and pcgs_token:
+        pcgs_res = lookup_pcgs_cert(candidate["cert_number"], pcgs_token)
+        if pcgs_res and pcgs_res.get("market_value") and not candidate.get("estimated_value_usd"):
+            candidate["estimated_value_usd"] = float(pcgs_res["market_value"])
+
+    numista_key = _get_secret(workspace, ProviderCredential.Provider.NUMISTA_KEY)
+    if candidate.get("title") and numista_key:
+        numista_res = lookup_numista_specs(
+            candidate["title"],
+            year=str(candidate.get("year") or ""),
+            country=str(candidate.get("country") or ""),
+            denomination=str(candidate.get("denomination") or ""),
+            api_key=numista_key,
+        )
+        if numista_res:
+            specs = numista_res.get("specs") or {}
+            if specs.get("gross_weight_grams") and not candidate.get("weight_value"):
+                candidate["weight_value"] = float(specs["gross_weight_grams"])
+                candidate["weight_unit"] = "G"
+    return candidate
+
+
+def _attempt_ocr_fallback(
+    *,
+    workspace: Workspace,
+    images: list[tuple[bytes, str]],
+    vision_images: list[tuple[bytes, str]],
+    barcode_hint: str | None,
+    intake_mode: str,
+    gemini_key: str,
+    groq_key: str,
+    openrouter_key: str,
+    ollama_url: str,
+    ollama_model: str,
+    provider_errors: list[str],
+) -> dict[str, Any] | None:
+    """Run local OCR, optional text-only LLM structuring, and deterministic catalog enrichment."""
+    ocr_text = extract_text_from_images(vision_images)
+    if not ocr_text.strip():
+        return None
+    hints = parse_ocr_numismatic_hints(ocr_text, barcode_hint=barcode_hint)
+    if not hints.get("has_usable_hints"):
+        return None
+
+    ocr_prompt = (
+        f"{IDENTIFICATION_PROMPT}\n"
+        "No image is attached. Parse the following OCR-extracted text from the item into the JSON schema above.\n"
+        f"OCR Text:\n{ocr_text}\n"
+    )
+    if barcode_hint:
+        ocr_prompt += f"Detected slab barcode/QR hint: {barcode_hint}\n"
+
+    parsed_res: dict[str, Any] | None = None
+    provider_used = "OCR_CATALOG"
+
+    # Try text-only LLM structuring (zero image tokens)
+    text_attempts: list[tuple[str, Any]] = []
+    if groq_key:
+        text_attempts.append(
+            (
+                "Groq-Text",
+                lambda: _call_openai_compat_chat(
+                    GROQ_CHAT_URL, groq_key, GROQ_TEXT_MODEL, ocr_prompt, images=None
+                ),
+            )
+        )
+    if openrouter_key:
+        text_attempts.append(
+            (
+                "OpenRouter-Text",
+                lambda: _call_openai_compat_chat(
+                    OPENROUTER_CHAT_URL,
+                    openrouter_key,
+                    OPENROUTER_TEXT_MODEL,
+                    ocr_prompt,
+                    images=None,
+                    extra_headers={
+                        "HTTP-Referer": "https://stackerstash.com",
+                        "X-Title": "Stackers Stash",
+                    },
+                ),
+            )
+        )
+    if gemini_key:
+        text_attempts.append(
+            (
+                "Gemini-Text",
+                lambda: _call_gemini_vision_model(
+                    [], gemini_key, ocr_prompt, "gemini-2.5-flash-lite"
+                ),
+            )
+        )
+    if ollama_url:
+        text_attempts.append(
+            (
+                "Ollama-Text",
+                lambda: _call_ollama_vision([], ollama_url, ollama_model, ocr_prompt),
+            )
+        )
+
+    for label, fn in text_attempts:
+        try:
+            parsed_res = fn()
+            provider_used = "OCR_TEXT"
+            break
+        except Exception as exc:
+            logger.debug("OCR text-only LLM (%s) failed: %s", label, _sanitize_error_message(str(exc)))
+
+    raw_parsed = parsed_res["parsed"] if parsed_res else hints
+    candidate = _normalize_candidate(raw_parsed, barcode_hint)
+    candidate = _enrich_candidate_from_catalog(candidate, workspace)
+
+    job = IdentificationJob.objects.create(
+        workspace=workspace,
+        status=IdentificationJob.Status.SUCCEEDED,
+        provider_used=provider_used,
+        parsed_candidate=candidate,
+        raw_response=(parsed_res.get("raw") if parsed_res else {"ocr_text": ocr_text}) or {},
+    )
+    verification_status, verification_warnings = _run_image_verification(
+        images, raw_parsed, intake_mode
+    )
+    err_summary = f" ({'; '.join(provider_errors)})" if provider_errors else ""
+    warning = f"Vision AI unavailable{err_summary}; pre-filled using local OCR fallback ({provider_used})."
+    return {
+        "job_id": str(job.id),
+        "provider_used": provider_used,
+        "candidate": candidate,
+        "warning": warning,
+        "provider_errors": provider_errors,
+        "verification_status": verification_status,
+        "verification_warnings": verification_warnings,
+    }
+
+
+def _record_vision_success(
+    workspace: Workspace,
+    provider_used: str,
+    res: dict[str, Any],
+    images: list[tuple[bytes, str]],
+    barcode_hint: str | None,
+    intake_mode: str,
+    warning: str | None = None,
+) -> dict[str, Any]:
+    candidate = _normalize_candidate(res["parsed"], barcode_hint)
+    job = IdentificationJob.objects.create(
+        workspace=workspace,
+        status=IdentificationJob.Status.SUCCEEDED,
+        provider_used=provider_used,
+        parsed_candidate=candidate,
+        raw_response=res.get("raw") or {},
+    )
+    verification_status, verification_warnings = _run_image_verification(
+        images, res["parsed"], intake_mode
+    )
+    return {
+        "job_id": str(job.id),
+        "provider_used": provider_used,
+        "candidate": candidate,
+        "warning": warning,
+        "verification_status": verification_status,
+        "verification_warnings": verification_warnings,
+    }
+
+
 def identify_images(
     images: list[tuple[bytes, str]],
     workspace: Workspace,
     barcode_hint: str | None = None,
     intake_mode: str = "camera",
 ) -> dict[str, Any]:
-    """Identify item metadata from images using Gemini primary, Ollama fallback, or manual fallback."""
+    """Identify item metadata from images using Gemini cascade, Groq, OpenRouter, Ollama, or OCR/manual fallback."""
     prompt = IDENTIFICATION_PROMPT
     if barcode_hint:
         prompt += f"\nDetected slab barcode/QR hint: {barcode_hint}\n"
 
     gemini_key = _get_secret(workspace, ProviderCredential.Provider.GEMINI)
+    groq_key = _get_secret(workspace, ProviderCredential.Provider.GROQ_API_KEY)
+    openrouter_key = _get_secret(workspace, ProviderCredential.Provider.OPENROUTER_API_KEY)
     ollama_url = _get_secret(workspace, ProviderCredential.Provider.OLLAMA_URL)
     ollama_model = (
         _get_secret(workspace, ProviderCredential.Provider.OLLAMA_MODEL) or "llama3.2-vision"
@@ -303,56 +586,71 @@ def identify_images(
     if gemini_key:
         try:
             res = _call_gemini_vision(vision_images, gemini_key, prompt)
-            candidate = _normalize_candidate(res["parsed"], barcode_hint)
-            job = IdentificationJob.objects.create(
-                workspace=workspace,
-                status=IdentificationJob.Status.SUCCEEDED,
-                provider_used="GEMINI",
-                parsed_candidate=candidate,
-                raw_response=res["raw"],
+            return _record_vision_success(
+                workspace, "GEMINI", res, images, barcode_hint, intake_mode
             )
-            verification_status, verification_warnings = _run_image_verification(
-                images, res["parsed"], intake_mode
-            )
-            return {
-                "job_id": str(job.id),
-                "provider_used": "GEMINI",
-                "candidate": candidate,
-                "warning": None,
-                "verification_status": verification_status,
-                "verification_warnings": verification_warnings,
-            }
         except Exception as exc:
             err_msg = _sanitize_error_message(str(exc))
-            logger.warning("Gemini vision failed, checking Ollama fallback: %s", err_msg)
+            logger.warning("Gemini vision failed, checking fallback providers: %s", err_msg)
             provider_errors.append(f"Gemini: {err_msg}")
+
+    if groq_key:
+        try:
+            res = _call_openai_compat_chat(
+                GROQ_CHAT_URL, groq_key, GROQ_VISION_MODEL, prompt, images=vision_images
+            )
+            return _record_vision_success(
+                workspace, "GROQ", res, images, barcode_hint, intake_mode
+            )
+        except Exception as exc:
+            err_msg = _sanitize_error_message(str(exc))
+            logger.warning("Groq vision failed, checking next fallback: %s", err_msg)
+            provider_errors.append(f"Groq: {err_msg}")
+
+    if openrouter_key:
+        try:
+            res = _call_openai_compat_chat(
+                OPENROUTER_CHAT_URL,
+                openrouter_key,
+                OPENROUTER_VISION_MODEL,
+                prompt,
+                images=vision_images,
+                extra_headers={"HTTP-Referer": "https://stackerstash.com", "X-Title": "Stackers Stash"},
+            )
+            return _record_vision_success(
+                workspace, "OPENROUTER", res, images, barcode_hint, intake_mode
+            )
+        except Exception as exc:
+            err_msg = _sanitize_error_message(str(exc))
+            logger.warning("OpenRouter vision failed, checking Ollama fallback: %s", err_msg)
+            provider_errors.append(f"OpenRouter: {err_msg}")
 
     if ollama_url:
         try:
             res = _call_ollama_vision(vision_images, ollama_url, ollama_model, prompt)
-            candidate = _normalize_candidate(res["parsed"], barcode_hint)
-            job = IdentificationJob.objects.create(
-                workspace=workspace,
-                status=IdentificationJob.Status.SUCCEEDED,
-                provider_used="OLLAMA",
-                parsed_candidate=candidate,
-                raw_response=res["raw"],
+            return _record_vision_success(
+                workspace, "OLLAMA", res, images, barcode_hint, intake_mode
             )
-            verification_status, verification_warnings = _run_image_verification(
-                images, res["parsed"], intake_mode
-            )
-            return {
-                "job_id": str(job.id),
-                "provider_used": "OLLAMA",
-                "candidate": candidate,
-                "warning": None,
-                "verification_status": verification_status,
-                "verification_warnings": verification_warnings,
-            }
         except Exception as exc:
             err_msg = _sanitize_error_message(str(exc))
             logger.warning("Ollama vision failed: %s", err_msg)
             provider_errors.append(f"Ollama: {err_msg}")
+
+    ocr_result = _attempt_ocr_fallback(
+        workspace=workspace,
+        images=images,
+        vision_images=vision_images,
+        barcode_hint=barcode_hint,
+        intake_mode=intake_mode,
+        gemini_key=gemini_key,
+        groq_key=groq_key,
+        openrouter_key=openrouter_key,
+        ollama_url=ollama_url,
+        ollama_model=ollama_model,
+        provider_errors=provider_errors,
+    )
+    if ocr_result is not None:
+        return ocr_result
 
     fallback_candidate = _normalize_candidate({}, barcode_hint)
     combined_error = "; ".join(provider_errors)
@@ -367,9 +665,9 @@ def identify_images(
         images, None, intake_mode
     )
     warning_msg = (
-        f"No AI vision provider succeeded ({combined_error}). Complete item details manually or configure Gemini/Ollama in Settings."
+        f"No AI vision provider succeeded ({combined_error}). Complete item details manually or configure Gemini/Groq/OpenRouter/Ollama in Settings."
         if combined_error
-        else "No AI vision provider succeeded. Complete item details manually or configure Gemini/Ollama in Settings."
+        else "No AI vision provider succeeded. Complete item details manually or configure Gemini/Groq/OpenRouter/Ollama in Settings."
     )
     return {
         "job_id": str(job.id),
@@ -382,16 +680,18 @@ def identify_images(
     }
 
 
-def _collect_item_photo_b64(item: CollectionItem, limit: int = 3) -> list[tuple[str, str]]:
-    """Return up to `limit` (mime_type, base64_data) tuples prioritizing OBVERSE, REVERSE, SLAB."""
+def _collect_item_photo_b64(
+    item: CollectionItem, limit: int = 3, max_dimension: int = 1024
+) -> list[tuple[str, str]]:
+    """Return up to `limit` downscaled (mime_type, base64_data) tuples prioritizing OBVERSE, REVERSE, SLAB."""
     priority = {"OBVERSE": 0, "REVERSE": 1, "SLAB": 2, "DETAIL": 3, "OTHER": 4}
     photos = sorted(
         list(item.photos.all()),
         key=lambda p: (priority.get(p.label, 9), p.sort_order),
     )
-    encoded: list[tuple[str, str]] = []
+    raw_images: list[tuple[bytes, str]] = []
     for photo in photos:
-        if len(encoded) >= limit:
+        if len(raw_images) >= limit:
             break
         try:
             with photo.image.open("rb") as f:
@@ -400,10 +700,13 @@ def _collect_item_photo_b64(item: CollectionItem, limit: int = 3) -> list[tuple[
                 continue
             name = (photo.image.name or "").lower()
             mime = "image/png" if name.endswith(".png") else "image/webp" if name.endswith(".webp") else "image/jpeg"
-            encoded.append((mime, base64.b64encode(raw).decode("ascii")))
+            raw_images.append((raw, mime))
         except Exception as exc:
             logger.debug("Skipping unreadable photo %s for item %s: %s", photo.id, item.id, exc)
-    return encoded
+    if not raw_images:
+        return []
+    prepared = _prepare_images_for_vision(raw_images, max_dimension=max_dimension)
+    return [(mime, base64.b64encode(img_bytes).decode("ascii")) for img_bytes, mime in prepared]
 
 
 def _normalize_ai_appraisal(
@@ -487,9 +790,11 @@ def estimate_item_value_with_ai(
 ) -> tuple[Decimal | None, dict[str, Any]]:
     """Multimodal AI appraisal using item photos (when present), optional search grounding, and raw grade estimation."""
     gemini_key = _get_secret(workspace, ProviderCredential.Provider.GEMINI)
+    groq_key = _get_secret(workspace, ProviderCredential.Provider.GROQ_API_KEY)
+    openrouter_key = _get_secret(workspace, ProviderCredential.Provider.OPENROUTER_API_KEY)
     ollama_url = _get_secret(workspace, ProviderCredential.Provider.OLLAMA_URL)
     ollama_model = _get_secret(workspace, ProviderCredential.Provider.OLLAMA_MODEL) or "qwen2.5vl:7b"
-    if not gemini_key and not ollama_url:
+    if not gemini_key and not groq_key and not openrouter_key and not ollama_url:
         return None, {}
 
     encoded_photos = _collect_item_photo_b64(item, limit=3)
@@ -529,52 +834,98 @@ def estimate_item_value_with_ai(
     )
 
     if gemini_key:
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"gemini-2.5-flash:generateContent?key={gemini_key}"
-        )
         parts: list[dict[str, Any]] = [{"text": prompt}]
         for mime, b64 in encoded_photos:
             parts.append({"inlineData": {"mimeType": mime, "data": b64}})
 
-        # Try grounded Google Search first, then fall back to standard JSON mode
-        for use_grounding in (True, False):
-            payload_body: dict[str, Any] = {
-                "contents": [{"parts": parts}],
-                "generationConfig": (
-                    {"temperature": 0.1, "thinkingConfig": {"thinkingBudget": 0}}
-                    if use_grounding
-                    else {
-                        "responseMimeType": "application/json",
-                        "temperature": 0.1,
-                        "thinkingConfig": {"thinkingBudget": 0},
-                    }
-                ),
-            }
-            if use_grounding:
-                payload_body["tools"] = [{"google_search": {}}]
-            try:
-                with httpx.Client(timeout=30.0) as client:
-                    resp = client.post(url, json=payload_body)
-                    resp.raise_for_status()
-                    data = resp.json()
-                text_out = _extract_gemini_text(data)
-                parsed = _extract_json_block(text_out)
-                grounded = _extract_gemini_grounded_sources(data) if use_grounding else []
-                val, normalized = _normalize_ai_appraisal(
-                    parsed,
-                    photo_inspected,
-                    is_raw_gradeable=is_raw_gradeable,
-                    grounded_sources=grounded,
-                )
-                if val is not None:
-                    return val, normalized
-            except Exception as exc:
-                logger.warning(
-                    "Gemini AI appraisal (grounding=%s) failed: %s",
-                    use_grounding,
-                    _sanitize_error_message(str(exc)),
-                )
+        for model_name in GEMINI_VISION_MODELS:
+            url = (
+                "https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{model_name}:generateContent?key={gemini_key}"
+            )
+            quota_exhausted = False
+            # Try grounded Google Search first, then fall back to standard JSON mode
+            for use_grounding in (True, False):
+                payload_body: dict[str, Any] = {
+                    "contents": [{"parts": parts}],
+                    "generationConfig": (
+                        {"temperature": 0.1, "thinkingConfig": {"thinkingBudget": 0}}
+                        if use_grounding
+                        else {
+                            "responseMimeType": "application/json",
+                            "temperature": 0.1,
+                            "thinkingConfig": {"thinkingBudget": 0},
+                        }
+                    ),
+                }
+                if use_grounding:
+                    payload_body["tools"] = [{"google_search": {}}]
+                try:
+                    with httpx.Client(timeout=30.0) as client:
+                        resp = client.post(url, json=payload_body)
+                        resp.raise_for_status()
+                        data = resp.json()
+                    text_out = _extract_gemini_text(data)
+                    parsed = _extract_json_block(text_out)
+                    grounded = _extract_gemini_grounded_sources(data) if use_grounding else []
+                    val, normalized = _normalize_ai_appraisal(
+                        parsed,
+                        photo_inspected,
+                        is_raw_gradeable=is_raw_gradeable,
+                        grounded_sources=grounded,
+                    )
+                    if val is not None:
+                        return val, normalized
+                except Exception as exc:
+                    logger.warning(
+                        "Gemini AI appraisal (model=%s, grounding=%s) failed: %s",
+                        model_name,
+                        use_grounding,
+                        _sanitize_error_message(str(exc)),
+                    )
+                    if _is_retryable_quota_error(exc):
+                        quota_exhausted = True
+                        break
+            if quota_exhausted:
+                continue
+
+    raw_images_for_compat: list[tuple[bytes, str]] | None = (
+        [(base64.b64decode(b64), mime) for mime, b64 in encoded_photos] if encoded_photos else None
+    )
+
+    if groq_key:
+        try:
+            model = GROQ_VISION_MODEL if raw_images_for_compat else GROQ_TEXT_MODEL
+            res = _call_openai_compat_chat(
+                GROQ_CHAT_URL, groq_key, model, prompt, images=raw_images_for_compat, timeout=30.0
+            )
+            val, normalized = _normalize_ai_appraisal(
+                res["parsed"], photo_inspected, is_raw_gradeable=is_raw_gradeable
+            )
+            if val is not None:
+                return val, normalized
+        except Exception as exc:
+            logger.warning("Groq AI appraisal failed: %s", _sanitize_error_message(str(exc)))
+
+    if openrouter_key:
+        try:
+            model = OPENROUTER_VISION_MODEL if raw_images_for_compat else OPENROUTER_TEXT_MODEL
+            res = _call_openai_compat_chat(
+                OPENROUTER_CHAT_URL,
+                openrouter_key,
+                model,
+                prompt,
+                images=raw_images_for_compat,
+                extra_headers={"HTTP-Referer": "https://stackerstash.com", "X-Title": "Stackers Stash"},
+                timeout=30.0,
+            )
+            val, normalized = _normalize_ai_appraisal(
+                res["parsed"], photo_inspected, is_raw_gradeable=is_raw_gradeable
+            )
+            if val is not None:
+                return val, normalized
+        except Exception as exc:
+            logger.warning("OpenRouter AI appraisal failed: %s", _sanitize_error_message(str(exc)))
 
     if ollama_url:
         try:

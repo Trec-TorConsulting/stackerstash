@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { GuidedCameraModal } from "../components/GuidedCameraModal";
 import { api } from "../lib/api";
+import { evaluateFrameMetrics } from "../lib/cameraMetrics";
 import { ScanAddPage } from "../pages/ScanAddPage";
 
 beforeAll(() => {
@@ -43,6 +44,43 @@ describe("GuidedCameraModal", () => {
     expect(screen.getByRole("button", { name: "Note / Bar (Rect)" })).toBeInTheDocument();
     expect(screen.getByLabelText("Camera zoom")).toBeInTheDocument();
     expect(screen.getByText(/Capture Front Photo/i)).toBeInTheDocument();
+
+    // Auto-Capture and Auto-Zoom default to On
+    const autoCaptureBtn = screen.getByRole("button", { name: /Auto-Capture On/i });
+    const autoZoomBtn = screen.getByRole("button", { name: /Auto-Zoom On/i });
+    expect(autoCaptureBtn).toHaveAttribute("aria-pressed", "true");
+    expect(autoZoomBtn).toHaveAttribute("aria-pressed", "true");
+
+    // Toggling Auto-Capture turns it Off
+    fireEvent.click(autoCaptureBtn);
+    expect(screen.getByRole("button", { name: /Auto-Capture Off/i })).toHaveAttribute("aria-pressed", "false");
+
+    // Dragging manual zoom slider disables Auto-Zoom
+    fireEvent.change(screen.getByLabelText("Camera zoom"), { target: { value: "1.8" } });
+    expect(screen.getByRole("button", { name: /Auto-Zoom Off/i })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("evaluates frame stability, sharpness, and auto-zoom recommendation", () => {
+    const w = 40;
+    const h = 30;
+    const sharpCentered = new Float32Array(w * h).fill(130);
+    // Add high-contrast 2x2 coin pattern only inside center box
+    for (let r = 10; r <= 20; r++) {
+      for (let c = 14; c <= 26; c++) {
+        sharpCentered[r * w + c] = ((r >> 1) + (c >> 1)) % 2 === 0 ? 210 : 40;
+      }
+    }
+
+    // First frame (no prevLuma) is not yet steady
+    const first = evaluateFrameMetrics(sharpCentered, null, w, h, 1.0);
+    expect(first.isSteady).toBe(false);
+    expect(first.quality.isGood).toBe(false);
+
+    // Second identical frame is sharp, steady, and recommends stepping zoom up
+    const second = evaluateFrameMetrics(sharpCentered, sharpCentered, w, h, 1.0);
+    expect(second.isSteady).toBe(true);
+    expect(second.quality.isGood).toBe(true);
+    expect(second.recommendedZoom).toBe(1.25);
   });
 });
 

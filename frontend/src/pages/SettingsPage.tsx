@@ -6,8 +6,9 @@ import { api } from "../lib/api";
 const PROVIDER_GROUPS: { title: string; subtitle: string; providers: string[] }[] = [
   {
     title: "AI Vision & Search Grounding",
-    subtitle: "Powers photo identification, raw grade estimation, and live web-grounded appraisals.",
-    providers: ["GEMINI", "OLLAMA_URL", "OLLAMA_MODEL"],
+    subtitle:
+      "Powers photo identification, raw grade estimation, and live web-grounded appraisals. Free cloud backups and local OCR run automatically if Gemini hits quota.",
+    providers: ["GEMINI", "GROQ_API_KEY", "OPENROUTER_API_KEY", "OLLAMA_URL", "OLLAMA_MODEL"],
   },
   {
     title: "Price Guides & Certs",
@@ -22,7 +23,9 @@ const PROVIDER_GROUPS: { title: string; subtitle: string; providers: string[] }[
 ];
 
 const PROVIDER_HINTS: Record<string, string> = {
-  GEMINI: "Google AI Studio API key (enables Gemini Vision + Search grounding)",
+  GEMINI: "Google AI Studio API key (cascades 2.5-flash -> 2.5-flash-lite -> 2.0-flash on 429)",
+  GROQ_API_KEY: "Free-tier Groq API key (console.groq.com — Llama vision & fast OCR text backup)",
+  OPENROUTER_API_KEY: "OpenRouter API key (openrouter.ai — uses :free vision & text models as backup)",
   OLLAMA_URL: "http://ollama.ollama.svc.cluster.local:11434",
   OLLAMA_MODEL: "qwen2.5vl:7b",
   PCGS: "PCGS Public API bearer token",

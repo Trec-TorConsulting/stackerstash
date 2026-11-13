@@ -76,6 +76,39 @@ def test_byok_credential_encryption_and_masking(api_client, user_a):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("provider", "secret_val", "expected_hint"),
+    [
+        ("GROQ_API_KEY", "gsk_supersecretgroqtoken9876", "••••9876"),
+        ("OPENROUTER_API_KEY", "sk-or-v1-supersecretkey5432", "••••5432"),
+    ],
+)
+def test_byok_free_backup_provider_credentials(api_client, user_a, provider, secret_val, expected_hint):
+    _, ws, token = user_a
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    put_resp = api_client.put(
+        f"/api/v1/settings/credentials/{provider}",
+        data=json.dumps({"value": secret_val}),
+        content_type="application/json",
+        **headers,
+    )
+    assert put_resp.status_code == 200
+    body = put_resp.json()
+    assert body["is_configured"] is True
+    assert body["masked_hint"] == expected_hint
+    assert secret_val[:8] not in json.dumps(body)
+
+    cred = ProviderCredential.objects.get(workspace=ws, provider=provider)
+    assert cred.encrypted_value != secret_val
+    assert cred.get_secret() == secret_val
+
+    del_resp = api_client.delete(f"/api/v1/settings/credentials/{provider}", **headers)
+    assert del_resp.status_code == 204
+    assert not ProviderCredential.objects.filter(workspace=ws, provider=provider).exists()
+
+
+@pytest.mark.django_db
 def test_health_and_readiness_probes(api_client):
     assert api_client.get("/healthz").status_code == 200
     assert api_client.get("/readyz").status_code == 200
