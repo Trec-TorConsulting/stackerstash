@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+  }
+}
+
