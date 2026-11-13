@@ -9,4 +9,4 @@
 ## 2. Verification & Deployment
 
 - [x] 2.1 Add/update unit tests in `backend/tests/test_valuation_and_vision.py` and `backend/tests/test_ocr_fallback.py`, and run `pytest` and `ruff`.
-- [ ] 2.2 Commit, push to `origin main`, build multi-arch `stackerstash-backend:0.1.0` OCI archive, push via `skopeo`, and restart K3s deployments.
+- [x] 2.2 Commit, push to `origin main`, build multi-arch `stackerstash-backend:0.1.0` OCI archive, push via `skopeo`, and restart K3s deployments.

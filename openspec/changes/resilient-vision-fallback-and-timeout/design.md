@@ -18,3 +18,4 @@ In production K3s, `POST /api/v1/vision/identify` runs synchronously inside a Gu
    - In `backend/apps/vision/ocr.py`, change `_preprocess_image_for_ocr` default `max_dimension` from `1600` to `1200` and save as JPEG (`quality=85`) instead of PNG, which is significantly faster in Pillow and RapidOCR with negligible accuracy loss.
 5. **Gunicorn worker timeout**:
    - Update `backend/Dockerfile` `CMD` from `--timeout 60` to `--timeout 120`.
+

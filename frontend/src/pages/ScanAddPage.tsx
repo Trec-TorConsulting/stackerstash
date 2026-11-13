@@ -92,9 +92,19 @@ export function ScanAddPage() {
     setVerificationStatus("NONE");
     setVerificationWarnings([]);
     setOverrideConfirmed(false);
-    const nextItems = picked.map((file, idx) => {
-      const autoLabel =
-        files.length === 0 && idx === 1 && defaultLabel === "OBVERSE" ? "REVERSE" : defaultLabel;
+    let hasObverseSoFar = files.some((f) => f.label === "OBVERSE");
+    let hasReverseSoFar = files.some((f) => f.label === "REVERSE");
+    const nextItems = picked.map((file) => {
+      let autoLabel = defaultLabel;
+      if (defaultLabel === "OBVERSE") {
+        if (!hasObverseSoFar) {
+          autoLabel = "OBVERSE";
+          hasObverseSoFar = true;
+        } else if (!hasReverseSoFar) {
+          autoLabel = "REVERSE";
+          hasReverseSoFar = true;
+        }
+      }
       return {
         file,
         label: autoLabel,

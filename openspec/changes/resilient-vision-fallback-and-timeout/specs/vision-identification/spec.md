@@ -24,3 +24,4 @@
 #### Scenario: Provider cascade falls back to local OCR within worker timeout
 - **WHEN** cloud vision providers and Ollama fail or time out during an identification request
 - **THEN** local OCR preprocessing and extraction complete within the Gunicorn worker timeout without `SIGKILL`
+
