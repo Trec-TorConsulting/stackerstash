@@ -59,16 +59,181 @@ describe("GuidedCameraModal", () => {
       }
     }
 
-    // First frame (no prevLuma) is not yet steady
+    // First frame (no prevLuma) is not yet steady, but quality remains advisory & ready
     const first = evaluateFrameMetrics(sharpCentered, null, w, h, 1.0);
     expect(first.isSteady).toBe(false);
-    expect(first.quality.isGood).toBe(false);
+    expect(first.quality.isGood).toBe(true);
 
     // Second identical frame is sharp, steady, and recommends stepping zoom up
     const second = evaluateFrameMetrics(sharpCentered, sharpCentered, w, h, 1.0);
     expect(second.isSteady).toBe(true);
     expect(second.quality.isGood).toBe(true);
     expect(second.recommendedZoom).toBe(1.25);
+  });
+
+  it("applies continuous autofocus when supported and captures via ImageCapture.takePhoto()", async () => {
+    const applyConstraints = vi.fn().mockResolvedValue(undefined);
+    const mockTrack = {
+      stop: vi.fn(),
+      getCapabilities: vi.fn(() => ({ focusMode: ["single-shot", "continuous"], zoom: { min: 1, max: 3 } })),
+      applyConstraints,
+    } as unknown as MediaStreamTrack;
+    const mockStream = {
+      getTracks: () => [mockTrack],
+      getVideoTracks: () => [mockTrack],
+    } as unknown as MediaStream;
+
+    const origMediaDevices = navigator.mediaDevices;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue(mockStream) },
+    });
+
+    const takePhoto = vi.fn().mockResolvedValue(new Blob(["jpeg-bytes"], { type: "image/jpeg" }));
+    const origImageCapture = (window as unknown as { ImageCapture?: unknown }).ImageCapture;
+    (window as unknown as { ImageCapture: unknown }).ImageCapture = vi.fn(() => ({ takePhoto }));
+
+    const origCreateImageBitmap = window.createImageBitmap;
+    window.createImageBitmap = vi.fn().mockResolvedValue({
+      width: 2400,
+      height: 1800,
+      close: vi.fn(),
+    } as unknown as ImageBitmap);
+
+    const origGetContext = HTMLCanvasElement.prototype.getContext;
+    const origToBlob = HTMLCanvasElement.prototype.toBlob;
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
+      drawImage: vi.fn(),
+      getImageData: vi.fn(() => ({ data: new Uint8ClampedArray(160 * 120 * 4).fill(140) })),
+      imageSmoothingEnabled: true,
+      imageSmoothingQuality: "high",
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.toBlob = vi.fn(function (this: HTMLCanvasElement, cb: BlobCallback) {
+      cb(new Blob(["normalized-jpg"], { type: "image/jpeg" }));
+    });
+
+    const onComplete = vi.fn();
+    try {
+      render(
+        <GuidedCameraModal
+          open={true}
+          onClose={vi.fn()}
+          onComplete={onComplete}
+          requireBack={false}
+          initialShape="circle"
+        />
+      );
+
+      await waitFor(() => {
+        expect(applyConstraints).toHaveBeenCalledWith({
+          advanced: [{ focusMode: "continuous" }],
+        });
+      });
+
+      const captureBtn = screen.getByRole("button", { name: /Capture Front/i });
+      expect(captureBtn).toBeEnabled();
+      fireEvent.click(captureBtn);
+
+      await waitFor(() => {
+        expect(takePhoto).toHaveBeenCalledTimes(1);
+        expect(onComplete).toHaveBeenCalledTimes(1);
+      });
+      expect(onComplete.mock.calls[0][0].frontFile.name).toBe("capture-front.jpg");
+    } finally {
+      Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: origMediaDevices });
+      (window as unknown as { ImageCapture?: unknown }).ImageCapture = origImageCapture;
+      window.createImageBitmap = origCreateImageBitmap;
+      HTMLCanvasElement.prototype.getContext = origGetContext;
+      HTMLCanvasElement.prototype.toBlob = origToBlob;
+    }
+  });
+
+  it("falls back to burst best-frame capture when ImageCapture is unavailable and exposes Native Camera on back step", async () => {
+    const mockTrack = {
+      stop: vi.fn(),
+      getCapabilities: vi.fn(() => ({})),
+      applyConstraints: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const mockStream = {
+      getTracks: () => [mockTrack],
+      getVideoTracks: () => [mockTrack],
+    } as unknown as MediaStream;
+
+    const origMediaDevices = navigator.mediaDevices;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue(mockStream) },
+    });
+
+    const origImageCapture = (window as unknown as { ImageCapture?: unknown }).ImageCapture;
+    delete (window as unknown as { ImageCapture?: unknown }).ImageCapture;
+
+    const origGetContext = HTMLCanvasElement.prototype.getContext;
+    const origToBlob = HTMLCanvasElement.prototype.toBlob;
+    let burstCall = 0;
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
+      drawImage: vi.fn(),
+      getImageData: vi.fn(() => {
+        burstCall++;
+        const buf = new Uint8ClampedArray(160 * 120 * 4).fill(120);
+        // Make frame #3 sharpest
+        if (burstCall === 3) {
+          for (let i = 0; i < buf.length; i += 8) {
+            buf[i] = 240;
+            buf[i + 1] = 240;
+            buf[i + 2] = 240;
+          }
+        }
+        return { data: buf };
+      }),
+      imageSmoothingEnabled: true,
+      imageSmoothingQuality: "high",
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.toBlob = vi.fn(function (this: HTMLCanvasElement, cb: BlobCallback) {
+      cb(new Blob(["burst-best-jpg"], { type: "image/jpeg" }));
+    });
+
+    const onComplete = vi.fn();
+    try {
+      const { container } = render(
+        <GuidedCameraModal
+          open={true}
+          onClose={vi.fn()}
+          onComplete={onComplete}
+          requireBack={true}
+          initialShape="circle"
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /Capture Front/i })).toBeEnabled();
+      });
+
+      const video = container.querySelector("video") as HTMLVideoElement;
+      Object.defineProperty(video, "videoWidth", { configurable: true, value: 1280 });
+      Object.defineProperty(video, "videoHeight", { configurable: true, value: 720 });
+
+      fireEvent.click(screen.getByRole("button", { name: /Capture Front/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Step 2: Back \(Reverse\)/i)).toBeInTheDocument();
+      });
+
+      // Native Camera input must also be present on the back step
+      const nativeBackInput = container.querySelector('input[type="file"][capture="environment"]') as HTMLInputElement;
+      expect(nativeBackInput).toBeTruthy();
+      const backFile = new File(["back-native"], "back-native.jpg", { type: "image/jpeg" });
+      fireEvent.change(nativeBackInput, { target: { files: [backFile] } });
+
+      expect(onComplete).toHaveBeenCalledTimes(1);
+      expect(onComplete.mock.calls[0][0].frontFile.name).toBe("capture-front.jpg");
+      expect(onComplete.mock.calls[0][0].backFile).toBe(backFile);
+    } finally {
+      Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: origMediaDevices });
+      (window as unknown as { ImageCapture?: unknown }).ImageCapture = origImageCapture;
+      HTMLCanvasElement.prototype.getContext = origGetContext;
+      HTMLCanvasElement.prototype.toBlob = origToBlob;
+    }
   });
 });
 

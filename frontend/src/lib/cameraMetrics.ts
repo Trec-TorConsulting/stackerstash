@@ -16,6 +16,30 @@ export interface FrameMetricsResult {
 }
 
 /**
+ * Compute mean gradient sharpness score for a grayscale luma buffer.
+ * Used to rank burst frames and select the sharpest capture.
+ */
+export function computeSharpnessScore(
+  luma: Float32Array,
+  width: number,
+  height: number,
+): number {
+  if (width < 3 || height < 3) return 0;
+  let edgeSum = 0;
+  let edgeCount = 0;
+  for (let row = 1; row < height - 1; row++) {
+    for (let col = 1; col < width - 1; col++) {
+      const p = row * width + col;
+      const gx = Math.abs(luma[p + 1] - luma[p - 1]);
+      const gy = Math.abs(luma[p + width] - luma[p - width]);
+      edgeSum += gx + gy;
+      edgeCount++;
+    }
+  }
+  return edgeCount > 0 ? edgeSum / edgeCount : 0;
+}
+
+/**
  * Evaluate exposure, sharpness, frame-to-frame stability, and center-vs-ring
  * subject framing from a grayscale luma buffer (typically 160x120).
  */
@@ -91,11 +115,13 @@ export function evaluateFrameMetrics(
   } else if (meanLuma > 238) {
     quality = { label: 'Too bright — reduce glare', tone: 'warn', isGood: false };
   } else if (meanEdge < 7.5) {
-    quality = { label: 'Hold steady & focus closer', tone: 'warn', isGood: false };
-  } else if (!isSteady) {
-    quality = { label: 'Hold steady — stabilizing', tone: 'warn', isGood: false };
+    quality = { label: 'Focus closer for sharper detail', tone: 'warn', isGood: false };
   } else {
-    quality = { label: 'Sharp & steady — ready', tone: 'good', isGood: true };
+    quality = {
+      label: isSteady ? 'Sharp & ready' : 'Ready to capture',
+      tone: 'good',
+      isGood: true,
+    };
   }
 
   let recommendedZoom = currentZoom;
