@@ -4,6 +4,7 @@ import csv
 import io
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -15,7 +16,8 @@ from PIL import Image
 from apps.accounts.models import Workspace
 from apps.valuation.services import refresh_item_melt_from_latest_spot
 
-from .models import CollectionItem, ItemPhoto
+from .image_processing import process_item_image
+from .models import CollectionItem, Container, ItemPhoto
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +41,16 @@ TARGET_FIELDS: list[str] = [
     "grading_service",
     "cert_number",
     "grade",
+    "slab_designation",
     "serial_number",
+    "container",
+    "tags",
     "purchase_price",
     "market_value_unit",
     "notes",
     "obverse_image_url",
     "reverse_image_url",
+    "slab_label_image_url",
     "image_url",
 ]
 
@@ -56,20 +62,62 @@ FIELD_ALIASES: dict[str, list[str]] = {
     "year": ["year", "date", "mint year", "issue year"],
     "denomination": ["denomination", "face value", "denom"],
     "mint_or_refiner": ["mint_or_refiner", "mint", "mint mark", "mintmark", "refiner", "manufacturer"],
-    "series": ["series", "variety", "type/series", "reference", "km#", "n#"],
+    "series": ["series", "subject", "variety", "type/series", "reference", "krause number", "km#", "n#"],
     "quantity": ["quantity", "qty", "count", "amount"],
     "metal_type": ["metal_type", "metal", "composition", "material", "alloy"],
-    "weight_value": ["weight_value", "weight", "mass"],
+    "weight_value": ["weight_value", "weight", "precious metal weight", "mass"],
     "weight_unit": ["weight_unit", "unit", "weight unit"],
     "purity": ["purity", "fineness", "millesimal fineness"],
-    "grading_service": ["grading_service", "grader", "grading company", "slab", "service", "tpg"],
-    "cert_number": ["cert_number", "cert #", "cert number", "cert", "certification", "certification #", "pcgs #", "ngc #", "slab #"],
+    "grading_service": [
+        "grading_service",
+        "grader",
+        "grading company",
+        "grading",
+        "slab",
+        "slabbed",
+        "slab company",
+        "certified by",
+        "service",
+        "tpg",
+        "tpg service",
+    ],
+    "cert_number": [
+        "cert_number",
+        "cert #",
+        "cert number",
+        "cert no",
+        "cert",
+        "certification",
+        "certification #",
+        "certificate",
+        "certificate #",
+        "pcgs #",
+        "pcgs cert",
+        "ngc #",
+        "ngc cert",
+        "pmg #",
+        "cac #",
+        "slab #",
+        "slab serial",
+    ],
     "grade": ["grade", "condition", "assigned grade"],
+    "slab_designation": [
+        "slab_designation",
+        "designation",
+        "slab designation",
+        "label",
+        "label type",
+        "strike",
+        "attribution",
+    ],
     "serial_number": ["serial_number", "serial #", "serial number", "serial"],
+    "container": ["container", "custom set", "box", "location", "storage", "album", "tube"],
+    "tags": ["tags", "tag", "labels"],
     "purchase_price": ["purchase_price", "paid", "price paid", "cost", "purchase cost", "cost basis"],
     "market_value_unit": [
         "market_value_unit",
         "market_value",
+        "value, usd (coinsnap)",
         "estimated value",
         "est. value",
         "value",
@@ -79,9 +127,10 @@ FIELD_ALIASES: dict[str, list[str]] = {
         "fmv",
         "current value",
     ],
-    "notes": ["notes", "comments", "comment", "memo", "remarks"],
-    "obverse_image_url": ["obverse_image_url", "obverse image", "obverse url", "front image", "front url", "obverse"],
-    "reverse_image_url": ["reverse_image_url", "reverse image", "reverse url", "back image", "back url", "reverse"],
+    "notes": ["notes", "note", "comments", "comment", "memo", "remarks"],
+    "obverse_image_url": ["obverse_image_url", "obverse image", "obverse photo", "obverse url", "front image", "front url", "obverse"],
+    "reverse_image_url": ["reverse_image_url", "reverse image", "reverse photo", "reverse url", "back image", "back url", "reverse"],
+    "slab_label_image_url": ["slab_label_image_url", "slab image", "slab photo", "slab label", "slab url"],
     "image_url": ["image_url", "image", "image url", "photo", "photo url"],
 }
 
@@ -103,6 +152,7 @@ class MappedImportResult:
     created_count: int
     errors: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    queued_appraisals: int = 0
 
 
 def _normalize_header(header: str) -> str:
@@ -125,7 +175,18 @@ def detect_preset_and_mapping(headers: list[str]) -> tuple[str, dict[str, str]]:
     ):
         preset = "stackerstash"
     elif ({"denomination", "composition"} & norm_set) and (
-        {"estimated value", "value", "obverse image", "obverse url", "reverse image", "reverse url"} & norm_set
+        {
+            "estimated value",
+            "value",
+            "value, usd (coinsnap)",
+            "obverse image",
+            "obverse url",
+            "obverse photo",
+            "reverse image",
+            "reverse url",
+            "reverse photo",
+        }
+        & norm_set
     ):
         preset = "coinsnap"
     elif {"n#", "numista", "km#"} & norm_set or ("issuer" in norm_set and ("reference" in norm_set or "name" in norm_set)):
@@ -322,13 +383,42 @@ def _normalize_item_kwargs(
     market_val = parse_decimal_currency(extracted.get("market_value_unit"), Decimal("0.00")) or Decimal("0.00")
     purchase_val = parse_decimal_currency(extracted.get("purchase_price"), None)
 
-    grading_service = normalize_grading_service(extracted.get("grading_service"))
+    grading_raw = extracted.get("grading_service") or ""
+    grading_service = normalize_grading_service(grading_raw)
     if grading_service == CollectionItem.GradingService.NONE and preset == "pcgs_ngc" and extracted.get("cert_number"):
         grading_service = CollectionItem.GradingService.PCGS
 
+    grade_val = (extracted.get("grade") or "").strip()
+    if not grade_val and grading_service != CollectionItem.GradingService.NONE and grading_raw:
+        # Extract embedded grade like "PCGS MS65" or "NGC PF70 UC"
+        stripped = re.sub(
+            r"\b(pcgs\s*banknote|pcgs|ngc|pmg|cacg|cac|anacs|icg)\b",
+            "",
+            grading_raw,
+            flags=re.IGNORECASE,
+        ).strip(" -:/")
+        if stripped:
+            grade_val = stripped
+
     category = normalize_category(extracted.get("category"))
-    if "category" not in extracted and grading_service != CollectionItem.GradingService.NONE:
+    if "category" not in extracted and (
+        grading_service != CollectionItem.GradingService.NONE or extracted.get("cert_number")
+    ):
         category = CollectionItem.Category.SLAB
+
+    weight_unit = (
+        CollectionItem.WeightUnit.G
+        if preset == "coinsnap" and not extracted.get("weight_unit") and extracted.get("weight_value")
+        else normalize_weight_unit(extracted.get("weight_unit"))
+    )
+
+    tags_raw = extracted.get("tags") or ""
+    tags_list = [t.strip() for t in re.split(r"[,;]", tags_raw) if t.strip()]
+
+    attributes: dict[str, Any] = {}
+    slab_designation = (extracted.get("slab_designation") or "").strip()
+    if slab_designation:
+        attributes["slab_designation"] = slab_designation[:120]
 
     return {
         "title": title,
@@ -342,14 +432,16 @@ def _normalize_item_kwargs(
         "quantity": qty,
         "metal_type": normalize_metal_type(extracted.get("metal_type")),
         "weight_value": weight_val,
-        "weight_unit": normalize_weight_unit(extracted.get("weight_unit")),
+        "weight_unit": weight_unit,
         "purity": purity_val,
         "grading_service": grading_service,
         "cert_number": (extracted.get("cert_number") or "")[:64],
-        "grade": (extracted.get("grade") or "")[:32],
+        "grade": grade_val[:32],
         "serial_number": (extracted.get("serial_number") or "")[:64],
         "purchase_price": purchase_val,
         "market_value_unit": market_val,
+        "tags": tags_list,
+        "attributes": attributes,
         "notes": extracted.get("notes") or "",
     }
 
@@ -387,41 +479,81 @@ def preview_csv(raw_bytes: bytes, sample_limit: int = 5) -> PreviewResult:
     )
 
 
-def _attach_remote_photo(
+def _download_and_validate_photo(
     client: httpx.Client,
-    workspace: Workspace,
-    item: CollectionItem,
+    item_id: Any,
+    item_title: str,
     url: str,
-    label: str,
-    is_primary: bool,
-) -> str | None:
-    """Download a remote image URL and attach as ItemPhoto. Returns warning string on failure."""
+    remove_background: bool = True,
+) -> tuple[tuple[bytes, int, int, str] | None, str | None]:
+    """Download, validate, and process a remote image URL. Returns ((content, width, height, ext), warning)."""
     if not url.startswith(("http://", "https://")):
-        return f"Skipped invalid photo URL for '{item.title}': {url}"
+        return None, f"Skipped invalid photo URL for '{item_title}': {url}"
     try:
         resp = client.get(url)
         resp.raise_for_status()
         content = resp.content
         if len(content) > MAX_PHOTO_BYTES:
-            return f"Skipped oversized photo (>5MB) for '{item.title}': {url}"
-        img = Image.open(io.BytesIO(content))
-        width, height = img.size
-        img.verify()
-        photo = ItemPhoto(
-            workspace=workspace,
-            item=item,
-            label=label,
-            is_primary=is_primary,
-            sort_order=0 if is_primary else 1,
-            width=width,
-            height=height,
+            return None, f"Skipped oversized photo (>5MB) for '{item_title}': {url}"
+        with Image.open(io.BytesIO(content)) as img:
+            img.verify()
+        processed, width, height, ext = process_item_image(
+            content, remove_background=remove_background, enhance=True
         )
-        ext = (img.format or "jpeg").lower()
-        photo.image.save(f"import-{label.lower()}.{ext}", ContentFile(content), save=True)
-        return None
+        return (processed, width, height, ext), None
     except Exception as exc:
-        logger.warning("Remote photo import failed for item %s (%s): %s", item.id, url, exc)
-        return f"Could not fetch photo for '{item.title}' ({url}): {exc}"
+        logger.warning("Remote photo import failed for item %s (%s): %s", item_id, url, exc)
+        return None, f"Could not fetch photo for '{item_title}' ({url}): {exc}"
+
+
+def _resolve_container_by_name(
+    workspace: Workspace,
+    raw_name: str | None,
+    cache: dict[str, Container],
+) -> Container | None:
+    name = (raw_name or "").strip()[:120]
+    if not name:
+        return None
+    key = name.lower()
+    if key in cache:
+        return cache[key]
+    existing = Container.objects.filter(workspace=workspace, name__iexact=name).first()
+    if existing:
+        cache[key] = existing
+        return existing
+    created = Container.objects.create(workspace=workspace, name=name)
+    cache[key] = created
+    return created
+
+
+def _enqueue_csv_batch_appraisals(item_ids: list[Any], workspace_id: Any) -> None:
+    """Run background appraisals for CSV-imported items throttled to 2 workers."""
+    import threading
+    from django.db import close_old_connections
+    from apps.accounts.models import Workspace
+    from apps.valuation.services import start_appraisal_job
+
+    def _worker() -> None:
+        close_old_connections()
+        try:
+            ws = Workspace.objects.get(id=workspace_id)
+
+            def _run_one(iid: Any) -> None:
+                close_old_connections()
+                try:
+                    it = CollectionItem.objects.prefetch_related("photos").get(id=iid, workspace=ws)
+                    start_appraisal_job(it, ws, sync=True)
+                except Exception:
+                    pass
+                finally:
+                    close_old_connections()
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                list(pool.map(_run_one, item_ids))
+        finally:
+            close_old_connections()
+
+    threading.Thread(target=_worker, daemon=True).start()
 
 
 def import_mapped_csv(
@@ -429,8 +561,12 @@ def import_mapped_csv(
     workspace: Workspace,
     mapping: dict[str, str] | None = None,
     import_photos: bool = False,
+    remove_background: bool = True,
+    auto_appraise: bool = True,
 ) -> MappedImportResult:
     """Import CSV rows using explicit or auto-detected column mappings."""
+    from apps.valuation.services import _clean_item_title
+
     text = raw_bytes.decode("utf-8-sig", errors="replace")
     reader = csv.DictReader(io.StringIO(text))
     headers = [h for h in (reader.fieldnames or []) if h is not None]
@@ -438,49 +574,92 @@ def import_mapped_csv(
     effective_mapping = mapping if mapping else auto_mapping
 
     result = MappedImportResult(created_count=0)
-    photo_client = httpx.Client(timeout=PHOTO_FETCH_TIMEOUT, follow_redirects=True) if import_photos else None
+    pending_photos: list[tuple[CollectionItem, str, str, bool]] = []
+    created_item_ids: list[Any] = []
+    container_cache: dict[str, Container] = {}
 
-    try:
-        for idx, row in enumerate(reader, start=2):
-            extracted = _extract_mapped_row(row, effective_mapping)
-            if not extracted:
-                result.errors.append({"row": idx, "error": "Row has no mapped values."})
+    for idx, row in enumerate(reader, start=2):
+        extracted = _extract_mapped_row(row, effective_mapping)
+        if not extracted:
+            result.errors.append({"row": idx, "error": "Row has no mapped values."})
+            continue
+        try:
+            kwargs = _normalize_item_kwargs(extracted, preset=preset)
+            if kwargs.get("title"):
+                kwargs["title"] = _clean_item_title(kwargs["title"])
+            container = _resolve_container_by_name(
+                workspace, extracted.get("container"), container_cache
+            )
+            item = CollectionItem.objects.create(
+                workspace=workspace,
+                container=container,
+                intake_source=CollectionItem.IntakeSource.CSV,
+                **kwargs,
+            )
+            refresh_item_melt_from_latest_spot(item)
+            from apps.catalog.auto_sort import enqueue_item_auto_sort
+
+            enqueue_item_auto_sort(item)
+            created_item_ids.append(item.id)
+            result.created_count += 1
+
+            if import_photos:
+                obverse_url = extracted.get("obverse_image_url") or extracted.get("image_url")
+                reverse_url = extracted.get("reverse_image_url")
+                slab_url = extracted.get("slab_label_image_url")
+                if obverse_url:
+                    pending_photos.append((item, obverse_url, ItemPhoto.Label.OBVERSE, True))
+                if reverse_url:
+                    pending_photos.append((item, reverse_url, ItemPhoto.Label.REVERSE, not bool(obverse_url)))
+                if slab_url:
+                    pending_photos.append(
+                        (item, slab_url, ItemPhoto.Label.SLAB_LABEL, not bool(obverse_url or reverse_url))
+                    )
+        except (InvalidOperation, ValueError) as exc:
+            result.errors.append({"row": idx, "error": str(exc)})
+
+    if import_photos and pending_photos:
+        with httpx.Client(
+            timeout=PHOTO_FETCH_TIMEOUT,
+            follow_redirects=True,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=20),
+        ) as photo_client:
+            with ThreadPoolExecutor(max_workers=16) as executor:
+                fetched = list(
+                    executor.map(
+                        lambda task: _download_and_validate_photo(
+                            photo_client,
+                            task[0].id,
+                            task[0].title,
+                            task[1],
+                            remove_background=remove_background,
+                        ),
+                        pending_photos,
+                    )
+                )
+
+        for (item, _url, label, is_primary), (photo_data, warn) in zip(
+            pending_photos, fetched, strict=True
+        ):
+            if warn:
+                result.warnings.append(warn)
                 continue
-            try:
-                kwargs = _normalize_item_kwargs(extracted, preset=preset)
-                item = CollectionItem.objects.create(workspace=workspace, **kwargs)
-                refresh_item_melt_from_latest_spot(item)
-                result.created_count += 1
+            if photo_data is None:
+                continue
+            content, width, height, ext = photo_data
+            photo = ItemPhoto(
+                workspace=workspace,
+                item=item,
+                label=label,
+                is_primary=is_primary,
+                sort_order=0 if is_primary else 1,
+                width=width,
+                height=height,
+            )
+            photo.image.save(f"import-{label.lower()}.{ext}", ContentFile(content), save=True)
 
-                if photo_client is not None:
-                    obverse_url = extracted.get("obverse_image_url") or extracted.get("image_url")
-                    reverse_url = extracted.get("reverse_image_url")
-                    if obverse_url:
-                        warn = _attach_remote_photo(
-                            photo_client,
-                            workspace,
-                            item,
-                            obverse_url,
-                            ItemPhoto.Label.OBVERSE,
-                            is_primary=True,
-                        )
-                        if warn:
-                            result.warnings.append(warn)
-                    if reverse_url:
-                        warn = _attach_remote_photo(
-                            photo_client,
-                            workspace,
-                            item,
-                            reverse_url,
-                            ItemPhoto.Label.REVERSE,
-                            is_primary=not bool(obverse_url),
-                        )
-                        if warn:
-                            result.warnings.append(warn)
-            except (InvalidOperation, ValueError) as exc:
-                result.errors.append({"row": idx, "error": str(exc)})
-    finally:
-        if photo_client is not None:
-            photo_client.close()
+    if auto_appraise and created_item_ids:
+        _enqueue_csv_batch_appraisals(created_item_ids, workspace.id)
+        result.queued_appraisals = len(created_item_ids)
 
     return result

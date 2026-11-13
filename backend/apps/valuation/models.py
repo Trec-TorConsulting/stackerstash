@@ -4,6 +4,7 @@ import uuid
 
 from django.db import models
 
+from apps.accounts.models import Workspace
 from apps.catalog.models import CollectionItem
 
 
@@ -41,4 +42,33 @@ class ValuationHistory(models.Model):
 
     class Meta:
         ordering = ["-recorded_at"]
+
+
+class AppraisalJob(models.Model):
+    """Background/progressive appraisal execution state for an item."""
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        RUNNING = "RUNNING", "Running"
+        COMPLETED = "COMPLETED", "Completed"
+        FAILED = "FAILED", "Failed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(
+        Workspace, on_delete=models.CASCADE, related_name="appraisal_jobs"
+    )
+    item = models.ForeignKey(
+        CollectionItem, on_delete=models.CASCADE, related_name="appraisal_jobs"
+    )
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING, db_index=True)
+    steps = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["item", "status"]),
+        ]
 

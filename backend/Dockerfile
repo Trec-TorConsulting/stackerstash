@@ -3,7 +3,9 @@ FROM python:3.12-slim AS builder
 WORKDIR /app
 RUN pip install --no-cache-dir uv
 COPY pyproject.toml ./
-RUN uv venv /app/.venv && uv pip install --python /app/.venv/bin/python -r pyproject.toml
+RUN uv venv /app/.venv \
+    && uv pip install --python /app/.venv/bin/python -r pyproject.toml \
+    && uv pip install --python /app/.venv/bin/python packaging
 
 FROM python:3.12-slim
 
@@ -17,7 +19,9 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY . .
 
-RUN mkdir -p /app/media /app/staticfiles && chown -R app:app /app
+RUN mkdir -p /app/media /app/staticfiles \
+    && .venv/bin/python manage.py collectstatic --noinput \
+    && chown -R app:app /app
 
 USER app
 EXPOSE 8000

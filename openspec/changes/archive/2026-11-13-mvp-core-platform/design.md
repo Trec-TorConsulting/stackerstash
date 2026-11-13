@@ -101,11 +101,15 @@ Adapting the proven waterfall from `whatnot-live-assistant`:
 
 ## 5. K3s Deployment & Testing
 
+Production is installed. The contract is `openspec/specs/k3s-deployment/spec.md`.
+
+- **What is live**: Helm release `stackerstash` in namespace `stackerstash`, from `~/Projects/Personal/HomeLab-Redo/stackerstash`. Hosts `stackerstash.com` and `www.stackerstash.com` on Gateway `kube-system/cluster-gateway` listener `https`. Images `registry.maddscientist.com/stackerstash-backend:0.1.0` and `stackerstash-frontend:0.1.0` (amd64 and arm64).
+- **Data**: database and role `stackerstash` on the shared Postgres `postgresql.postgresql.svc.cluster.local:5432`. Celery uses in-namespace Redis `redis:6379`. Secret `stackerstash-secrets` is cluster-only.
+- **Do not install `deploy/chart/`** over that release. Its values still say `traefik/traefik-gateway`, `registry.homelab.local`, and `redis.redis.svc`.
 - **Containers**:
-  - `backend`: Python 3.12-slim + Gunicorn + Django (`collectstatic` + entrypoint running migrations on job/init).
-  - `worker`: Same backend image running `celery -A config worker` and `celery -A config beat`.
-  - `frontend`: Node 22 build → Nginx serving static PWA + `/api`, `/admin`, `/media` proxied via Traefik `HTTPRoute` (or Nginx).
-- **Helm Chart (`deploy/chart/`)**: Mirrors `HomeLab-Redo/entertainment-express/chart` conventions—`Deployment` (web, worker, beat, frontend), `Service`, `PersistentVolumeClaim` (`longhorn` for media), `HTTPRoute` (Traefik Gateway API), `Certificate` (`cert-manager`), and `/healthz` + `/readyz` probes.
+  - `backend`: Python 3.12-slim + Gunicorn (2 workers on the cluster) + `packaging` (required by Celery/kombu 5.7). Init runs `migrate` and `collectstatic`.
+  - `worker` / `beat`: same backend image.
+  - `frontend`: Node 22 build → Nginx. HTTPRoute sends `/api`, `/admin`, `/static`, and `/media` to the backend and `/` to the frontend.
 - **Testing**:
   - Backend: `pytest` + `pytest-django` covering tenant isolation, BYOK encryption, weight/melt math, mocked spot/PCGS/Gemini/Ollama providers, and API CRUD/sorting.
   - Frontend: `vitest` + `@testing-library/react` covering gallery sorting/filtering, scan-to-form flow, and portfolio calculations.

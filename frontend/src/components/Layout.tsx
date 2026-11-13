@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
 import type { AuthUser } from "../lib/api";
+import { BrandLogo } from "./BrandLogo";
+import { SiteFooter } from "./SiteFooter";
 
 interface LayoutProps {
   user: AuthUser;
@@ -24,24 +26,21 @@ const NAV_ITEMS = [
 ];
 
 export function Layout({ user, onLogout }: LayoutProps) {
+  const isGlobalAdmin = user.is_staff || user.is_superuser;
+  const navItems = isGlobalAdmin
+    ? [...NAV_ITEMS, { to: "/admin", label: "Admin", icon: ShieldCheck }]
+    : NAV_ITEMS;
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col md:flex-row">
       {/* Desktop Sidebar */}
       <aside className="no-print hidden md:flex md:w-64 md:flex-col md:border-r md:border-slate-800/80 md:bg-slate-900/60 p-4 justify-between">
         <div>
-          <div className="flex items-center gap-2.5 px-2 py-3 mb-6">
-            <div className="h-9 w-9 rounded-xl bg-amber-500/15 border border-amber-500/40 flex items-center justify-center text-amber-400">
-              <ShieldCheck className="h-5 w-5" />
-            </div>
-            <div>
-              <div className="font-bold tracking-tight text-slate-100">Stacker Stash</div>
-              <div className="text-xs text-slate-400 truncate max-w-[150px]">
-                {user.workspace.name}
-              </div>
-            </div>
+          <div className="px-2 py-3 mb-6">
+            <BrandLogo size="md" subtitle={user.workspace.name} />
           </div>
           <nav className="space-y-1">
-            {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
+            {navItems.map(({ to, label, icon: Icon }) => (
               <NavLink
                 key={to}
                 to={to}
@@ -77,10 +76,7 @@ export function Layout({ user, onLogout }: LayoutProps) {
 
       {/* Mobile Top Bar */}
       <header className="no-print md:hidden flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30">
-        <div className="flex items-center gap-2">
-          <ShieldCheck className="h-5 w-5 text-amber-400" />
-          <span className="font-bold tracking-tight">Stacker Stash</span>
-        </div>
+        <BrandLogo size="sm" />
         <button
           onClick={onLogout}
           className="text-xs text-slate-400 hover:text-rose-300 flex items-center gap-1"
@@ -90,13 +86,18 @@ export function Layout({ user, onLogout }: LayoutProps) {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 pb-24 md:pb-8 px-4 py-5 md:px-8 md:py-7 max-w-7xl w-full mx-auto">
-        <Outlet />
-      </main>
+      <div className="flex-1 flex flex-col min-w-0">
+        <main className="flex-1 pb-10 md:pb-8 px-4 py-5 md:px-8 md:py-7 max-w-7xl w-full mx-auto">
+          <Outlet />
+        </main>
+        <div className="pb-16 md:pb-0">
+          <SiteFooter compact />
+        </div>
+      </div>
 
       {/* Mobile Bottom Nav */}
       <nav className="no-print md:hidden fixed bottom-0 inset-x-0 bg-slate-900/95 backdrop-blur border-t border-slate-800 flex justify-around py-2 z-40">
-        {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
+        {navItems.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
             to={to}

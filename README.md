@@ -28,7 +28,7 @@ An enterprise-grade, multi-tenant SaaS & self-hosted PWA for collectors and prec
 
 - **Backend (`backend/`)**: Django 5 + Django Ninja (OpenAPI 3.1 at `/api/v1/docs`) + PostgreSQL (or SQLite for local dev) + Celery/Redis + Django Admin (`/admin/`).
 - **Frontend (`frontend/`)**: React 19 + TypeScript + Vite + Tailwind CSS v4 + TanStack Query + `vite-plugin-pwa`.
-- **K3s Deployment (`deploy/chart/`)**: Helm chart with Longhorn `ReadWriteMany` media PVC, Traefik Gateway API `HTTPRoute`, `cert-manager` TLS `Certificate`, `/healthz` and `/readyz` probes.
+- **K3s Deployment**: Live release is Helm chart `~/Projects/Personal/HomeLab-Redo/stackerstash` (namespace `stackerstash`, hosts `stackerstash.com` and `www`). This repo's `deploy/chart/` is a sketch and must not be installed over that release. Deploy contract: [`openspec/specs/k3s-deployment/spec.md`](openspec/specs/k3s-deployment/spec.md).
 
 ---
 
@@ -76,10 +76,35 @@ cd frontend
 npm run build
 npm test
 
-# Helm chart validation
+# Helm chart validation (sketch only — do not install this chart on the cluster)
 helm lint deploy/chart
 helm template stackerstash deploy/chart > /dev/null
 ```
+
+---
+
+## Deploy to K3S
+
+Local dev stays on SQLite or Docker Compose. Production data is database `stackerstash` on the cluster Postgres. Do not point a laptop `DATABASE_URL` at that server.
+
+The installed chart is `~/Projects/Personal/HomeLab-Redo/stackerstash`. Build the images here, then upgrade that release. `deploy/chart/` still points at `registry.homelab.local`, `traefik/traefik-gateway`, and `redis.redis.svc`.
+
+```bash
+cd ~/Projects/Personal/Stackers-coins-paper-collection-tracking
+
+docker buildx build --platform linux/amd64,linux/arm64 --push \
+  -t registry.maddscientist.com/stackerstash-backend:0.1.0 \
+  -f backend/Dockerfile backend
+
+docker buildx build --platform linux/amd64,linux/arm64 --push \
+  -t registry.maddscientist.com/stackerstash-frontend:0.1.0 \
+  -f frontend/Dockerfile frontend
+
+helm upgrade --install stackerstash ~/Projects/Personal/HomeLab-Redo/stackerstash -n stackerstash
+kubectl rollout status deployment/stackerstash-backend -n stackerstash
+```
+
+If `docker buildx --push` cannot reach `registry.maddscientist.com` (`192.168.4.7:443`), export an OCI archive and push it with `skopeo` from the Mac. Leave Secret `stackerstash-secrets` in place. Full rules, including TLS and the `/media` production gap, are in [`openspec/specs/k3s-deployment/spec.md`](openspec/specs/k3s-deployment/spec.md).
 
 ---
 
@@ -87,6 +112,7 @@ helm template stackerstash deploy/chart > /dev/null
 
 Specifications, architecture decisions, and tracked changes live under `openspec/changes/`:
 - `mvp-core-platform` — Core multi-tenant platform, catalog, valuation, vision, and K3s deployment
+- `openspec/specs/k3s-deployment/spec.md` — How production on K3S is actually deployed
 - `migration-csv-importer` — Multi-platform CSV migration wizard (CoinSnap, Numista, PCGS/NGC)
 - `user-docs-and-howtos` — User guide, migration how-tos, and README documentation
 

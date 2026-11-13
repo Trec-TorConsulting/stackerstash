@@ -1,3 +1,6 @@
+# NOT the installed release. Production is ~/Projects/Personal/HomeLab-Redo/stackerstash.
+# Do not helm upgrade the live stackerstash release with this chart.
+# See openspec/specs/k3s-deployment/spec.md.
 hostname: stackerstash.com
 
 gateway:

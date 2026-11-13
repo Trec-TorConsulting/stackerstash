@@ -4,8 +4,11 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { ImportWizardModal } from "../components/ImportWizardModal";
 import { formatOz, formatUsd } from "../lib/format";
+import { AdminPortalPage } from "../pages/AdminPortalPage";
 import { AuthPage } from "../pages/AuthPage";
+import { ComingSoonPage } from "../pages/ComingSoonPage";
 import { DashboardPage } from "../pages/DashboardPage";
+import { MarketingPage } from "../pages/MarketingPage";
 
 describe("format helpers", () => {
   it("formats USD currency and troy ounces cleanly", () => {
@@ -17,10 +20,124 @@ describe("format helpers", () => {
 
 describe("AuthPage", () => {
   it("renders sign in and create vault tabs", () => {
-    render(<AuthPage onAuth={vi.fn()} />);
-    expect(screen.getByText("Stacker Stash")).toBeInTheDocument();
+    render(
+      <MemoryRouter>
+        <AuthPage onAuth={vi.fn()} />
+      </MemoryRouter>
+    );
+    expect(screen.getAllByText("Stacker Stash").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByRole("button", { name: "Sign In" })).toHaveLength(2);
     expect(screen.getByRole("button", { name: "Create Vault" })).toBeInTheDocument();
+  });
+});
+
+describe("Public pages & Global Admin Portal", () => {
+  it("renders ComingSoonPage with teasers and standard footer", () => {
+    render(
+      <MemoryRouter>
+        <ComingSoonPage />
+      </MemoryRouter>
+    );
+    expect(screen.getByText(/Launching Soon on stackerstash.com/i)).toBeInTheDocument();
+    expect(screen.getByText("AI Vision Identification")).toBeInTheDocument();
+    expect(screen.getByText(/Operator \/ Early Access/i)).toBeInTheDocument();
+  });
+
+  it("renders MarketingPage with hero and vault tiers", () => {
+    render(
+      <MemoryRouter>
+        <MarketingPage />
+      </MemoryRouter>
+    );
+    expect(screen.getByText(/Track Every Coin, Note & Bar/i)).toBeInTheDocument();
+    expect(screen.getByText("Collector Vault (Free)")).toBeInTheDocument();
+  });
+
+  it("restricts AdminPortalPage for non-admin users", () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter>
+          <AdminPortalPage
+            currentUser={{
+              id: "u1",
+              email: "user@example.com",
+              display_name: "User",
+              is_staff: false,
+              is_superuser: false,
+              workspace: { id: "w1", name: "My Vault", slug: "my-vault", default_currency: "USD" },
+            }}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+    expect(screen.getByText("Global Admin Access Required")).toBeInTheDocument();
+  });
+
+  it("renders AdminPortalPage metrics and user list for Global Admins", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes("/admin/overview")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              total_users: 4,
+              active_users: 4,
+              admin_users: 1,
+              recent_signups_7d: 2,
+              total_workspaces: 4,
+              total_items: 42,
+              total_containers: 7,
+              total_market_value: "12500.00",
+              total_melt_value: "9800.00",
+              last_spot_sync: null,
+            }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [
+            {
+              id: "u2",
+              email: "collector@example.com",
+              display_name: "Collector",
+              is_active: true,
+              is_staff: false,
+              is_superuser: false,
+              date_joined: "2026-11-01T00:00:00Z",
+              last_login: null,
+              workspace_count: 1,
+              primary_workspace: { id: "w2", name: "Collector Safe", slug: "collector-safe" },
+              item_count: 12,
+              container_count: 2,
+              total_market_value: "4200.00",
+            },
+          ],
+        };
+      })
+    );
+
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter>
+          <AdminPortalPage
+            currentUser={{
+              id: "u1",
+              email: "admin@stackerstash.com",
+              display_name: "Admin",
+              is_staff: true,
+              is_superuser: true,
+              workspace: { id: "w1", name: "Admin Vault", slug: "admin-vault", default_currency: "USD" },
+            }}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+
+    expect(await screen.findByText("$12,500.00")).toBeInTheDocument();
+    expect(await screen.findByText("collector@example.com")).toBeInTheDocument();
   });
 });
 

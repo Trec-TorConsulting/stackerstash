@@ -33,12 +33,16 @@ const FIELD_LABELS: Record<string, string> = {
   grading_service: "Grading Service",
   cert_number: "Cert #",
   grade: "Grade",
+  slab_designation: "Slab Designation / Label",
   serial_number: "Serial #",
+  container: "Container / Set",
+  tags: "Tags",
   purchase_price: "Purchase Price",
   market_value_unit: "Market Value (Unit)",
   notes: "Notes",
   obverse_image_url: "Obverse Image URL",
   reverse_image_url: "Reverse Image URL",
+  slab_label_image_url: "Slab Label Image URL",
   image_url: "Image URL",
 };
 
@@ -48,6 +52,7 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
   const [preview, setPreview] = useState<CsvImportPreview | null>(null);
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [importPhotos, setImportPhotos] = useState(false);
+  const [removeBackground, setRemoveBackground] = useState(true);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -60,6 +65,7 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
     setPreview(null);
     setMapping({});
     setImportPhotos(false);
+    setRemoveBackground(true);
     setErrorMsg(null);
     setResult(null);
   }
@@ -81,7 +87,7 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
       setPreview(prev);
       setMapping(prev.suggested_mapping);
       const hasImageMapping = Object.values(prev.suggested_mapping).some((v) =>
-        ["obverse_image_url", "reverse_image_url", "image_url"].includes(v)
+        ["obverse_image_url", "reverse_image_url", "slab_label_image_url", "image_url"].includes(v)
       );
       setImportPhotos(hasImageMapping);
     } catch (err) {
@@ -97,7 +103,7 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
     setIsImporting(true);
     setErrorMsg(null);
     try {
-      const res = await api.importMappedCsv(selectedFile, mapping, importPhotos);
+      const res = await api.importMappedCsv(selectedFile, mapping, importPhotos, removeBackground);
       setResult(res);
       const summary = `Imported ${res.created_count} items${
         res.errors.length ? ` (${res.errors.length} row errors)` : ""
@@ -111,7 +117,7 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
   }
 
   const hasPhotoColumns = Object.values(mapping).some((v) =>
-    ["obverse_image_url", "reverse_image_url", "image_url"].includes(v)
+    ["obverse_image_url", "reverse_image_url", "slab_label_image_url", "image_url"].includes(v)
   );
 
   return (
@@ -227,15 +233,28 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
             </div>
 
             {hasPhotoColumns && (
-              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={importPhotos}
-                  onChange={(e) => setImportPhotos(e.target.checked)}
-                  className="rounded border-slate-700 bg-slate-950 text-amber-500"
-                />
-                Download and attach photos from mapped Image URL columns (best-effort)
-              </label>
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={importPhotos}
+                    onChange={(e) => setImportPhotos(e.target.checked)}
+                    className="rounded border-slate-700 bg-slate-950 text-amber-500"
+                  />
+                  Download and attach photos from mapped Image URL columns (best-effort)
+                </label>
+                {importPhotos && (
+                  <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer pl-5">
+                    <input
+                      type="checkbox"
+                      checked={removeBackground}
+                      onChange={(e) => setRemoveBackground(e.target.checked)}
+                      className="rounded border-slate-700 bg-slate-950 text-amber-500"
+                    />
+                    Auto-remove background, crop tightly &amp; enhance coin/slab photos
+                  </label>
+                )}
+              </div>
             )}
 
             {preview.normalized_preview.length > 0 && (
@@ -308,9 +327,16 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
           <div className="space-y-4">
             <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-200 text-sm flex items-center gap-2">
               <CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" />
-              <span>
-                Successfully imported <strong>{result.created_count}</strong> items into your vault.
-              </span>
+              <div>
+                <div>
+                  Successfully imported <strong>{result.created_count}</strong> items into your vault.
+                </div>
+                {(result.queued_appraisals ?? 0) > 0 && (
+                  <div className="mt-1 text-xs text-emerald-300/90">
+                    {result.queued_appraisals} background appraisals queued (running automatically in the background).
+                  </div>
+                )}
+              </div>
             </div>
             {result.warnings.length > 0 && (
               <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs space-y-1 max-h-32 overflow-y-auto">

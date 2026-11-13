@@ -86,6 +86,13 @@ class CollectionItem(models.Model):
         FLIPPER = "FLIPPER", "Coin Flip / Holder"
         OTHER = "OTHER", "Other Collectible"
 
+    class SortCategory(models.TextChoices):
+        COIN = "COIN", "Coins"
+        PAPER = "PAPER", "Paper Currency"
+        BAR = "BAR", "Bars / Ingots"
+        ROUND = "ROUND", "Rounds"
+        OTHER = "OTHER", "Other"
+
     class MetalType(models.TextChoices):
         NONE = "NONE", "None / Non-Bullion"
         GOLD = "GOLD", "Gold (Au)"
@@ -123,7 +130,31 @@ class CollectionItem(models.Model):
         PCGS = "PCGS", "PCGS Price Guide"
         GREYSHEET = "GREYSHEET", "Greysheet CDN"
         NUMISMEDIA = "NUMISMEDIA", "NumisMedia FMV"
+        COMPS = "COMPS", "Realized Sold Comps"
         AI_ESTIMATE = "AI_ESTIMATE", "AI Estimate"
+
+    class ValuationConfidence(models.TextChoices):
+        HIGH = "HIGH", "High"
+        MEDIUM = "MEDIUM", "Medium"
+        LOW = "LOW", "Low"
+
+    class CollectibilityTier(models.TextChoices):
+        BULLION = "BULLION", "Bullion / Melt-Driven"
+        SEMI_NUMISMATIC = "SEMI_NUMISMATIC", "Semi-Numismatic"
+        KEY_DATE_COLLECTIBLE = "KEY_DATE_COLLECTIBLE", "Key Date / Scarce"
+        NUMISMATIC = "NUMISMATIC", "Numismatic Collectible"
+
+    class IntakeSource(models.TextChoices):
+        CAMERA = "CAMERA", "Guided Camera"
+        UPLOAD = "UPLOAD", "File Upload"
+        CSV = "CSV", "CSV / Bulk Import"
+        MANUAL = "MANUAL", "Manual Entry"
+
+    class PhotoVerificationStatus(models.TextChoices):
+        NONE = "NONE", "Not Checked"
+        VERIFIED = "VERIFIED", "Verified Physical Photo"
+        FLAGGED = "FLAGGED", "Flagged / Needs Review"
+        OVERRIDDEN = "OVERRIDDEN", "User Overridden"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     workspace = models.ForeignKey(
@@ -169,6 +200,11 @@ class CollectionItem(models.Model):
     cert_number = models.CharField(max_length=64, blank=True, default="", db_index=True)
     grade = models.CharField(max_length=32, blank=True, default="")
     estimated_grade = models.CharField(max_length=32, blank=True, default="")
+    estimated_grade_range = models.CharField(max_length=32, blank=True, default="")
+    estimated_grade_rationale = models.TextField(blank=True, default="")
+    grading_upside_usd = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
     ai_confidence = models.FloatField(null=True, blank=True)
     serial_number = models.CharField(max_length=64, blank=True, default="", db_index=True)
 
@@ -188,11 +224,63 @@ class CollectionItem(models.Model):
     market_value_unit = models.DecimalField(
         max_digits=12, decimal_places=2, default=Decimal("0.00")
     )
+    market_value_low = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    market_value_high = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
     valuation_source = models.CharField(
         max_length=20, choices=ValuationSource.choices, default=ValuationSource.MANUAL
     )
+    valuation_confidence = models.CharField(
+        max_length=12, choices=ValuationConfidence.choices, blank=True, default=""
+    )
+    collectibility_tier = models.CharField(
+        max_length=24, choices=CollectibilityTier.choices, blank=True, default=""
+    )
+    hold_outlook = models.TextField(blank=True, default="")
+    valuation_drivers = models.JSONField(default=list, blank=True)
     is_estimate = models.BooleanField(default=False)
     valued_at = models.DateTimeField(null=True, blank=True)
+
+    # Numismatic & Physical Specifications
+    mint_mark = models.CharField(max_length=16, blank=True, default="")
+    mintage = models.PositiveBigIntegerField(null=True, blank=True)
+    variety = models.CharField(max_length=120, blank=True, default="")
+    composition = models.CharField(max_length=120, blank=True, default="")
+    gross_weight_grams = models.DecimalField(
+        max_digits=10, decimal_places=4, null=True, blank=True
+    )
+    diameter_mm = models.DecimalField(
+        max_digits=8, decimal_places=2, null=True, blank=True
+    )
+    thickness_mm = models.DecimalField(
+        max_digits=8, decimal_places=2, null=True, blank=True
+    )
+    edge_type = models.CharField(max_length=64, blank=True, default="")
+    designer = models.CharField(max_length=120, blank=True, default="")
+    catalog_numbers = models.JSONField(default=dict, blank=True)
+    specs_provenance = models.JSONField(default=dict, blank=True)
+
+    # Intake & Photo Verification Provenance
+    intake_source = models.CharField(
+        max_length=16, choices=IntakeSource.choices, default=IntakeSource.MANUAL
+    )
+    photo_verification_status = models.CharField(
+        max_length=16,
+        choices=PhotoVerificationStatus.choices,
+        default=PhotoVerificationStatus.NONE,
+    )
+    photo_verification_notes = models.JSONField(default=list, blank=True)
+
+    # Auto-Sort Taxonomy
+    sort_category = models.CharField(
+        max_length=16, choices=SortCategory.choices, blank=True, default=""
+    )
+    sort_subcategory = models.CharField(max_length=120, blank=True, default="", db_index=True)
+    sort_override = models.BooleanField(default=False)
+    sort_updated_at = models.DateTimeField(null=True, blank=True)
 
     tags = models.JSONField(default=list, blank=True)
     attributes = models.JSONField(default=dict, blank=True)
@@ -205,6 +293,7 @@ class CollectionItem(models.Model):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["workspace", "category"]),
+            models.Index(fields=["workspace", "sort_category", "sort_subcategory"]),
             models.Index(fields=["workspace", "metal_type"]),
             models.Index(fields=["workspace", "status"]),
             models.Index(fields=["workspace", "-market_value_unit"]),
@@ -221,6 +310,13 @@ class CollectionItem(models.Model):
         return (self.melt_value_unit * self.quantity).quantize(Decimal("0.01"))
 
     @property
+    def is_graded(self) -> bool:
+        return (
+            self.category == self.Category.SLAB
+            or self.grading_service not in ("", self.GradingService.NONE)
+        )
+
+    @property
     def total_market_value(self) -> Decimal:
         return (self.market_value_unit * self.quantity).quantize(Decimal("0.01"))
 
@@ -229,6 +325,13 @@ class CollectionItem(models.Model):
         if self.metal_type == self.MetalType.NONE:
             return self.total_market_value
         return (self.total_market_value - self.total_melt_value).quantize(Decimal("0.01"))
+
+    @property
+    def collector_premium_pct(self) -> float | None:
+        if self.metal_type == self.MetalType.NONE or self.total_melt_value <= Decimal("0.00"):
+            return None
+        pct = ((self.total_market_value - self.total_melt_value) / self.total_melt_value) * Decimal("100")
+        return float(pct.quantize(Decimal("0.1")))
 
     @property
     def unrealized_gain_loss(self) -> Decimal | None:
@@ -267,6 +370,12 @@ class ItemPhoto(models.Model):
     sort_order = models.PositiveIntegerField(default=0)
     width = models.PositiveIntegerField(null=True, blank=True)
     height = models.PositiveIntegerField(null=True, blank=True)
+    verification_status = models.CharField(
+        max_length=16,
+        choices=CollectionItem.PhotoVerificationStatus.choices,
+        default=CollectionItem.PhotoVerificationStatus.NONE,
+    )
+    verification_notes = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

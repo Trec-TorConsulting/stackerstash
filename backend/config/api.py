@@ -1,5 +1,6 @@
 from ninja import NinjaAPI
 
+from apps.accounts.admin_api import admin_router
 from apps.accounts.api import auth_router, settings_router
 from apps.catalog.api import catalog_router
 from apps.valuation.api import analytics_router, valuation_router
@@ -13,6 +14,7 @@ api = NinjaAPI(
 )
 
 api.add_router("/auth", auth_router)
+api.add_router("/admin", admin_router)
 api.add_router("/settings", settings_router)
 api.add_router("/catalog", catalog_router)
 api.add_router("/valuation", valuation_router)

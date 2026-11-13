@@ -1,7 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" fill="none">
-  <rect width="192" height="192" rx="40" fill="#0b0f19"/>
-  <circle cx="96" cy="96" r="56" stroke="#f59e0b" stroke-width="10"/>
-  <circle cx="96" cy="96" r="36" stroke="#94a3b8" stroke-width="4" stroke-dasharray="6 6"/>
-  <path d="M96 68v56M80 84h32M80 108h32" stroke="#f59e0b" stroke-width="8" stroke-linecap="round"/>
+  <defs>
+    <linearGradient id="goldGrad192" x1="24" y1="18" x2="168" y2="174" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#fde68a" />
+      <stop offset="50%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#b45309" />
+    </linearGradient>
+    <linearGradient id="vaultBg192" x1="0" y1="0" x2="192" y2="192" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1e293b" />
+      <stop offset="100%" stop-color="#0b0f19" />
+    </linearGradient>
+  </defs>
+  <rect width="192" height="192" rx="42" fill="url(#vaultBg192)" />
+  <polygon
+    points="96,17 152,40 175,96 152,152 96,175 40,152 17,96 40,40"
+    fill="#0f172a"
+    stroke="url(#goldGrad192)"
+    stroke-width="8"
+  />
+  <rect x="55" y="110" width="82" height="21" rx="6" fill="url(#goldGrad192)" />
+  <rect x="63" y="85" width="66" height="20" rx="6" fill="url(#goldGrad192)" fill-opacity="0.9" />
+  <circle cx="96" cy="64" r="20" fill="url(#goldGrad192)" />
+  <circle cx="96" cy="64" r="13" fill="#0f172a" />
+  <path d="M96 55v18" stroke="#fbbf24" stroke-width="3.5" stroke-linecap="round" />
 </svg>
-
