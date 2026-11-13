@@ -494,7 +494,8 @@ def test_identify_images_429_falls_back_to_ollama_and_marks_quota_deferred(user_
     assert res["quota_deferred"] is True
     assert res["candidate"]["title"] == "1921 Morgan Dollar"
     sent_payload = json.loads(ollama_route.calls.last.request.content)
-    assert "format" not in sent_payload
+    assert sent_payload["format"] == "json"
+    assert sent_payload["think"] is False
 
 
 @pytest.mark.django_db

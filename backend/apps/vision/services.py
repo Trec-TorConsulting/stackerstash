@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Any
 
 import httpx
+from django.core.cache import cache
 from PIL import Image, ImageOps
 
 from apps.accounts.models import ProviderCredential, Workspace
@@ -159,7 +160,7 @@ def _infer_image_mime(img_bytes: bytes, declared_mime: str | None) -> str:
 
 
 def _prepare_images_for_vision(
-    images: list[tuple[bytes, str]], max_dimension: int = 1600
+    images: list[tuple[bytes, str]], max_dimension: int = 1024
 ) -> list[tuple[bytes, str]]:
     """
     Normalize orientation, downscale large mobile/camera photos, and re-encode as JPEG
@@ -231,6 +232,7 @@ def _call_gemini_vision_model(
         "generationConfig": {
             "responseMimeType": "application/json",
             "temperature": 0.1,
+            "maxOutputTokens": 768,
             "thinkingConfig": {"thinkingBudget": 0},
         },
     }
@@ -326,6 +328,21 @@ def _call_openai_compat_chat(
     return {"parsed": _extract_json_block(str(text)), "raw": data}
 
 
+_GEMINI_COOLDOWN_SECONDS = 120
+
+
+def _gemini_cooldown_key(workspace: Workspace) -> str:
+    return f"vision:gemini_quota_cooldown:{workspace.id}"
+
+
+def _is_gemini_in_cooldown(workspace: Workspace) -> bool:
+    return bool(cache.get(_gemini_cooldown_key(workspace)))
+
+
+def _mark_gemini_cooldown(workspace: Workspace, ttl: int = _GEMINI_COOLDOWN_SECONDS) -> None:
+    cache.set(_gemini_cooldown_key(workspace), True, timeout=ttl)
+
+
 def _is_quota_error(msg: str) -> bool:
     """Return True when an upstream provider error indicates HTTP 429 or quota exhaustion."""
     lower = (msg or "").lower()
@@ -379,6 +396,36 @@ def _parse_ollama_response(raw_body: str) -> tuple[str, Any]:
     raise ValueError(f"Ollama returned non-JSON response: {stripped[:200]}")
 
 
+def _post_ollama_chat(
+    ollama_url: str,
+    model_name: str,
+    messages: list[dict[str, Any]],
+    timeout: float = 45.0,
+) -> tuple[dict[str, Any], Any]:
+    """Call Ollama /api/chat with thinking disabled and JSON output enforced."""
+    endpoint = f"{ollama_url.rstrip('/')}/api/chat"
+    payload: dict[str, Any] = {
+        "model": model_name,
+        "stream": False,
+        "think": False,
+        "format": "json",
+        "options": {"temperature": 0.1, "num_predict": 512},
+        "messages": messages,
+    }
+    with httpx.Client(timeout=timeout) as client:
+        resp = client.post(endpoint, json=payload)
+        if resp.status_code == 400 and "think" in resp.text.lower():
+            payload.pop("think", None)
+            resp = client.post(endpoint, json=payload)
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(f"HTTP {exc.response.status_code}: {exc.response.text[:300]}") from exc
+        raw_body = resp.text
+    text, data = _parse_ollama_response(raw_body)
+    return _extract_json_block(text), data
+
+
 def _call_ollama_vision(
     images: list[tuple[bytes, str]],
     ollama_url: str,
@@ -386,24 +433,16 @@ def _call_ollama_vision(
     prompt: str,
     timeout: float = 45.0,
 ) -> dict[str, Any]:
-    endpoint = f"{ollama_url.rstrip('/')}/api/chat"
     message: dict[str, Any] = {"role": "user", "content": prompt}
     if images:
         message["images"] = [base64.b64encode(b).decode("ascii") for b, _ in images]
-    payload = {
-        "model": model_name or "llama3.2-vision",
-        "stream": False,
-        "messages": [message],
-    }
-    with httpx.Client(timeout=timeout) as client:
-        resp = client.post(endpoint, json=payload)
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise RuntimeError(f"HTTP {exc.response.status_code}: {exc.response.text[:300]}") from exc
-        raw_body = resp.text
-    text, data = _parse_ollama_response(raw_body)
-    return {"parsed": _extract_json_block(text), "raw": data}
+    parsed, data = _post_ollama_chat(
+        ollama_url,
+        model_name or "llama3.2-vision",
+        [message],
+        timeout=timeout,
+    )
+    return {"parsed": parsed, "raw": data}
 
 
 def _run_image_verification(
@@ -480,8 +519,12 @@ def _attempt_ocr_fallback(
     ollama_model: str,
     provider_errors: list[str],
     skip_ollama_text: bool = False,
+    skip_gemini: bool = False,
+    deadline: float | None = None,
 ) -> dict[str, Any] | None:
     """Run local OCR, optional text-only LLM structuring, and deterministic catalog enrichment."""
+    if deadline is not None and deadline - time.monotonic() < 12.0:
+        return None
     ocr_text = extract_text_from_images(vision_images)
     if not ocr_text.strip():
         return None
@@ -500,6 +543,11 @@ def _attempt_ocr_fallback(
     parsed_res: dict[str, Any] | None = None
     provider_used = "OCR_CATALOG"
 
+    def _text_timeout() -> float:
+        if deadline is None:
+            return 10.0
+        return min(10.0, max(2.0, deadline - time.monotonic()))
+
     # Try text-only LLM structuring (zero image tokens)
     text_attempts: list[tuple[str, Any]] = []
     if groq_key:
@@ -507,7 +555,12 @@ def _attempt_ocr_fallback(
             (
                 "Groq-Text",
                 lambda: _call_openai_compat_chat(
-                    GROQ_CHAT_URL, groq_key, GROQ_TEXT_MODEL, ocr_prompt, images=None
+                    GROQ_CHAT_URL,
+                    groq_key,
+                    GROQ_TEXT_MODEL,
+                    ocr_prompt,
+                    images=None,
+                    timeout=_text_timeout(),
                 ),
             )
         )
@@ -525,15 +578,16 @@ def _attempt_ocr_fallback(
                         "HTTP-Referer": "https://stackerstash.com",
                         "X-Title": "Stackers Stash",
                     },
+                    timeout=_text_timeout(),
                 ),
             )
         )
-    if gemini_key:
+    if gemini_key and not skip_gemini:
         text_attempts.append(
             (
                 "Gemini-Text",
                 lambda: _call_gemini_vision_model(
-                    [], gemini_key, ocr_prompt, "gemini-2.5-flash-lite"
+                    [], gemini_key, ocr_prompt, "gemini-2.5-flash-lite", timeout=_text_timeout()
                 ),
             )
         )
@@ -541,11 +595,15 @@ def _attempt_ocr_fallback(
         text_attempts.append(
             (
                 "Ollama-Text",
-                lambda: _call_ollama_vision([], ollama_url, ollama_model, ocr_prompt, timeout=15.0),
+                lambda: _call_ollama_vision(
+                    [], ollama_url, ollama_model, ocr_prompt, timeout=_text_timeout()
+                ),
             )
         )
 
     for label, fn in text_attempts:
+        if deadline is not None and deadline - time.monotonic() < 5.0:
+            break
         try:
             parsed_res = fn()
             provider_used = "OCR_TEXT"
@@ -635,52 +693,74 @@ def identify_images(
     vision_images = _prepare_images_for_vision(images)
     provider_errors: list[str] = []
     # Stay safely under Gunicorn's 60s worker timeout in production
-    deadline = time.monotonic() + 48.0
+    deadline = time.monotonic() + 40.0
     ollama_failed = False
     gemini_quota_hit = False
 
     if gemini_key:
-        try:
-            res = _call_gemini_vision(vision_images, gemini_key, prompt)
-            return _record_vision_success(
-                workspace, "GEMINI", res, images, barcode_hint, intake_mode
-            )
-        except Exception as exc:
-            err_msg = _sanitize_error_message(str(exc))
-            gemini_quota_hit = _is_quota_error(err_msg)
-            logger.warning("Gemini vision failed, checking fallback providers: %s", err_msg)
-            provider_errors.append(f"Gemini: {err_msg}")
+        if _is_gemini_in_cooldown(workspace):
+            gemini_quota_hit = True
+            provider_errors.append("Gemini: Skipped (429 quota cooldown active)")
+        else:
+            try:
+                remaining = deadline - time.monotonic()
+                res = _call_gemini_vision(
+                    vision_images,
+                    gemini_key,
+                    prompt,
+                    timeout=min(25.0, max(5.0, remaining)),
+                )
+                return _record_vision_success(
+                    workspace, "GEMINI", res, images, barcode_hint, intake_mode
+                )
+            except Exception as exc:
+                err_msg = _sanitize_error_message(str(exc))
+                gemini_quota_hit = _is_quota_error(err_msg)
+                if gemini_quota_hit:
+                    _mark_gemini_cooldown(workspace)
+                logger.warning("Gemini vision failed, checking fallback providers: %s", err_msg)
+                provider_errors.append(f"Gemini: {err_msg}")
 
     if groq_key:
-        try:
-            res = _call_openai_compat_chat(
-                GROQ_CHAT_URL, groq_key, GROQ_VISION_MODEL, prompt, images=vision_images
-            )
-            return _record_vision_success(
-                workspace, "GROQ", res, images, barcode_hint, intake_mode
-            )
-        except Exception as exc:
-            err_msg = _sanitize_error_message(str(exc))
-            logger.warning("Groq vision failed, checking next fallback: %s", err_msg)
-            provider_errors.append(f"Groq: {err_msg}")
+        remaining = deadline - time.monotonic()
+        if remaining >= 5.0:
+            try:
+                res = _call_openai_compat_chat(
+                    GROQ_CHAT_URL,
+                    groq_key,
+                    GROQ_VISION_MODEL,
+                    prompt,
+                    images=vision_images,
+                    timeout=min(25.0, remaining),
+                )
+                return _record_vision_success(
+                    workspace, "GROQ", res, images, barcode_hint, intake_mode
+                )
+            except Exception as exc:
+                err_msg = _sanitize_error_message(str(exc))
+                logger.warning("Groq vision failed, checking next fallback: %s", err_msg)
+                provider_errors.append(f"Groq: {err_msg}")
 
     if openrouter_key:
-        try:
-            res = _call_openai_compat_chat(
-                OPENROUTER_CHAT_URL,
-                openrouter_key,
-                OPENROUTER_VISION_MODEL,
-                prompt,
-                images=vision_images,
-                extra_headers={"HTTP-Referer": "https://stackerstash.com", "X-Title": "Stackers Stash"},
-            )
-            return _record_vision_success(
-                workspace, "OPENROUTER", res, images, barcode_hint, intake_mode
-            )
-        except Exception as exc:
-            err_msg = _sanitize_error_message(str(exc))
-            logger.warning("OpenRouter vision failed, checking Ollama fallback: %s", err_msg)
-            provider_errors.append(f"OpenRouter: {err_msg}")
+        remaining = deadline - time.monotonic()
+        if remaining >= 5.0:
+            try:
+                res = _call_openai_compat_chat(
+                    OPENROUTER_CHAT_URL,
+                    openrouter_key,
+                    OPENROUTER_VISION_MODEL,
+                    prompt,
+                    images=vision_images,
+                    extra_headers={"HTTP-Referer": "https://stackerstash.com", "X-Title": "Stackers Stash"},
+                    timeout=min(25.0, remaining),
+                )
+                return _record_vision_success(
+                    workspace, "OPENROUTER", res, images, barcode_hint, intake_mode
+                )
+            except Exception as exc:
+                err_msg = _sanitize_error_message(str(exc))
+                logger.warning("OpenRouter vision failed, checking Ollama fallback: %s", err_msg)
+                provider_errors.append(f"OpenRouter: {err_msg}")
 
     if ollama_url:
         remaining = deadline - time.monotonic()
@@ -690,12 +770,13 @@ def identify_images(
             provider_errors.append("Ollama: Skipped (request time budget exhausted)")
         else:
             try:
+                ollama_images = _prepare_images_for_vision(images, max_dimension=768)
                 res = _call_ollama_vision(
-                    vision_images,
+                    ollama_images,
                     ollama_url,
                     ollama_model,
                     prompt,
-                    timeout=min(45.0, remaining),
+                    timeout=min(25.0, remaining),
                 )
                 warn = (
                     "Gemini quota exceeded (429); identified basic details with Ollama and queued for full Gemini upgrade when quota returns."
@@ -718,7 +799,7 @@ def identify_images(
                 logger.warning("Ollama vision failed: %s", err_msg)
                 provider_errors.append(f"Ollama: {err_msg}")
 
-    if deadline - time.monotonic() >= 10.0:
+    if deadline - time.monotonic() >= 12.0:
         ocr_result = _attempt_ocr_fallback(
             workspace=workspace,
             images=images,
@@ -732,6 +813,8 @@ def identify_images(
             ollama_model=ollama_model,
             provider_errors=provider_errors,
             skip_ollama_text=ollama_failed or (deadline - time.monotonic() < 5.0),
+            skip_gemini=gemini_quota_hit or _is_gemini_in_cooldown(workspace),
+            deadline=deadline,
         )
         if ocr_result is not None:
             return ocr_result
@@ -884,7 +967,7 @@ def estimate_item_value_with_ai(
     if not gemini_key and not groq_key and not openrouter_key and not ollama_url:
         return None, {}
 
-    encoded_photos = _collect_item_photo_b64(item, limit=3)
+    encoded_photos = _collect_item_photo_b64(item, limit=2, max_dimension=768)
     photo_inspected = len(encoded_photos) > 0
     is_raw_gradeable = (
         item.grading_service == CollectionItem.GradingService.NONE
@@ -920,75 +1003,93 @@ def estimate_item_value_with_ai(
         f"Metal: {item.metal_type} {item.fine_troy_oz} fine ozt | Melt floor: ${item.melt_value_unit}\n"
     )
 
+    deadline = time.monotonic() + 40.0
     gemini_quota_hit = False
     if gemini_key:
-        parts: list[dict[str, Any]] = [{"text": prompt}]
-        for mime, b64 in encoded_photos:
-            parts.append({"inlineData": {"mimeType": mime, "data": b64}})
+        if _is_gemini_in_cooldown(workspace):
+            gemini_quota_hit = True
+        else:
+            parts: list[dict[str, Any]] = [{"text": prompt}]
+            for mime, b64 in encoded_photos:
+                parts.append({"inlineData": {"mimeType": mime, "data": b64}})
 
-        for model_name in GEMINI_VISION_MODELS:
-            url = (
-                "https://generativelanguage.googleapis.com/v1beta/models/"
-                f"{model_name}:generateContent?key={gemini_key}"
-            )
-            quota_exhausted = False
-            # Try grounded Google Search first, then fall back to standard JSON mode
-            for use_grounding in (True, False):
-                payload_body: dict[str, Any] = {
-                    "contents": [{"parts": parts}],
-                    "generationConfig": (
-                        {"temperature": 0.1, "thinkingConfig": {"thinkingBudget": 0}}
-                        if use_grounding
-                        else {
-                            "responseMimeType": "application/json",
-                            "temperature": 0.1,
-                            "thinkingConfig": {"thinkingBudget": 0},
-                        }
-                    ),
-                }
-                if use_grounding:
-                    payload_body["tools"] = [{"google_search": {}}]
-                try:
-                    with httpx.Client(timeout=30.0) as client:
-                        resp = client.post(url, json=payload_body)
-                        resp.raise_for_status()
-                        data = resp.json()
-                    text_out = _extract_gemini_text(data)
-                    parsed = _extract_json_block(text_out)
-                    grounded = _extract_gemini_grounded_sources(data) if use_grounding else []
-                    val, normalized = _normalize_ai_appraisal(
-                        parsed,
-                        photo_inspected,
-                        is_raw_gradeable=is_raw_gradeable,
-                        grounded_sources=grounded,
-                    )
-                    if val is not None:
-                        normalized["ai_provider"] = "GEMINI"
-                        normalized["gemini_quota_hit"] = False
-                        return val, normalized
-                except Exception as exc:
-                    logger.warning(
-                        "Gemini AI appraisal (model=%s, grounding=%s) failed: %s",
-                        model_name,
-                        use_grounding,
-                        _sanitize_error_message(str(exc)),
-                    )
-                    if _is_retryable_quota_error(exc):
-                        quota_exhausted = True
-                        gemini_quota_hit = True
+            for model_name in GEMINI_VISION_MODELS:
+                if deadline - time.monotonic() < 4.0:
+                    break
+                url = (
+                    "https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{model_name}:generateContent?key={gemini_key}"
+                )
+                quota_exhausted = False
+                # Ground only on primary flash model to conserve quota/tokens on lite fallback
+                grounding_modes = (True, False) if model_name == GEMINI_VISION_MODELS[0] else (False,)
+                for use_grounding in grounding_modes:
+                    remaining = deadline - time.monotonic()
+                    if remaining < 4.0:
                         break
-            if quota_exhausted:
-                continue
+                    payload_body: dict[str, Any] = {
+                        "contents": [{"parts": parts}],
+                        "generationConfig": (
+                            {"temperature": 0.1, "maxOutputTokens": 768, "thinkingConfig": {"thinkingBudget": 0}}
+                            if use_grounding
+                            else {
+                                "responseMimeType": "application/json",
+                                "temperature": 0.1,
+                                "maxOutputTokens": 768,
+                                "thinkingConfig": {"thinkingBudget": 0},
+                            }
+                        ),
+                    }
+                    if use_grounding:
+                        payload_body["tools"] = [{"google_search": {}}]
+                    try:
+                        with httpx.Client(timeout=min(25.0, remaining)) as client:
+                            resp = client.post(url, json=payload_body)
+                            resp.raise_for_status()
+                            data = resp.json()
+                        text_out = _extract_gemini_text(data)
+                        parsed = _extract_json_block(text_out)
+                        grounded = _extract_gemini_grounded_sources(data) if use_grounding else []
+                        val, normalized = _normalize_ai_appraisal(
+                            parsed,
+                            photo_inspected,
+                            is_raw_gradeable=is_raw_gradeable,
+                            grounded_sources=grounded,
+                        )
+                        if val is not None:
+                            normalized["ai_provider"] = "GEMINI"
+                            normalized["gemini_quota_hit"] = False
+                            return val, normalized
+                    except Exception as exc:
+                        logger.warning(
+                            "Gemini AI appraisal (model=%s, grounding=%s) failed: %s",
+                            model_name,
+                            use_grounding,
+                            _sanitize_error_message(str(exc)),
+                        )
+                        if _is_retryable_quota_error(exc):
+                            quota_exhausted = True
+                            gemini_quota_hit = True
+                            break
+                if quota_exhausted:
+                    continue
+            if gemini_quota_hit:
+                _mark_gemini_cooldown(workspace)
 
     raw_images_for_compat: list[tuple[bytes, str]] | None = (
         [(base64.b64decode(b64), mime) for mime, b64 in encoded_photos] if encoded_photos else None
     )
 
-    if groq_key:
+    if groq_key and deadline - time.monotonic() >= 4.0:
         try:
             model = GROQ_VISION_MODEL if raw_images_for_compat else GROQ_TEXT_MODEL
             res = _call_openai_compat_chat(
-                GROQ_CHAT_URL, groq_key, model, prompt, images=raw_images_for_compat, timeout=30.0
+                GROQ_CHAT_URL,
+                groq_key,
+                model,
+                prompt,
+                images=raw_images_for_compat,
+                timeout=min(25.0, deadline - time.monotonic()),
             )
             val, normalized = _normalize_ai_appraisal(
                 res["parsed"], photo_inspected, is_raw_gradeable=is_raw_gradeable
@@ -998,7 +1099,7 @@ def estimate_item_value_with_ai(
         except Exception as exc:
             logger.warning("Groq AI appraisal failed: %s", _sanitize_error_message(str(exc)))
 
-    if openrouter_key:
+    if openrouter_key and deadline - time.monotonic() >= 4.0:
         try:
             model = OPENROUTER_VISION_MODEL if raw_images_for_compat else OPENROUTER_TEXT_MODEL
             res = _call_openai_compat_chat(
@@ -1008,7 +1109,7 @@ def estimate_item_value_with_ai(
                 prompt,
                 images=raw_images_for_compat,
                 extra_headers={"HTTP-Referer": "https://stackerstash.com", "X-Title": "Stackers Stash"},
-                timeout=30.0,
+                timeout=min(25.0, deadline - time.monotonic()),
             )
             val, normalized = _normalize_ai_appraisal(
                 res["parsed"], photo_inspected, is_raw_gradeable=is_raw_gradeable
@@ -1018,20 +1119,17 @@ def estimate_item_value_with_ai(
         except Exception as exc:
             logger.warning("OpenRouter AI appraisal failed: %s", _sanitize_error_message(str(exc)))
 
-    if ollama_url:
+    if ollama_url and deadline - time.monotonic() >= 4.0:
         try:
             msg: dict[str, Any] = {"role": "user", "content": prompt}
             if encoded_photos:
                 msg["images"] = [b64 for _, b64 in encoded_photos]
-            with httpx.Client(timeout=45.0) as client:
-                resp = client.post(
-                    f"{ollama_url.rstrip('/')}/api/chat",
-                    json={"model": ollama_model, "messages": [msg], "stream": False},
-                )
-                resp.raise_for_status()
-                raw_body = resp.text
-            text, _ = _parse_ollama_response(raw_body)
-            parsed = _extract_json_block(text)
+            parsed, _ = _post_ollama_chat(
+                ollama_url,
+                ollama_model,
+                [msg],
+                timeout=min(25.0, deadline - time.monotonic()),
+            )
             val, normalized = _normalize_ai_appraisal(
                 parsed, photo_inspected, is_raw_gradeable=is_raw_gradeable
             )
@@ -1040,7 +1138,7 @@ def estimate_item_value_with_ai(
                 normalized["gemini_quota_hit"] = gemini_quota_hit
                 return val, normalized
         except Exception as exc:
-            logger.warning("Ollama AI appraisal failed: %s", exc)
+            logger.warning("Ollama AI appraisal failed: %s", _sanitize_error_message(str(exc)))
 
     return None, {"gemini_quota_hit": gemini_quota_hit} if gemini_quota_hit else {}
 

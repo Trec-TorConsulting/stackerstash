@@ -373,7 +373,9 @@ def _classify_with_local_ollama(
                     "model": model,
                     "prompt": prompt,
                     "stream": False,
+                    "think": False,
                     "format": "json",
+                    "options": {"temperature": 0.1, "num_predict": 64},
                 },
             )
             resp.raise_for_status()
