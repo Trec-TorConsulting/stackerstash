@@ -1,4 +1,4 @@
-const TOKEN_KEY = "stackvault_token";
+const TOKEN_KEY = "stackerstash_token";
 
 export function getAuthToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);

@@ -2,12 +2,12 @@
 
 ## Purpose
 
-Enables collectors to migrate existing inventories from CoinSnap, Numista, PCGS/NGC registries, and custom spreadsheets into StackVault with automatic preset detection, interactive column mapping, and value normalization.
+Enables collectors to migrate existing inventories from CoinSnap, Numista, PCGS/NGC registries, and custom spreadsheets into Stackers Stash with automatic preset detection, interactive column mapping, and value normalization.
 
 ## ADDED Requirements
 
 ### Requirement: CSV preview and platform preset detection
-The system SHALL provide a CSV preview endpoint that inspects uploaded CSV headers and sample rows, detects the best matching source platform preset (`coinsnap`, `numista`, `pcgs_ngc`, `stackvault`, or `custom`), and returns suggested column mappings and normalized preview rows.
+The system SHALL provide a CSV preview endpoint that inspects uploaded CSV headers and sample rows, detects the best matching source platform preset (`coinsnap`, `numista`, `pcgs_ngc`, `stackerstash`, or `custom`), and returns suggested column mappings and normalized preview rows.
 
 #### Scenario: CoinSnap CSV auto-detected
 - **WHEN** a user uploads a CSV with CoinSnap-style headers such as `Country`, `Year`, `Denomination`, `Composition`, `Grade`, and `Estimated Value`
@@ -29,13 +29,13 @@ The system SHALL allow users to import a CSV using either the auto-detected mapp
 - **THEN** the importer synthesizes a clean `title` (e.g., `"1921 United States Morgan Dollar"`) instead of rejecting the row
 
 ### Requirement: Value normalization for metals, grades, and currency
-The system SHALL normalize currency strings, metal/composition labels, weight units, and grading service names during mapped import so external exports map cleanly to StackVault enums and decimals.
+The system SHALL normalize currency strings, metal/composition labels, weight units, and grading service names during mapped import so external exports map cleanly to Stackers Stash enums and decimals.
 
 #### Scenario: Currency symbols and commas stripped
 - **WHEN** a CSV row contains `"$1,250.50"` in a mapped price or market value column
 - **THEN** the importer parses it as `Decimal("1250.50")`
 
-#### Scenario: Composition string mapped to StackVault metal type
+#### Scenario: Composition string mapped to Stackers Stash metal type
 - **WHEN** a CSV row contains `"90% Silver"` or `"Silver (.900)"` in a mapped `metal_type` / `composition` column
 - **THEN** the importer maps `metal_type` to `"SILVER"`
 

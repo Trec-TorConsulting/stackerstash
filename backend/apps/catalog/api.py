@@ -680,7 +680,7 @@ def export_items_csv(request):
             str(item.is_estimate),
         ])
     resp = HttpResponse(buf.getvalue(), content_type="text/csv")
-    resp["Content-Disposition"] = 'attachment; filename="stackvault-collection.csv"'
+    resp["Content-Disposition"] = 'attachment; filename="stackerstash-collection.csv"'
     return resp
 
 
@@ -693,7 +693,7 @@ def export_items_json(request):
     )
     payload = [_item_to_out(i).model_dump(mode="json") for i in items]
     resp = HttpResponse(json.dumps(payload, indent=2), content_type="application/json")
-    resp["Content-Disposition"] = 'attachment; filename="stackvault-collection.json"'
+    resp["Content-Disposition"] = 'attachment; filename="stackerstash-collection.json"'
     return resp
 
 

@@ -40,7 +40,7 @@ export function AuthPage({ onAuth }: AuthPageProps) {
             <ShieldCheck className="h-6 w-6" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-slate-100">StackVault</h1>
+            <h1 className="text-xl font-bold text-slate-100">Stacker Stash</h1>
             <p className="text-xs text-slate-400">
               Coins, Paper Currency, Slabs &amp; Bullion Tracker
             </p>

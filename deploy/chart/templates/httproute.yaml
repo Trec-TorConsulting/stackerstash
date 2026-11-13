@@ -2,7 +2,7 @@
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: stackvault-route
+  name: stackerstash-route
 spec:
   parentRefs:
     - name: {{ .Values.gateway.name }}
@@ -25,14 +25,14 @@ spec:
             type: PathPrefix
             value: /media
       backendRefs:
-        - name: stackvault-backend
+        - name: stackerstash-backend
           port: {{ .Values.backend.port }}
     - matches:
         - path:
             type: PathPrefix
             value: /
       backendRefs:
-        - name: stackvault-frontend
+        - name: stackerstash-frontend
           port: {{ .Values.frontend.port }}
 {{- end }}
 

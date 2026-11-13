@@ -110,7 +110,7 @@ def _normalize_header(header: str) -> str:
 
 
 def detect_preset_and_mapping(headers: list[str]) -> tuple[str, dict[str, str]]:
-    """Detect source platform preset and build header -> StackVault field mapping."""
+    """Detect source platform preset and build header -> Stacker Stash field mapping."""
     norm_to_orig: dict[str, str] = {}
     for h in headers:
         norm = _normalize_header(h)
@@ -123,7 +123,7 @@ def detect_preset_and_mapping(headers: list[str]) -> tuple[str, dict[str, str]]:
     if "title" in norm_set and (
         "metal_type" in norm_set or "market_value_unit" in norm_set or "weight_unit" in norm_set
     ):
-        preset = "stackvault"
+        preset = "stackerstash"
     elif ({"denomination", "composition"} & norm_set) and (
         {"estimated value", "value", "obverse image", "obverse url", "reverse image", "reverse url"} & norm_set
     ):

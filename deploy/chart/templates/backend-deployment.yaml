@@ -1,16 +1,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: stackvault-backend
+  name: stackerstash-backend
 spec:
   replicas: {{ .Values.backend.replicas }}
   selector:
     matchLabels:
-      app: stackvault-backend
+      app: stackerstash-backend
   template:
     metadata:
       labels:
-        app: stackvault-backend
+        app: stackerstash-backend
     spec:
       initContainers:
         - name: migrate
@@ -63,5 +63,5 @@ spec:
       volumes:
         - name: media
           persistentVolumeClaim:
-            claimName: stackvault-media
+            claimName: stackerstash-media
 

@@ -12,7 +12,7 @@ const PRESET_LABELS: Record<string, string> = {
   coinsnap: "CoinSnap Export",
   numista: "Numista Export",
   pcgs_ngc: "PCGS / NGC Registry",
-  stackvault: "StackVault Native",
+  stackerstash: "Stacker Stash Native",
   custom: "Custom Spreadsheet",
 };
 
@@ -129,7 +129,7 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
               Import / Migrate Collection
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Supports CoinSnap, Numista, PCGS/NGC Set Registry, StackVault, or custom CSV spreadsheets.
+              Supports CoinSnap, Numista, PCGS/NGC Set Registry, Stacker Stash, or custom CSV spreadsheets.
             </p>
           </div>
           <button

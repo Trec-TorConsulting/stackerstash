@@ -1,5 +1,10 @@
 schema: spec-driven
 
+context: |
+  App Name: Stackers Stash
+  Production Domain: stackerstash.com
+  Keep general project documentation and discoverable codebase facts out of this section.
+
 # Project context (optional)
 # Add only constraints that should guide OpenSpec artifacts and workflows.
 # Include constraints an agent cannot infer by reading the code.

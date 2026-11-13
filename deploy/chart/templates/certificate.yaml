@@ -2,7 +2,7 @@
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: stackvault-tls
+  name: stackerstash-tls
 spec:
   secretName: {{ .Values.tls.secretName }}
   issuerRef:

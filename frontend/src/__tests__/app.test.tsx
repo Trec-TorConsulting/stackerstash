@@ -18,7 +18,7 @@ describe("format helpers", () => {
 describe("AuthPage", () => {
   it("renders sign in and create vault tabs", () => {
     render(<AuthPage onAuth={vi.fn()} />);
-    expect(screen.getByText("StackVault")).toBeInTheDocument();
+    expect(screen.getByText("Stacker Stash")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Sign In" })).toHaveLength(2);
     expect(screen.getByRole("button", { name: "Create Vault" })).toBeInTheDocument();
   });

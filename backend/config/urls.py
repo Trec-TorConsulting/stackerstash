@@ -6,8 +6,8 @@ from django.urls import path
 from .api import api
 from .health import healthz, readyz
 
-admin.site.site_header = "StackVault Admin"
-admin.site.site_title = "StackVault Operator Portal"
+admin.site.site_header = "Stacker Stash Admin"
+admin.site.site_title = "Stacker Stash Operator Portal"
 
 urlpatterns = [
     path("admin/", admin.site.urls),

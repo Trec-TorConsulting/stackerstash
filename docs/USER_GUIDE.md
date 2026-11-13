@@ -1,6 +1,6 @@
-# StackVault User Guide & How-Tos
+# Stacker Stash User Guide & How-Tos
 
-Welcome to **StackVault** — your self-hosted or SaaS vault for tracking coins, paper currency, bullion bars, rounds, and graded slabs.
+Welcome to **Stacker Stash** — your self-hosted or SaaS vault for tracking coins, paper currency, bullion bars, rounds, and graded slabs.
 
 ---
 
@@ -17,7 +17,7 @@ Welcome to **StackVault** — your self-hosted or SaaS vault for tracking coins,
 ---
 
 ## 1. Quick Start: Creating Your Vault
-1. Open the StackVault web app (`http://localhost:5173` in local dev, or `http://localhost:8080` via Docker Compose).
+1. Open the Stacker Stash web app (`http://localhost:5173` in local dev, or `http://localhost:8080` via Docker Compose).
 2. Click **Create Vault**, enter your email, password (8+ characters), and a workspace/vault name (e.g., `"Personal Stack"`).
 3. You are automatically signed into your isolated workspace.
 
@@ -28,7 +28,7 @@ Welcome to **StackVault** — your self-hosted or SaaS vault for tracking coins,
 - **Automatic & Manual Refresh**:
   - The Dashboard automatically refreshes live spot prices when opened and every **5 minutes** while open.
   - Click the **refresh icon** next to the **Live Spot** header at any time to fetch fresh quotes immediately and recalculate melt values across all bullion items.
-- **Note on Copper (`HG`)**: COMEX copper futures are quoted in USD/lb; StackVault automatically converts them to USD/troy oz (`÷ 14.583333`) so 1 kg copper bars and 1 avdp oz copper rounds calculate accurate melt values.
+- **Note on Copper (`HG`)**: COMEX copper futures are quoted in USD/lb; Stacker Stash automatically converts them to USD/troy oz (`÷ 14.583333`) so 1 kg copper bars and 1 avdp oz copper rounds calculate accurate melt values.
 
 ---
 
@@ -42,20 +42,20 @@ Welcome to **StackVault** — your self-hosted or SaaS vault for tracking coins,
 ---
 
 ## 4. Migrating from CoinSnap, Numista, PCGS/NGC, or Spreadsheets
-StackVault includes an **Import / Migrate** wizard on the **Collection** page so you can bring existing collections over in seconds:
+Stacker Stash includes an **Import / Migrate** wizard on the **Collection** page so you can bring existing collections over in seconds:
 
 1. Export your collection as a **CSV** from your current platform:
    - **CoinSnap**: Use CoinSnap's *Export Collection (CSV via email)* feature.
    - **Numista**: Go to *My Coins -> Export -> CSV*.
    - **PCGS / NGC Set Registry**: Export inventory table to CSV.
    - **Excel / Google Sheets**: Save or download as `.csv`.
-2. In StackVault, open **Collection** and click **Import / Migrate CSV**.
+2. In Stacker Stash, open **Collection** and click **Import / Migrate CSV**.
 3. Select your `.csv` file:
-   - StackVault **auto-detects** the source format (`CoinSnap Export`, `Numista Export`, `PCGS / NGC Registry`, `StackVault Native`, or `Custom Spreadsheet`).
+   - Stacker Stash **auto-detects** the source format (`CoinSnap Export`, `Numista Export`, `PCGS / NGC Registry`, `Stacker Stash Native`, or `Custom Spreadsheet`).
    - Review or adjust any **Column Mapping** dropdowns (or set columns to `— Skip —`).
    - Check the **Sample Preview** table to verify synthesized titles, metals, grades, and values.
    - *(Optional)* If your CSV contains image URLs (such as CoinSnap's `Obverse Image` / `Reverse Image`), keep **Download and attach photos** checked to import them best-effort.
-4. Click **Import Items**. StackVault strips currency formatting (`$1,250.00`), normalizes metal/composition strings (`"90% Silver"` → `SILVER`, `"Copper-Nickel Clad"` → `NONE`), and synthesizes titles when a dedicated title column isn't present.
+4. Click **Import Items**. Stacker Stash strips currency formatting (`$1,250.00`), normalizes metal/composition strings (`"90% Silver"` → `SILVER`, `"Copper-Nickel Clad"` → `NONE`), and synthesizes titles when a dedicated title column isn't present.
 
 ---
 
@@ -94,3 +94,4 @@ There is no default admin password. To create an operator superuser:
 cd backend
 .venv/bin/python manage.py createsuperuser
 ```
+

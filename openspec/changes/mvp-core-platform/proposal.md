@@ -1,8 +1,8 @@
-# Proposal: Stackers & Collectors Core Platform (MVP)
+# Proposal: Stackers Stash Core Platform (MVP)
 
 ## Why
 
-Serious precious-metals stackers and numismatic collectors own diverse holdings—tubes of coins, 1kg copper bars, Geiger silver slabs, graded PCGS/NGC/PMG slabs, raw paper currency, coin flips, and rounds—that existing single-category apps like CoinSnap cannot identify, value, or organize together. We need a unified, privacy-respecting, multi-tenant SaaS web app (mobile-first PWA) that identifies any collectible or bullion piece from a photo, computes live melt and collector values, tracks containers and cost basis, and runs production-grade on our K3s cluster.
+Serious precious-metals stackers and numismatic collectors own diverse holdings—tubes of coins, 1kg copper bars, Geiger silver slabs, graded PCGS/NGC/PMG slabs, raw paper currency, coin flips, and rounds—that existing single-category apps like CoinSnap cannot identify, value, or organize together. **Stackers Stash** (`stackerstash.com`) is a unified, privacy-respecting, multi-tenant SaaS web app (mobile-first PWA) that identifies any collectible or bullion piece from a photo, computes live melt and collector values, tracks containers and cost basis, and runs production-grade on our K3s cluster.
 
 ## What Changes
 

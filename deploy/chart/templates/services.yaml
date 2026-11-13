@@ -1,10 +1,10 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: stackvault-backend
+  name: stackerstash-backend
 spec:
   selector:
-    app: stackvault-backend
+    app: stackerstash-backend
   ports:
     - port: {{ .Values.backend.port }}
       targetPort: {{ .Values.backend.port }}
@@ -12,10 +12,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: stackvault-frontend
+  name: stackerstash-frontend
 spec:
   selector:
-    app: stackvault-frontend
+    app: stackerstash-frontend
   ports:
     - port: {{ .Values.frontend.port }}
       targetPort: {{ .Values.frontend.port }}

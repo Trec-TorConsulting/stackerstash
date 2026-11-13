@@ -6,7 +6,7 @@ from apps.valuation.api import analytics_router, valuation_router
 from apps.vision.api import vision_router
 
 api = NinjaAPI(
-    title="StackVault API",
+    title="Stacker Stash API",
     version="1.0.0",
     description="Enterprise-grade multi-tenant API for coins, paper currency, and bullion collection tracking.",
     docs_url="/docs",

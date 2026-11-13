@@ -1,16 +1,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: stackvault-worker
+  name: stackerstash-worker
 spec:
   replicas: {{ .Values.worker.replicas }}
   selector:
     matchLabels:
-      app: stackvault-worker
+      app: stackerstash-worker
   template:
     metadata:
       labels:
-        app: stackvault-worker
+        app: stackerstash-worker
     spec:
       containers:
         - name: worker
@@ -36,5 +36,5 @@ spec:
       volumes:
         - name: media
           persistentVolumeClaim:
-            claimName: stackvault-media
+            claimName: stackerstash-media
 

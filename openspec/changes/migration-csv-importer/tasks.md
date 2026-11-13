@@ -2,7 +2,7 @@
 
 ## 1. Backend Migration Importer Service & Normalization
 
-- [x] 1.1 Create `backend/apps/catalog/importer.py` with platform preset detection (`coinsnap`, `numista`, `pcgs_ngc`, `stackvault`, `custom`), alias-based column mapping, currency/metal/grade normalization, title synthesis, and unit tests in `backend/tests/test_importer.py` verifying all presets and normalizations pass `pytest`.
+- [x] 1.1 Create `backend/apps/catalog/importer.py` with platform preset detection (`coinsnap`, `numista`, `pcgs_ngc`, `stackerstash`, `custom`), alias-based column mapping, currency/metal/grade normalization, title synthesis, and unit tests in `backend/tests/test_importer.py` verifying all presets and normalizations pass `pytest`.
 - [x] 1.2 Add optional best-effort remote photo attachment (`obverse_image_url`, `reverse_image_url`, `image_url`) in `importer.py` with a 4s timeout, 5 MB cap, and non-fatal warning handling, and verify with mocked `respx` tests in `backend/tests/test_importer.py`.
 
 ## 2. Backend Preview & Mapped Import Endpoints

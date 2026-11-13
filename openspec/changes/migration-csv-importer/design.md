@@ -2,14 +2,14 @@
 
 ## Context
 
-StackVault currently has a single native CSV importer at `POST /api/v1/catalog/items/import/csv` ([backend/apps/catalog/api.py](file:///Users/trecto282@cable.comcast.com/Projects/Personal/Stackers-coins-paper-collection-tracking/backend/apps/catalog/api.py)) that requires exact StackVault field names (`title`, `metal_type`, `weight_unit`, etc.). See [proposal.md](file:///Users/trecto282@cable.comcast.com/Projects/Personal/Stackers-coins-paper-collection-tracking/openspec/changes/migration-csv-importer/proposal.md) for motivation.
+Stackers Stash currently has a single native CSV importer at `POST /api/v1/catalog/items/import/csv` ([backend/apps/catalog/api.py](file:///Users/trecto282@cable.comcast.com/Projects/Personal/Stackers-coins-paper-collection-tracking/backend/apps/catalog/api.py)) that requires exact native field names (`title`, `metal_type`, `weight_unit`, etc.). See [proposal.md](file:///Users/trecto282@cable.comcast.com/Projects/Personal/Stackers-coins-paper-collection-tracking/openspec/changes/migration-csv-importer/proposal.md) for motivation.
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Keep existing `POST /api/v1/catalog/items/import/csv` 100% backward compatible for StackVault native exports.
+- Keep existing `POST /api/v1/catalog/items/import/csv` 100% backward compatible for Stackers Stash native exports.
 - Provide a clean two-step preview -> confirm flow (`POST /api/v1/catalog/items/import/preview` and `POST /api/v1/catalog/items/import/mapped`) backed by a dedicated `apps/catalog/importer.py` module.
-- Support auto-detection for `coinsnap`, `numista`, `pcgs_ngc`, and `stackvault` CSV exports, plus fuzzy header matching for arbitrary spreadsheets.
+- Support auto-detection for `coinsnap`, `numista`, `pcgs_ngc`, and `stackerstash` CSV exports, plus fuzzy header matching for arbitrary spreadsheets.
 - Provide a self-contained `ImportWizardModal` component on `CollectionPage.tsx` with preset badge, column mapping overrides, and row preview.
 
 **Non-Goals:**

@@ -1,4 +1,4 @@
-hostname: stackvault.example.com
+hostname: stackerstash.com
 
 gateway:
   enabled: true
@@ -9,10 +9,10 @@ gateway:
 tls:
   enabled: true
   issuerName: letsencrypt-prod
-  secretName: stackvault-tls
+  secretName: stackerstash-tls
 
 backend:
-  image: registry.homelab.local/stackvault-backend:0.1.0
+  image: registry.homelab.local/stackerstash-backend:0.1.0
   replicas: 2
   port: 8000
   resources:
@@ -34,7 +34,7 @@ worker:
       memory: 512Mi
 
 frontend:
-  image: registry.homelab.local/stackvault-frontend:0.1.0
+  image: registry.homelab.local/stackerstash-frontend:0.1.0
   replicas: 2
   port: 80
   resources:
@@ -52,7 +52,7 @@ media:
 
 env:
   DJANGO_DEBUG: "false"
-  DATABASE_URL: "postgresql://stackvault:changeme@postgresql.postgresql.svc.cluster.local:5432/stackvault"
+  DATABASE_URL: "postgresql://stackerstash:changeme@postgresql.postgresql.svc.cluster.local:5432/stackerstash"
   REDIS_URL: "redis://redis.redis.svc.cluster.local:6379/0"
-  SECRET_NAME: "stackvault-secrets"
+  SECRET_NAME: "stackerstash-secrets"
 

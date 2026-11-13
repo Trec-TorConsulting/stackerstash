@@ -34,7 +34,7 @@ export function Layout({ user, onLogout }: LayoutProps) {
               <ShieldCheck className="h-5 w-5" />
             </div>
             <div>
-              <div className="font-bold tracking-tight text-slate-100">StackVault</div>
+              <div className="font-bold tracking-tight text-slate-100">Stacker Stash</div>
               <div className="text-xs text-slate-400 truncate max-w-[150px]">
                 {user.workspace.name}
               </div>
@@ -79,7 +79,7 @@ export function Layout({ user, onLogout }: LayoutProps) {
       <header className="no-print md:hidden flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30">
         <div className="flex items-center gap-2">
           <ShieldCheck className="h-5 w-5 text-amber-400" />
-          <span className="font-bold tracking-tight">StackVault</span>
+          <span className="font-bold tracking-tight">Stacker Stash</span>
         </div>
         <button
           onClick={onLogout}

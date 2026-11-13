@@ -21,3 +21,4 @@ New collectors and self-hosters need clear onboarding documentation, migration i
 
 - `README.md`
 - `docs/USER_GUIDE.md`
+

@@ -1,16 +1,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: stackvault-beat
+  name: stackerstash-beat
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: stackvault-beat
+      app: stackerstash-beat
   template:
     metadata:
       labels:
-        app: stackvault-beat
+        app: stackerstash-beat
     spec:
       containers:
         - name: beat

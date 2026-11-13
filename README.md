@@ -1,8 +1,8 @@
-# StackVault — Coins, Paper Currency & Bullion Collection Tracker
+# Stacker Stash — Coins, Paper Currency & Bullion Collection Tracker
 
 An enterprise-grade, multi-tenant SaaS & self-hosted PWA for collectors and precious-metals stackers. Catalog coins, paper banknotes, 1 kg copper bars, Geiger silver slabs, rounds, coin flips, and PCGS/NGC/PMG graded slabs in one unified vault.
 
-> **New to StackVault?** Read the [User Guide & Migration How-Tos](docs/USER_GUIDE.md) for step-by-step instructions on scanning items, configuring BYOK keys, and migrating from CoinSnap, Numista, or PCGS/NGC.
+> **New to Stacker Stash?** Read the [User Guide & Migration How-Tos](docs/USER_GUIDE.md) for step-by-step instructions on scanning items, configuring BYOK keys, and migrating from CoinSnap, Numista, or PCGS/NGC.
 
 ---
 
@@ -15,7 +15,7 @@ An enterprise-grade, multi-tenant SaaS & self-hosted PWA for collectors and prec
   - Auto-refreshes on the Dashboard (with a one-click inline refresh icon) and via Celery Beat every 5 minutes.
   - Supports troy ounces (`ozt`), grams (`g`), kilograms (`kg`), and avoirdupois ounces (`oz`).
 - **Multi-Platform CSV Migration Wizard**:
-  - Auto-detects exports from **CoinSnap**, **Numista**, **PCGS/NGC Set Registry**, **StackVault**, or custom spreadsheets.
+  - Auto-detects exports from **CoinSnap**, **Numista**, **PCGS/NGC Set Registry**, **Stacker Stash**, or custom spreadsheets.
   - Interactive column mapper with live sample preview, currency/metal/grade normalization, title synthesis, and optional best-effort photo URL importing.
 - **Vision AI & Valuation Waterfall (BYOK)**:
   - **Vision AI**: Workspace Bring-Your-Own-Key **Gemini Vision** primary with automatic fallback to self-hosted **Ollama** vision models, plus manual entry.
@@ -78,7 +78,7 @@ npm test
 
 # Helm chart validation
 helm lint deploy/chart
-helm template stackvault deploy/chart > /dev/null
+helm template stackerstash deploy/chart > /dev/null
 ```
 
 ---

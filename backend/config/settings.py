@@ -1,4 +1,4 @@
-"""Django settings for StackVault."""
+"""Django settings for Stacker Stash."""
 
 from __future__ import annotations
 

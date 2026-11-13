@@ -17,6 +17,6 @@ The system SHALL provide multi-stage Dockerfiles for the backend API/worker and 
 The system SHALL provide a Helm chart configuring the web deployment, Celery worker, Celery beat (for periodic spot price refresh), persistent media PVC (Longhorn), and Gateway API `HTTPRoute` + `Certificate` templates.
 
 #### Scenario: Render Helm manifests with custom domain
-- **WHEN** an operator runs `helm template` with a target hostname and PostgreSQL/Redis connection values
+- **WHEN** an operator runs `helm template` with a target hostname (e.g., `stackerstash.com`) and PostgreSQL/Redis connection values
 - **THEN** Helm renders valid Kubernetes manifests including Deployments, Services, PVC, and HTTPRoute without template errors
 

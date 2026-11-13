@@ -1,7 +1,7 @@
 [project]
-name = "stackvault-backend"
+name = "stackerstash-backend"
 version = "0.1.0"
-description = "Enterprise-grade multi-tenant backend for StackVault (coins, paper currency, and bullion collection tracking)"
+description = "Enterprise-grade multi-tenant backend for Stacker Stash (coins, paper currency, and bullion collection tracking)"
 requires-python = ">=3.12"
 dependencies = [
     "django>=5.1,<6.0",

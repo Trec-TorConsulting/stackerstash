@@ -2,13 +2,13 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: stackvault
-      POSTGRES_USER: stackvault
-      POSTGRES_PASSWORD: stackvault
+      POSTGRES_DB: stackerstash
+      POSTGRES_USER: stackerstash
+      POSTGRES_PASSWORD: stackerstash
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U stackvault"]
+      test: ["CMD-SHELL", "pg_isready -U stackerstash"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -30,7 +30,7 @@ services:
     environment:
       DJANGO_DEBUG: "true"
       DJANGO_SECRET_KEY: "local-compose-secret"
-      DATABASE_URL: "postgresql://stackvault:stackvault@postgres:5432/stackvault"
+      DATABASE_URL: "postgresql://stackerstash:stackerstash@postgres:5432/stackerstash"
       REDIS_URL: "redis://redis:6379/0"
     ports:
       - "8000:8000"
@@ -48,7 +48,7 @@ services:
     environment:
       DJANGO_DEBUG: "true"
       DJANGO_SECRET_KEY: "local-compose-secret"
-      DATABASE_URL: "postgresql://stackvault:stackvault@postgres:5432/stackvault"
+      DATABASE_URL: "postgresql://stackerstash:stackerstash@postgres:5432/stackerstash"
       REDIS_URL: "redis://redis:6379/0"
     volumes:
       - mediadata:/app/media
@@ -61,7 +61,7 @@ services:
     environment:
       DJANGO_DEBUG: "true"
       DJANGO_SECRET_KEY: "local-compose-secret"
-      DATABASE_URL: "postgresql://stackvault:stackvault@postgres:5432/stackvault"
+      DATABASE_URL: "postgresql://stackerstash:stackerstash@postgres:5432/stackerstash"
       REDIS_URL: "redis://redis:6379/0"
     depends_on:
       - backend
