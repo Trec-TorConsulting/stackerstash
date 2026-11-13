@@ -33,3 +33,7 @@ The system SHALL detect and parse grading slab barcodes, QR codes, and printed c
 #### Scenario: Scan or extract PCGS/NGC cert number
 - **WHEN** an image contains a readable slab barcode, QR code, or cert label
 - **THEN** the system extracts the exact grading service and certification number and surfaces a verification link
+
+#### Scenario: Bounded identification deadline and OCR fallback guard
+- **WHEN** upstream vision providers fail or cascade near the request budget
+- **THEN** `identify_images` enforces a `48.0s` total deadline (safely below Gunicorn's `60s` production worker timeout), preprocesses local `RapidOCR` inputs at `800px` max dimension, and skips `RapidOCR` when fewer than `10.0s` remain—returning a structured `MANUAL_FALLBACK` response instead of a worker-timeout `500`

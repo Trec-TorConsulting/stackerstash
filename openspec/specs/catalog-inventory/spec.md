@@ -34,6 +34,10 @@ The system SHALL allow each item to store multiple labeled photos (e.g., Obverse
 - **WHEN** a user attaches an obverse photo and a reverse photo to an item and marks obverse as primary
 - **THEN** the gallery view renders the obverse thumbnail and the item detail view displays all attached photos in order
 
+#### Scenario: Shape-aware background removal and tight cropping for bars and notes
+- **WHEN** background removal runs on a `BAR`, `PAPER`, or banknote slab (`PMG`/`PCGS_BANKNOTE`) photo—including over a dark or textured mat—or when the user triggers **Clean Background**
+- **THEN** the system uses LAB border-saliency GrabCut seeding, detects the tight oriented rectangle, and applies an anti-aliased rounded-rectangle alpha cutout (`0.075` corner ratio for bars, `0.015` for notes) before cropping tightly
+
 ### Requirement: Sorting, filtering, and search
 The system SHALL allow users to sort and filter their collection by category, metal type, container, grading service, item status, tags, purchase date, current value, melt value, and gain/loss, plus full-text search.
 
