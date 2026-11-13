@@ -515,7 +515,10 @@ def detect_rectangular_subject(
                     cv2.drawContours(filled, [largest], -1, 255, thickness=cv2.FILLED)
                     cand_area = int((filled > 0).sum())
                     cand_extent = _contour_extent(filled)
-                    if cand_area >= fg_area * 0.15 and cand_extent > extent:
+                    area_ratio = cand_area / max(1, fg_area)
+                    if 0.15 <= area_ratio <= 0.88 and (
+                        cand_extent > extent or (otsu_t >= 55.0 and cand_extent >= 0.50)
+                    ):
                         fg_mask = filled
 
     rect = _fit_tight_rect_from_mask(fg_mask)
