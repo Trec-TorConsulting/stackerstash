@@ -453,6 +453,83 @@ def test_parse_ollama_response_handles_json_ndjson_empty_and_non_json():
     with pytest.raises(ValueError, match="non-JSON response"):
         _parse_ollama_response("<html>502 Bad Gateway</html>")
 
+    thinking_text, _ = _parse_ollama_response(
+        '{"message": {"content": "", "thinking": "{\\"title\\": \\"Peace Dollar\\"}"}}'
+    )
+    assert "Peace Dollar" in thinking_text
+
+
+@pytest.mark.django_db
+@respx.mock
+def test_identify_images_429_falls_back_to_ollama_and_marks_quota_deferred(user_a):
+    from apps.accounts.crypto import encrypt_secret
+    from apps.accounts.models import ProviderCredential
+    from apps.vision.services import identify_images
+
+    _, workspace, _ = user_a
+
+    ProviderCredential.objects.create(
+        workspace=workspace,
+        provider=ProviderCredential.Provider.GEMINI,
+        encrypted_value=encrypt_secret("gem-key"),
+    )
+    ProviderCredential.objects.create(
+        workspace=workspace,
+        provider=ProviderCredential.Provider.OLLAMA_URL,
+        encrypted_value=encrypt_secret("http://ollama.local:11434"),
+    )
+
+    respx.post(url__startswith="https://generativelanguage.googleapis.com/").mock(
+        return_value=httpx.Response(429, json={"error": {"code": 429, "message": "Quota exceeded"}})
+    )
+    ollama_route = respx.post("http://ollama.local:11434/api/chat").mock(
+        return_value=httpx.Response(
+            200,
+            json={"message": {"content": '{"category": "COIN", "title": "1921 Morgan Dollar"}'}},
+        )
+    )
+
+    res = identify_images([(b"fake-img", "image/jpeg")], workspace)
+    assert res["provider_used"] == "OLLAMA"
+    assert res["quota_deferred"] is True
+    assert res["candidate"]["title"] == "1921 Morgan Dollar"
+    sent_payload = json.loads(ollama_route.calls.last.request.content)
+    assert "format" not in sent_payload
+
+
+@pytest.mark.django_db
+def test_process_deferred_ai_enrichment_task_upgrades_pending_item(user_a, monkeypatch):
+    from apps.accounts.crypto import encrypt_secret
+    from apps.accounts.models import ProviderCredential
+    from apps.catalog.models import CollectionItem
+    from apps.valuation.tasks import process_deferred_ai_enrichment_task
+
+    _, workspace, _ = user_a
+
+    ProviderCredential.objects.create(
+        workspace=workspace,
+        provider=ProviderCredential.Provider.GEMINI,
+        encrypted_value=encrypt_secret("gem-key"),
+    )
+    item = CollectionItem.objects.create(
+        workspace=workspace,
+        title="1921 Morgan Dollar",
+        category=CollectionItem.Category.COIN,
+        ai_enrichment_pending=True,
+    )
+
+    def fake_appraise(target_item, _ws):
+        target_item.ai_enrichment_pending = False
+        target_item.ai_enrichment_last_error = ""
+        target_item.save(update_fields=["ai_enrichment_pending", "ai_enrichment_last_error"])
+        return target_item
+
+    monkeypatch.setattr("apps.valuation.tasks.appraise_item", fake_appraise)
+    summary = process_deferred_ai_enrichment_task(batch_size=5)
+    item.refresh_from_db()
+    assert summary == {"checked": 1, "upgraded": 1, "deferred": 0}
+    assert item.ai_enrichment_pending is False
+
 
 
 

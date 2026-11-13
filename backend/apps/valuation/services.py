@@ -483,6 +483,15 @@ def appraise_item(
             prov["title"] = "AI" if ai_title else "AUTO"
             item.specs_provenance = prov
 
+    if ai_raw.get("ai_provider") == "GEMINI":
+        item.ai_enrichment_pending = False
+        item.ai_enrichment_last_error = ""
+    elif ai_raw.get("gemini_quota_hit"):
+        item.ai_enrichment_pending = True
+        if not item.ai_enqueued_at:
+            item.ai_enqueued_at = timezone.now()
+        item.ai_enrichment_last_error = "Gemini quota exceeded (429); queued for deferred upgrade."
+
     if final_val is not None and final_source is not None:
         item.market_value_unit = final_val
         item.market_value_low = low_val
@@ -514,6 +523,15 @@ def appraise_item(
                 "title_updated": title_change,
                 "errors": errors,
             },
+        )
+    elif ai_raw.get("gemini_quota_hit") or ai_raw.get("ai_provider") == "GEMINI":
+        item.save(
+            update_fields=[
+                "ai_enrichment_pending",
+                "ai_enqueued_at",
+                "ai_enrichment_last_error",
+                "updated_at",
+            ]
         )
 
     return item

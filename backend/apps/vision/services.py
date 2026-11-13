@@ -326,6 +326,12 @@ def _call_openai_compat_chat(
     return {"parsed": _extract_json_block(str(text)), "raw": data}
 
 
+def _is_quota_error(msg: str) -> bool:
+    """Return True when an upstream provider error indicates HTTP 429 or quota exhaustion."""
+    lower = (msg or "").lower()
+    return "429" in lower or "quota" in lower or "rate limit" in lower or "too many requests" in lower
+
+
 def _parse_ollama_response(raw_body: str) -> tuple[str, Any]:
     """Parse an Ollama /api/chat response from either JSON or NDJSON chunks."""
     stripped = (raw_body or "").strip()
@@ -335,7 +341,8 @@ def _parse_ollama_response(raw_body: str) -> tuple[str, Any]:
     try:
         data = json.loads(stripped)
         if isinstance(data, dict):
-            text = (data.get("message") or {}).get("content") or data.get("response") or ""
+            msg = data.get("message") or {}
+            text = msg.get("content") or data.get("response") or msg.get("thinking") or ""
             if not str(text).strip():
                 raise ValueError("Ollama returned empty completion text")
             return str(text), data
@@ -344,6 +351,7 @@ def _parse_ollama_response(raw_body: str) -> tuple[str, Any]:
 
     chunks: list[dict[str, Any]] = []
     parts: list[str] = []
+    thinking_parts: list[str] = []
     for line in stripped.splitlines():
         line = line.strip()
         if not line:
@@ -355,12 +363,15 @@ def _parse_ollama_response(raw_body: str) -> tuple[str, Any]:
             break
         if isinstance(obj, dict):
             chunks.append(obj)
-            chunk_text = (obj.get("message") or {}).get("content") or obj.get("response") or ""
+            msg = obj.get("message") or {}
+            chunk_text = msg.get("content") or obj.get("response") or ""
             if chunk_text:
                 parts.append(str(chunk_text))
+            elif msg.get("thinking"):
+                thinking_parts.append(str(msg["thinking"]))
 
     if chunks:
-        joined = "".join(parts)
+        joined = "".join(parts) or "".join(thinking_parts)
         if not joined.strip():
             raise ValueError("Ollama returned empty completion text")
         return joined, {"chunks": chunks}
@@ -373,7 +384,7 @@ def _call_ollama_vision(
     ollama_url: str,
     model_name: str,
     prompt: str,
-    timeout: float = 25.0,
+    timeout: float = 45.0,
 ) -> dict[str, Any]:
     endpoint = f"{ollama_url.rstrip('/')}/api/chat"
     message: dict[str, Any] = {"role": "user", "content": prompt}
@@ -382,7 +393,6 @@ def _call_ollama_vision(
     payload = {
         "model": model_name or "llama3.2-vision",
         "stream": False,
-        "format": "json",
         "messages": [message],
     }
     with httpx.Client(timeout=timeout) as client:
@@ -567,6 +577,7 @@ def _attempt_ocr_fallback(
         "provider_errors": provider_errors,
         "verification_status": verification_status,
         "verification_warnings": verification_warnings,
+        "quota_deferred": any(_is_quota_error(e) for e in provider_errors),
     }
 
 
@@ -578,6 +589,7 @@ def _record_vision_success(
     barcode_hint: str | None,
     intake_mode: str,
     warning: str | None = None,
+    quota_deferred: bool = False,
 ) -> dict[str, Any]:
     candidate = _normalize_candidate(res["parsed"], barcode_hint)
     job = IdentificationJob.objects.create(
@@ -597,6 +609,7 @@ def _record_vision_success(
         "warning": warning,
         "verification_status": verification_status,
         "verification_warnings": verification_warnings,
+        "quota_deferred": quota_deferred,
     }
 
 
@@ -621,8 +634,9 @@ def identify_images(
 
     vision_images = _prepare_images_for_vision(images)
     provider_errors: list[str] = []
-    deadline = time.monotonic() + 75.0
+    deadline = time.monotonic() + 90.0
     ollama_failed = False
+    gemini_quota_hit = False
 
     if gemini_key:
         try:
@@ -632,6 +646,7 @@ def identify_images(
             )
         except Exception as exc:
             err_msg = _sanitize_error_message(str(exc))
+            gemini_quota_hit = _is_quota_error(err_msg)
             logger.warning("Gemini vision failed, checking fallback providers: %s", err_msg)
             provider_errors.append(f"Gemini: {err_msg}")
 
@@ -679,10 +694,22 @@ def identify_images(
                     ollama_url,
                     ollama_model,
                     prompt,
-                    timeout=min(25.0, remaining),
+                    timeout=min(45.0, remaining),
+                )
+                warn = (
+                    "Gemini quota exceeded (429); identified basic details with Ollama and queued for full Gemini upgrade when quota returns."
+                    if gemini_quota_hit
+                    else None
                 )
                 return _record_vision_success(
-                    workspace, "OLLAMA", res, images, barcode_hint, intake_mode
+                    workspace,
+                    "OLLAMA",
+                    res,
+                    images,
+                    barcode_hint,
+                    intake_mode,
+                    warning=warn,
+                    quota_deferred=gemini_quota_hit,
                 )
             except Exception as exc:
                 ollama_failed = True
@@ -732,6 +759,7 @@ def identify_images(
         "provider_errors": provider_errors,
         "verification_status": verification_status,
         "verification_warnings": verification_warnings,
+        "quota_deferred": gemini_quota_hit,
     }
 
 
@@ -888,6 +916,7 @@ def estimate_item_value_with_ai(
         f"Metal: {item.metal_type} {item.fine_troy_oz} fine ozt | Melt floor: ${item.melt_value_unit}\n"
     )
 
+    gemini_quota_hit = False
     if gemini_key:
         parts: list[dict[str, Any]] = [{"text": prompt}]
         for mime, b64 in encoded_photos:
@@ -930,6 +959,8 @@ def estimate_item_value_with_ai(
                         grounded_sources=grounded,
                     )
                     if val is not None:
+                        normalized["ai_provider"] = "GEMINI"
+                        normalized["gemini_quota_hit"] = False
                         return val, normalized
                 except Exception as exc:
                     logger.warning(
@@ -940,6 +971,7 @@ def estimate_item_value_with_ai(
                     )
                     if _is_retryable_quota_error(exc):
                         quota_exhausted = True
+                        gemini_quota_hit = True
                         break
             if quota_exhausted:
                 continue
@@ -987,21 +1019,24 @@ def estimate_item_value_with_ai(
             msg: dict[str, Any] = {"role": "user", "content": prompt}
             if encoded_photos:
                 msg["images"] = [b64 for _, b64 in encoded_photos]
-            with httpx.Client(timeout=30.0) as client:
+            with httpx.Client(timeout=45.0) as client:
                 resp = client.post(
                     f"{ollama_url.rstrip('/')}/api/chat",
-                    json={"model": ollama_model, "messages": [msg], "stream": False, "format": "json"},
+                    json={"model": ollama_model, "messages": [msg], "stream": False},
                 )
                 resp.raise_for_status()
-                data = resp.json()
-            parsed = _extract_json_block(data["message"]["content"])
+                raw_body = resp.text
+            text, _ = _parse_ollama_response(raw_body)
+            parsed = _extract_json_block(text)
             val, normalized = _normalize_ai_appraisal(
                 parsed, photo_inspected, is_raw_gradeable=is_raw_gradeable
             )
             if val is not None:
+                normalized["ai_provider"] = "OLLAMA"
+                normalized["gemini_quota_hit"] = gemini_quota_hit
                 return val, normalized
         except Exception as exc:
             logger.warning("Ollama AI appraisal failed: %s", exc)
 
-    return None, {}
+    return None, {"gemini_quota_hit": gemini_quota_hit} if gemini_quota_hit else {}
 

@@ -206,6 +206,10 @@ class CollectionItem(models.Model):
         max_digits=10, decimal_places=2, null=True, blank=True
     )
     ai_confidence = models.FloatField(null=True, blank=True)
+    ai_enrichment_pending = models.BooleanField(default=False, db_index=True)
+    ai_enrichment_attempts = models.PositiveSmallIntegerField(default=0)
+    ai_enrichment_last_error = models.TextField(blank=True, default="")
+    ai_enqueued_at = models.DateTimeField(null=True, blank=True)
     serial_number = models.CharField(max_length=64, blank=True, default="", db_index=True)
 
     # Cost Basis & Disposition

@@ -181,6 +181,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.valuation.tasks.refresh_spot_prices_task",
         "schedule": 300.0,
     },
+    "process-deferred-ai-enrichment-every-15-minutes": {
+        "task": "apps.valuation.tasks.process_deferred_ai_enrichment_task",
+        "schedule": 900.0,
+    },
 }
 
 LOGGING = {

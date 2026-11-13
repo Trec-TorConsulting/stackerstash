@@ -87,6 +87,7 @@ class ItemIn(Schema):
     grade: str = ""
     estimated_grade: str = ""
     ai_confidence: float | None = None
+    ai_enrichment_pending: bool = False
     serial_number: str = ""
     purchase_price: Decimal | None = None
     purchase_date: date | None = None
@@ -138,6 +139,7 @@ class ItemPatch(Schema):
     estimated_grade_rationale: str | None = None
     grading_upside_usd: Decimal | None = None
     ai_confidence: float | None = None
+    ai_enrichment_pending: bool | None = None
     serial_number: str | None = None
     purchase_price: Decimal | None = None
     purchase_date: date | None = None
@@ -191,6 +193,7 @@ class ItemOut(Schema):
     estimated_grade_rationale: str
     grading_upside_usd: Decimal | None
     ai_confidence: float | None
+    ai_enrichment_pending: bool = False
     serial_number: str
     purchase_price: Decimal | None
     purchase_date: date | None
@@ -342,6 +345,7 @@ def _item_to_out(item: CollectionItem, appraisal_job_id: UUID | None = None) -> 
         estimated_grade_rationale=item.estimated_grade_rationale,
         grading_upside_usd=item.grading_upside_usd,
         ai_confidence=item.ai_confidence,
+        ai_enrichment_pending=item.ai_enrichment_pending,
         serial_number=item.serial_number,
         purchase_price=item.purchase_price,
         purchase_date=item.purchase_date,
@@ -625,6 +629,8 @@ def create_item(request, payload: ItemIn):
         grade=payload.grade.strip(),
         estimated_grade=payload.estimated_grade.strip(),
         ai_confidence=payload.ai_confidence,
+        ai_enrichment_pending=payload.ai_enrichment_pending,
+        ai_enqueued_at=timezone.now() if payload.ai_enrichment_pending else None,
         serial_number=payload.serial_number.strip(),
         purchase_price=payload.purchase_price,
         purchase_date=payload.purchase_date,

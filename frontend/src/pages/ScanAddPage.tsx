@@ -37,6 +37,7 @@ export function ScanAddPage() {
   const [barcodeHint, setBarcodeHint] = useState("");
   const [identifying, setIdentifying] = useState(false);
   const [aiNotice, setAiNotice] = useState<string | null>(null);
+  const [quotaDeferred, setQuotaDeferred] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -156,6 +157,7 @@ export function ScanAddPage() {
     if (!canIdentifyFiles(targetFiles, source)) return;
     setIdentifying(true);
     setAiNotice(null);
+    setQuotaDeferred(false);
     setError(null);
     try {
       const normalizedFiles = await Promise.all(
@@ -196,6 +198,7 @@ export function ScanAddPage() {
         is_estimate: Boolean(c.estimated_value_usd),
         notes: c.notes || f.notes,
       }));
+      setQuotaDeferred(Boolean(res.quota_deferred));
       setAiNotice(
         res.warning ||
           `Identified via ${res.provider_used} (confidence ${Math.round((c.ai_confidence || 0) * 100)}%). Review fields before saving.`
@@ -237,6 +240,7 @@ export function ScanAddPage() {
         intake_source: files.length > 0 ? intakeSource : "MANUAL",
         photo_verification_status: effectiveVerificationStatus,
         photo_verification_notes: verificationWarnings,
+        ai_enrichment_pending: quotaDeferred,
         auto_appraise: true,
       });
 

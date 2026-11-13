@@ -304,6 +304,7 @@ export interface VisionIdentifyResponse {
   warning: string | null;
   verification_status?: "VERIFIED" | "FLAGGED" | string;
   verification_warnings?: string[];
+  quota_deferred?: boolean;
 }
 
 async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {

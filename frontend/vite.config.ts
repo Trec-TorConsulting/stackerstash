@@ -14,6 +14,7 @@ export default defineConfig({
         enabled: true,
       },
       workbox: {
+        cleanupOutdatedCaches: true,
         runtimeCaching: [
           {
             urlPattern: ({ url }) =>
