@@ -403,3 +403,26 @@ def test_vision_ocr_catalog_and_text_only_fallback(api_client, user_a, monkeypat
     assert isinstance(groq_calls[1]["messages"][0]["content"], str)
 
 
+def test_merge_enriched_specs_truncates_char_fields():
+    from apps.catalog.models import CollectionItem
+    from apps.valuation.services import _merge_enriched_specs
+
+    item = CollectionItem(title="2025 W Eagle S$1", category="SLAB")
+    _merge_enriched_specs(
+        item,
+        [
+            (
+                "AI",
+                {
+                    "mint_mark": "W (West Point Mint) - Extra Long Description",
+                    "variety": "V" * 200,
+                },
+            )
+        ],
+    )
+    assert len(item.mint_mark) <= 16
+    assert item.mint_mark == "W (West Point Mi"
+    assert len(item.variety) <= 120
+
+
+

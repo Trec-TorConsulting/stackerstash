@@ -243,7 +243,6 @@ export function ItemDetailPage() {
   }
 
   const displayUrl = activePhotoUrl || item.primary_photo_url;
-  const activePhoto = item.photos.find((p) => p.url === displayUrl) || item.photos[0] || null;
   const slabDesignation = String(item.attributes?.slab_designation || "");
   const flatContainers = flattenContainers(containers);
 
@@ -348,21 +347,6 @@ export function ItemDetailPage() {
               <img src={displayUrl} alt={item.title} className="h-full w-full object-contain p-3" />
             ) : (
               <span className="text-sm text-slate-500">No photos attached</span>
-            )}
-            {activePhoto && activePhoto.label !== "RECEIPT" && (
-              <button
-                type="button"
-                title="Re-run background removal & coin extraction"
-                onClick={async () => {
-                  const updated = await api.removePhotoBackground(item.id, activePhoto.id);
-                  setActivePhotoUrl(updated.url);
-                  qc.invalidateQueries({ queryKey: ["item", id] });
-                }}
-                className="absolute bottom-2.5 right-2.5 flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-950/85 hover:bg-slate-900 border border-slate-700 text-[11px] font-medium text-slate-200 cursor-pointer transition"
-              >
-                <Sparkles className="h-3 w-3 text-amber-400" />
-                Clean BG
-              </button>
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2">

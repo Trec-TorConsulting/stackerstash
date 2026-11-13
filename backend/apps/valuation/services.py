@@ -127,6 +127,10 @@ def _merge_enriched_specs(
                     merged_cats.update({str(k): str(v) for k, v in val.items() if v})
                     setattr(item, field, merged_cats)
                 else:
+                    model_field = CollectionItem._meta.get_field(field)
+                    max_len = getattr(model_field, "max_length", None)
+                    if max_len and isinstance(val, str):
+                        val = val.strip()[:max_len]
                     setattr(item, field, val)
                 provenance[field] = source_tag
     item.specs_provenance = provenance

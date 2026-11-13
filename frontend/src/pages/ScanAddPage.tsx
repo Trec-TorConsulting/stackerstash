@@ -71,6 +71,20 @@ export function ScanAddPage() {
     notes: "",
   });
 
+  function canIdentifyFiles(
+    targetFiles: Array<{ file: File; label: string; preview: string }>,
+    source: "CAMERA" | "UPLOAD" | "MANUAL"
+  ) {
+    if (!targetFiles.length) return false;
+    const needsBothSides =
+      source === "UPLOAD" && (form.category === "COIN" || form.category === "PAPER");
+    if (!needsBothSides) return true;
+    return (
+      targetFiles.some((f) => f.label === "OBVERSE") &&
+      targetFiles.some((f) => f.label === "REVERSE")
+    );
+  }
+
   function handleFilePick(e: React.ChangeEvent<HTMLInputElement>, defaultLabel: string) {
     const picked = Array.from(e.target.files || []);
     if (!picked.length) return;
@@ -78,19 +92,21 @@ export function ScanAddPage() {
     setVerificationStatus("NONE");
     setVerificationWarnings([]);
     setOverrideConfirmed(false);
-    setFiles((prev) => {
-      const next = picked.map((file, idx) => {
-        const autoLabel =
-          prev.length === 0 && idx === 1 && defaultLabel === "OBVERSE" ? "REVERSE" : defaultLabel;
-        return {
-          file,
-          label: autoLabel,
-          preview: URL.createObjectURL(file),
-        };
-      });
-      return [...prev, ...next];
+    const nextItems = picked.map((file, idx) => {
+      const autoLabel =
+        files.length === 0 && idx === 1 && defaultLabel === "OBVERSE" ? "REVERSE" : defaultLabel;
+      return {
+        file,
+        label: autoLabel,
+        preview: URL.createObjectURL(file),
+      };
     });
+    const nextFiles = [...files, ...nextItems];
+    setFiles(nextFiles);
     e.target.value = "";
+    if (canIdentifyFiles(nextFiles, "UPLOAD")) {
+      void runIdentify(nextFiles, "UPLOAD");
+    }
   }
 
   function handleGuidedCameraComplete(result: GuidedCameraResult) {
@@ -114,6 +130,7 @@ export function ScanAddPage() {
       });
     }
     setFiles(next);
+    void runIdentify(next, "CAMERA");
   }
 
   const needsFrontBack =
@@ -122,19 +139,22 @@ export function ScanAddPage() {
   const hasReverse = files.some((f) => f.label === "REVERSE");
   const missingRequiredSides = needsFrontBack && (!hasObverse || !hasReverse);
 
-  async function handleIdentify() {
-    if (!files.length || missingRequiredSides) return;
+  async function runIdentify(
+    targetFiles: Array<{ file: File; label: string; preview: string }> = files,
+    source: "CAMERA" | "UPLOAD" | "MANUAL" = intakeSource
+  ) {
+    if (!canIdentifyFiles(targetFiles, source)) return;
     setIdentifying(true);
     setAiNotice(null);
     setError(null);
     try {
       const normalizedFiles = await Promise.all(
-        files.map((f) => normalizeImageFileForUpload(f.file))
+        targetFiles.map((f) => normalizeImageFileForUpload(f.file))
       );
       const res = await api.identifyImages(
         normalizedFiles,
         barcodeHint || undefined,
-        intakeSource === "CAMERA" ? "camera" : "upload"
+        source === "CAMERA" ? "camera" : "upload"
       );
       const status = res.verification_status === "FLAGGED" ? "FLAGGED" : "VERIFIED";
       setVerificationStatus(status);
@@ -284,11 +304,15 @@ export function ScanAddPage() {
                   />
                   <select
                     value={f.label}
-                    onChange={(e) =>
-                      setFiles((prev) =>
-                        prev.map((item, i) => (i === idx ? { ...item, label: e.target.value } : item))
-                      )
-                    }
+                    onChange={(e) => {
+                      const nextFiles = files.map((item, i) =>
+                        i === idx ? { ...item, label: e.target.value } : item
+                      );
+                      setFiles(nextFiles);
+                      if (canIdentifyFiles(nextFiles, intakeSource)) {
+                        void runIdentify(nextFiles, intakeSource);
+                      }
+                    }}
                     className="w-full text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-1 py-0.5"
                   >
                     <option value="OBVERSE">Obverse</option>
@@ -320,7 +344,7 @@ export function ScanAddPage() {
               />
               <button
                 type="button"
-                onClick={handleIdentify}
+                onClick={() => void runIdentify()}
                 disabled={identifying || missingRequiredSides}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-semibold transition disabled:opacity-50"
               >

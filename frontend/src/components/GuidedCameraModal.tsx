@@ -15,10 +15,6 @@ interface GuidedCameraModalProps {
   initialShape?: 'circle' | 'rect';
 }
 
-const LOCK_FRAMES_REQUIRED = 3;
-const FLIP_COOLDOWN_MS = 1500;
-const AUTO_ZOOM_THROTTLE_MS = 900;
-
 export function GuidedCameraModal({
   open,
   onClose,
@@ -30,16 +26,9 @@ export function GuidedCameraModal({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const prevLumaRef = useRef<Float32Array | null>(null);
-  const lockCountRef = useRef<number>(0);
-  const cooldownUntilRef = useRef<number>(0);
-  const lastZoomStepRef = useRef<number>(0);
-  const captureRef = useRef<() => void>(() => {});
 
   const [reticleShape, setReticleShape] = useState<'circle' | 'rect'>(initialShape);
   const [zoom, setZoom] = useState<number>(1);
-  const [autoCapture, setAutoCapture] = useState<boolean>(true);
-  const [autoZoom, setAutoZoom] = useState<boolean>(true);
-  const [lockProgress, setLockProgress] = useState<number>(0);
   const [step, setStep] = useState<'front' | 'back'>('front');
   const [frontFile, setFrontFile] = useState<File | null>(null);
   const [frontPreview, setFrontPreview] = useState<string | null>(null);
@@ -68,12 +57,7 @@ export function GuidedCameraModal({
     setFrontFile(null);
     setFrontPreview(null);
     setZoom(1);
-    setAutoCapture(true);
-    setAutoZoom(true);
-    setLockProgress(0);
-    lockCountRef.current = 0;
     prevLumaRef.current = null;
-    cooldownUntilRef.current = 0;
     setCameraError(null);
 
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
@@ -132,7 +116,7 @@ export function GuidedCameraModal({
     }
   }, [zoom]);
 
-  // Live sharpness, exposure, stability, auto-zoom & auto-capture analysis every 450ms
+  // Live sharpness, exposure, and stability guidance every 450ms
   useEffect(() => {
     if (!open || !cameraReady) return;
     const timer = window.setInterval(() => {
@@ -159,39 +143,10 @@ export function GuidedCameraModal({
       const metrics = evaluateFrameMetrics(luma, prevLumaRef.current, sampleW, sampleH, zoom);
       prevLumaRef.current = luma;
       setQuality(metrics.quality);
-
-      const now = Date.now();
-      if (now < cooldownUntilRef.current) {
-        lockCountRef.current = 0;
-        setLockProgress(0);
-        return;
-      }
-
-      if (autoZoom && metrics.recommendedZoom > zoom && now - lastZoomStepRef.current >= AUTO_ZOOM_THROTTLE_MS) {
-        lastZoomStepRef.current = now;
-        setZoom(metrics.recommendedZoom);
-        lockCountRef.current = 0;
-        setLockProgress(0);
-        return;
-      }
-
-      if (autoCapture && metrics.quality.isGood) {
-        const nextCount = lockCountRef.current + 1;
-        lockCountRef.current = nextCount;
-        setLockProgress(Math.min(nextCount, LOCK_FRAMES_REQUIRED));
-        if (nextCount >= LOCK_FRAMES_REQUIRED) {
-          lockCountRef.current = 0;
-          setLockProgress(0);
-          captureRef.current();
-        }
-      } else {
-        lockCountRef.current = 0;
-        setLockProgress(0);
-      }
     }, 450);
 
     return () => window.clearInterval(timer);
-  }, [open, cameraReady, autoCapture, autoZoom, zoom]);
+  }, [open, cameraReady, zoom]);
 
   if (!open) return null;
 
@@ -224,16 +179,12 @@ export function GuidedCameraModal({
       0.92,
     );
   };
-  captureRef.current = captureCurrentFrame;
 
   const handleCapturedFile = (file: File) => {
     if (step === 'front') {
       setFrontFile(file);
       setFrontPreview(URL.createObjectURL(file));
       if (requireBack) {
-        lockCountRef.current = 0;
-        setLockProgress(0);
-        cooldownUntilRef.current = Date.now() + FLIP_COOLDOWN_MS;
         setStep('back');
       } else {
         stopStream();
@@ -339,9 +290,7 @@ export function GuidedCameraModal({
                   }`}
                 >
                   <Sparkles className="h-3.5 w-3.5" />
-                  {autoCapture && lockProgress > 0
-                    ? `Hold steady… (${lockProgress}/${LOCK_FRAMES_REQUIRED})`
-                    : quality.label}
+                  {quality.label}
                 </span>
               </div>
             </>
@@ -384,38 +333,6 @@ export function GuidedCameraModal({
               </button>
             </div>
 
-            {/* Auto-Capture & Auto-Zoom Toggles */}
-            <div className="flex items-center gap-2 text-xs">
-              <button
-                type="button"
-                aria-pressed={autoCapture}
-                onClick={() => {
-                  setAutoCapture((v) => !v);
-                  lockCountRef.current = 0;
-                  setLockProgress(0);
-                }}
-                className={`rounded-lg border px-2.5 py-1 font-medium transition ${
-                  autoCapture
-                    ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
-                    : 'border-slate-700 bg-slate-800 text-slate-400 hover:text-white'
-                }`}
-              >
-                Auto-Capture {autoCapture ? 'On' : 'Off'}
-              </button>
-              <button
-                type="button"
-                aria-pressed={autoZoom}
-                onClick={() => setAutoZoom((v) => !v)}
-                className={`rounded-lg border px-2.5 py-1 font-medium transition ${
-                  autoZoom
-                    ? 'border-amber-500/40 bg-amber-500/15 text-amber-300'
-                    : 'border-slate-700 bg-slate-800 text-slate-400 hover:text-white'
-                }`}
-              >
-                Auto-Zoom {autoZoom ? 'On' : 'Off'}
-              </button>
-            </div>
-
             {/* Zoom Slider */}
             <div className="flex items-center gap-2 text-xs text-slate-300">
               <ZoomIn className="h-4 w-4 text-slate-400" />
@@ -425,10 +342,7 @@ export function GuidedCameraModal({
                 max={3}
                 step={0.1}
                 value={zoom}
-                onChange={(e) => {
-                  setAutoZoom(false);
-                  setZoom(parseFloat(e.target.value));
-                }}
+                onChange={(e) => setZoom(parseFloat(e.target.value))}
                 aria-label="Camera zoom"
                 className="w-28 accent-amber-400"
               />

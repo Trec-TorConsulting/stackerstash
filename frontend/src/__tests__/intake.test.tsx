@@ -44,20 +44,8 @@ describe("GuidedCameraModal", () => {
     expect(screen.getByRole("button", { name: "Note / Bar (Rect)" })).toBeInTheDocument();
     expect(screen.getByLabelText("Camera zoom")).toBeInTheDocument();
     expect(screen.getByText(/Capture Front Photo/i)).toBeInTheDocument();
-
-    // Auto-Capture and Auto-Zoom default to On
-    const autoCaptureBtn = screen.getByRole("button", { name: /Auto-Capture On/i });
-    const autoZoomBtn = screen.getByRole("button", { name: /Auto-Zoom On/i });
-    expect(autoCaptureBtn).toHaveAttribute("aria-pressed", "true");
-    expect(autoZoomBtn).toHaveAttribute("aria-pressed", "true");
-
-    // Toggling Auto-Capture turns it Off
-    fireEvent.click(autoCaptureBtn);
-    expect(screen.getByRole("button", { name: /Auto-Capture Off/i })).toHaveAttribute("aria-pressed", "false");
-
-    // Dragging manual zoom slider disables Auto-Zoom
-    fireEvent.change(screen.getByLabelText("Camera zoom"), { target: { value: "1.8" } });
-    expect(screen.getByRole("button", { name: /Auto-Zoom Off/i })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("button", { name: /Auto-Capture/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Auto-Zoom/i })).not.toBeInTheDocument();
   });
 
   it("evaluates frame stability, sharpness, and auto-zoom recommendation", () => {
@@ -124,7 +112,7 @@ describe("ScanAddPage Unified Intake", () => {
 
   it("displays verification warnings and allows explicit Proceed Anyway override", async () => {
     vi.spyOn(api, "getContainers").mockResolvedValue([]);
-    vi.spyOn(api, "identifyImages").mockResolvedValue({
+    const identifySpy = vi.spyOn(api, "identifyImages").mockResolvedValue({
       job_id: "job-1",
       provider_used: "mock",
       warning: null,
@@ -165,8 +153,9 @@ describe("ScanAddPage Unified Intake", () => {
     const f2 = new File(["back"], "back.jpg", { type: "image/jpeg" });
     fireEvent.change(uploadInput, { target: { files: [f1, f2] } });
 
-    const identifyBtn = await screen.findByRole("button", { name: /Identify with AI/i });
-    fireEvent.click(identifyBtn);
+    await waitFor(() => {
+      expect(identifySpy).toHaveBeenCalledTimes(1);
+    });
 
     expect(await screen.findByText(/Photo Authenticity \/ Quality Warning/i)).toBeInTheDocument();
     expect(screen.getByText(/Possible screen moire pattern detected\./i)).toBeInTheDocument();
