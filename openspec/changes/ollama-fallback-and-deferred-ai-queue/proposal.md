@@ -27,3 +27,4 @@
 - `backend/apps/catalog/models.py`, `backend/apps/catalog/migrations/0008_collectionitem_deferred_ai_fields.py`, `backend/apps/catalog/schemas.py`, `backend/apps/catalog/api.py`
 - `backend/apps/valuation/services.py`, `backend/apps/valuation/tasks.py`, `backend/config/settings.py`
 - `frontend/vite.config.ts`, `frontend/src/lib/api.ts`, `frontend/src/pages/ScanAddPage.tsx`
+

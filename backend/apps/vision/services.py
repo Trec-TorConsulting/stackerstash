@@ -639,6 +639,38 @@ def _attempt_ocr_fallback(
     }
 
 
+def _merge_ocr_hints_into_parsed(
+    parsed: dict[str, Any], ocr_hints: dict[str, Any]
+) -> dict[str, Any]:
+    """Fill missing fields in a vision provider's parsed dict using local OCR hints."""
+    merged = dict(parsed)
+    for field in (
+        "year",
+        "serial_number",
+        "denomination",
+        "country",
+        "series",
+        "mint_or_refiner",
+        "cert_number",
+        "grade",
+    ):
+        if not str(merged.get(field) or "").strip() and str(ocr_hints.get(field) or "").strip():
+            merged[field] = ocr_hints[field]
+    if (not merged.get("grading_service") or merged.get("grading_service") == "NONE") and (
+        ocr_hints.get("grading_service") and ocr_hints.get("grading_service") != "NONE"
+    ):
+        merged["grading_service"] = ocr_hints["grading_service"]
+    if (not merged.get("metal_type") or merged.get("metal_type") == "NONE") and (
+        ocr_hints.get("metal_type") and ocr_hints.get("metal_type") != "NONE"
+    ):
+        merged["metal_type"] = ocr_hints["metal_type"]
+    if not merged.get("weight_value") and ocr_hints.get("weight_value"):
+        merged["weight_value"] = ocr_hints["weight_value"]
+        if not merged.get("weight_unit") and ocr_hints.get("weight_unit"):
+            merged["weight_unit"] = ocr_hints["weight_unit"]
+    return merged
+
+
 def _record_vision_success(
     workspace: Workspace,
     provider_used: str,
@@ -778,8 +810,21 @@ def identify_images(
                     prompt,
                     timeout=min(25.0, remaining),
                 )
+                if deadline - time.monotonic() >= 6.0:
+                    try:
+                        ocr_text = extract_text_from_images(ollama_images)
+                        if ocr_text.strip():
+                            ocr_hints = parse_ocr_numismatic_hints(
+                                ocr_text, barcode_hint=barcode_hint
+                            )
+                            if ocr_hints.get("has_usable_hints"):
+                                res["parsed"] = _merge_ocr_hints_into_parsed(
+                                    res["parsed"], ocr_hints
+                                )
+                    except Exception as ocr_exc:
+                        logger.debug("Post-Ollama OCR enrichment skipped: %s", ocr_exc)
                 warn = (
-                    "Gemini quota exceeded (429); identified basic details with Ollama and queued for full Gemini upgrade when quota returns."
+                    "Gemini quota exceeded (429); identified basic details with Ollama + OCR and queued for full Gemini upgrade when quota returns."
                     if gemini_quota_hit
                     else None
                 )

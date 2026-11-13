@@ -145,10 +145,12 @@ def parse_ocr_numismatic_hints(
 
     # 4. Banknote serial number & paper indicators
     serial_number = ""
-    serial_match = re.search(r"\b([A-L]\s?\d{8}\s?[A-Z\*])\b", upper)
+    serial_match = re.search(r"\b([A-Z]{1,2}\s?\d{8}\s?[A-Z\*])\b", upper)
     if serial_match:
-        serial_number = re.sub(r"\s+", "", serial_match.group(1))
-    else:
+        candidate_sn = re.sub(r"\s+", "", serial_match.group(1))
+        if not candidate_sn.startswith(("MS", "PR", "PF", "AU", "VF", "XF")):
+            serial_number = candidate_sn
+    if not serial_number:
         alt_serial = re.search(r"\b([A-Z]{1,2}\d{7,9}[A-Z\*]?)\b", upper)
         if alt_serial and not alt_serial.group(1).startswith(("MS", "PR", "PF", "AU", "VF", "XF")):
             serial_number = alt_serial.group(1)

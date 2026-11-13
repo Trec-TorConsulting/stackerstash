@@ -7,3 +7,4 @@
 3. **CollectionItem Queue Fields**: Storing `ai_enrichment_pending` directly on `CollectionItem` avoids a separate join table, supports filtering in list/detail APIs, and lets `appraise_item` automatically clear `ai_enrichment_pending = False` whenever a Gemini appraisal succeeds.
 4. **Celery Beat Batch Processing**: `process_deferred_ai_enrichment_task` runs every 15 minutes (`900.0s`), processes up to 5 pending items (`ai_enrichment_attempts < 10`) in FIFO order, fills missing fields from Gemini vision if photos exist, runs `appraise_item`, and aborts the batch on the first 429 to respect rate-limit recovery.
 5. **PWA Cache Cleanup**: `cleanupOutdatedCaches: true` in `frontend/vite.config.ts` ensures Workbox purges outdated precache entries on service worker activation.
+

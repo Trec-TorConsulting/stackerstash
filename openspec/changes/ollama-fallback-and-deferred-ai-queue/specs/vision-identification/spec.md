@@ -13,3 +13,4 @@
 #### Scenario: Batch worker processes pending items and stops on 429
 - **WHEN** `process_deferred_ai_enrichment_task` runs with pending items
 - **THEN** it enriches and appraises items using Gemini and clears `ai_enrichment_pending`, or increments `ai_enrichment_attempts` and stops the current batch if Gemini returns 429
+

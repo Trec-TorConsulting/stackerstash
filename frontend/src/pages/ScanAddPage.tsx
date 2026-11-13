@@ -466,6 +466,66 @@ export function ScanAddPage() {
           </div>
 
           <div>
+            <label className="block text-xs text-slate-400 mb-1">Year / Series Date</label>
+            <input
+              value={form.year}
+              onChange={(e) => setForm({ ...form, year: e.target.value })}
+              placeholder="e.g. 2017A, 1921"
+              className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm font-mono"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Country</label>
+            <input
+              value={form.country}
+              onChange={(e) => setForm({ ...form, country: e.target.value })}
+              placeholder="e.g. United States"
+              className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Denomination</label>
+            <input
+              value={form.denomination}
+              onChange={(e) => setForm({ ...form, denomination: e.target.value })}
+              placeholder="e.g. $100, $1"
+              className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Series</label>
+            <input
+              value={form.series}
+              onChange={(e) => setForm({ ...form, series: e.target.value })}
+              placeholder="e.g. Federal Reserve Note, Morgan Dollar"
+              className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Mint / Refiner</label>
+            <input
+              value={form.mint_or_refiner}
+              onChange={(e) => setForm({ ...form, mint_or_refiner: e.target.value })}
+              placeholder="e.g. U.S. Mint, BEP, Geiger"
+              className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Purchase Date</label>
+            <input
+              type="date"
+              value={form.purchase_date}
+              onChange={(e) => setForm({ ...form, purchase_date: e.target.value })}
+              className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+            />
+          </div>
+
+          <div>
             <label className="block text-xs text-slate-400 mb-1">Quantity</label>
             <input
               type="number"

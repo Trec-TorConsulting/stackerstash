@@ -56,6 +56,11 @@ export function ItemDetailPage() {
   const [editForm, setEditForm] = useState({
     title: "",
     category: "COIN",
+    year: "",
+    country: "",
+    denomination: "",
+    series: "",
+    mint_or_refiner: "",
     sort_category: "",
     sort_subcategory: "",
     status: "IN_COLLECTION",
@@ -67,6 +72,8 @@ export function ItemDetailPage() {
     estimated_grade: "",
     serial_number: "",
     purchase_price: "",
+    purchase_date: "",
+    vendor: "",
     market_value_unit: "0.00",
     notes: "",
   });
@@ -187,6 +194,11 @@ export function ItemDetailPage() {
     setEditForm({
       title: item.title,
       category: item.category,
+      year: item.year || "",
+      country: item.country || "",
+      denomination: item.denomination || "",
+      series: item.series || "",
+      mint_or_refiner: item.mint_or_refiner || "",
       sort_category: item.sort_category || "",
       sort_subcategory: item.sort_subcategory || "",
       status: item.status,
@@ -198,6 +210,8 @@ export function ItemDetailPage() {
       estimated_grade: item.estimated_grade || "",
       serial_number: item.serial_number || "",
       purchase_price: item.purchase_price ?? "",
+      purchase_date: item.purchase_date || "",
+      vendor: item.vendor || "",
       market_value_unit: item.market_value_unit || "0.00",
       notes: item.notes || "",
     });
@@ -216,6 +230,11 @@ export function ItemDetailPage() {
     const payload: Record<string, unknown> = {
       title: editForm.title,
       category: editForm.category,
+      year: editForm.year.trim(),
+      country: editForm.country.trim(),
+      denomination: editForm.denomination.trim(),
+      series: editForm.series.trim(),
+      mint_or_refiner: editForm.mint_or_refiner.trim(),
       status: editForm.status,
       container_id: editForm.container_id || null,
       grading_service: editForm.grading_service,
@@ -224,6 +243,8 @@ export function ItemDetailPage() {
       estimated_grade: editForm.estimated_grade,
       serial_number: editForm.serial_number,
       purchase_price: editForm.purchase_price || null,
+      purchase_date: editForm.purchase_date || null,
+      vendor: editForm.vendor.trim(),
       market_value_unit: editForm.market_value_unit || "0.00",
       attributes: nextAttrs,
       notes: editForm.notes,
@@ -411,6 +432,36 @@ export function ItemDetailPage() {
           </div>
 
           <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-2.5 text-sm">
+            {item.year && (
+              <div className="flex justify-between">
+                <span className="text-slate-400">Year / Series Date</span>
+                <span className="font-mono">{item.year}</span>
+              </div>
+            )}
+            {item.country && (
+              <div className="flex justify-between">
+                <span className="text-slate-400">Country</span>
+                <span>{item.country}</span>
+              </div>
+            )}
+            {item.denomination && (
+              <div className="flex justify-between">
+                <span className="text-slate-400">Denomination</span>
+                <span className="font-mono">{item.denomination}</span>
+              </div>
+            )}
+            {item.series && (
+              <div className="flex justify-between">
+                <span className="text-slate-400">Series</span>
+                <span>{item.series}</span>
+              </div>
+            )}
+            {item.mint_or_refiner && (
+              <div className="flex justify-between">
+                <span className="text-slate-400">Mint / Refiner</span>
+                <span>{item.mint_or_refiner}</span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span className="text-slate-400">Quantity</span>
               <span className="font-mono">{item.quantity}</span>
@@ -425,6 +476,18 @@ export function ItemDetailPage() {
               <span className="text-slate-400">Cost Basis</span>
               <span className="font-mono">{formatUsd(item.purchase_price)}</span>
             </div>
+            {item.purchase_date && (
+              <div className="flex justify-between">
+                <span className="text-slate-400">Purchase Date</span>
+                <span className="font-mono">{item.purchase_date}</span>
+              </div>
+            )}
+            {item.vendor && (
+              <div className="flex justify-between">
+                <span className="text-slate-400">Vendor</span>
+                <span>{item.vendor}</span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span className="text-slate-400">Unrealized P&amp;L</span>
               <span className="font-mono">{formatUsd(item.unrealized_gain_loss)}</span>
@@ -654,6 +717,69 @@ export function ItemDetailPage() {
                     value={editForm.serial_number}
                     onChange={(e) => setEditForm({ ...editForm, serial_number: e.target.value })}
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Year / Series Date</label>
+                  <input
+                    value={editForm.year}
+                    onChange={(e) => setEditForm({ ...editForm, year: e.target.value })}
+                    placeholder="e.g. 2017A, 1921"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Country</label>
+                  <input
+                    value={editForm.country}
+                    onChange={(e) => setEditForm({ ...editForm, country: e.target.value })}
+                    placeholder="e.g. United States"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Denomination</label>
+                  <input
+                    value={editForm.denomination}
+                    onChange={(e) => setEditForm({ ...editForm, denomination: e.target.value })}
+                    placeholder="e.g. $100, $1"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Series</label>
+                  <input
+                    value={editForm.series}
+                    onChange={(e) => setEditForm({ ...editForm, series: e.target.value })}
+                    placeholder="e.g. Federal Reserve Note, Morgan Dollar"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Mint / Refiner</label>
+                  <input
+                    value={editForm.mint_or_refiner}
+                    onChange={(e) => setEditForm({ ...editForm, mint_or_refiner: e.target.value })}
+                    placeholder="e.g. U.S. Mint, BEP, Geiger"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Purchase Date</label>
+                  <input
+                    type="date"
+                    value={editForm.purchase_date}
+                    onChange={(e) => setEditForm({ ...editForm, purchase_date: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Vendor</label>
+                  <input
+                    value={editForm.vendor}
+                    onChange={(e) => setEditForm({ ...editForm, vendor: e.target.value })}
+                    placeholder="e.g. LCS, APMEX"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
                   />
                 </div>
                 <div>
