@@ -49,9 +49,9 @@ describe("GuidedCameraModal", () => {
 describe("ScanAddPage Unified Intake", () => {
   it("enforces Front and Back photos for Coin uploads", async () => {
     vi.spyOn(api, "getContainers").mockResolvedValue([]);
-    vi.spyOn(api, "getPresets").mockResolvedValue([]);
 
     const { container } = renderScanAdd();
+    expect(screen.queryByText(/Quick-Add Presets/i)).not.toBeInTheDocument();
     const uploadInput = container.querySelector('input[type="file"][multiple]') as HTMLInputElement;
     expect(uploadInput).toBeTruthy();
 
@@ -86,7 +86,6 @@ describe("ScanAddPage Unified Intake", () => {
 
   it("displays verification warnings and allows explicit Proceed Anyway override", async () => {
     vi.spyOn(api, "getContainers").mockResolvedValue([]);
-    vi.spyOn(api, "getPresets").mockResolvedValue([]);
     vi.spyOn(api, "identifyImages").mockResolvedValue({
       job_id: "job-1",
       provider_used: "mock",
