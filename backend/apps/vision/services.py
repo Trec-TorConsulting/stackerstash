@@ -634,7 +634,8 @@ def identify_images(
 
     vision_images = _prepare_images_for_vision(images)
     provider_errors: list[str] = []
-    deadline = time.monotonic() + 90.0
+    # Stay safely under Gunicorn's 60s worker timeout in production
+    deadline = time.monotonic() + 48.0
     ollama_failed = False
     gemini_quota_hit = False
 
@@ -717,22 +718,25 @@ def identify_images(
                 logger.warning("Ollama vision failed: %s", err_msg)
                 provider_errors.append(f"Ollama: {err_msg}")
 
-    ocr_result = _attempt_ocr_fallback(
-        workspace=workspace,
-        images=images,
-        vision_images=vision_images,
-        barcode_hint=barcode_hint,
-        intake_mode=intake_mode,
-        gemini_key=gemini_key,
-        groq_key=groq_key,
-        openrouter_key=openrouter_key,
-        ollama_url=ollama_url,
-        ollama_model=ollama_model,
-        provider_errors=provider_errors,
-        skip_ollama_text=ollama_failed or (deadline - time.monotonic() < 5.0),
-    )
-    if ocr_result is not None:
-        return ocr_result
+    if deadline - time.monotonic() >= 10.0:
+        ocr_result = _attempt_ocr_fallback(
+            workspace=workspace,
+            images=images,
+            vision_images=vision_images,
+            barcode_hint=barcode_hint,
+            intake_mode=intake_mode,
+            gemini_key=gemini_key,
+            groq_key=groq_key,
+            openrouter_key=openrouter_key,
+            ollama_url=ollama_url,
+            ollama_model=ollama_model,
+            provider_errors=provider_errors,
+            skip_ollama_text=ollama_failed or (deadline - time.monotonic() < 5.0),
+        )
+        if ocr_result is not None:
+            return ocr_result
+    else:
+        provider_errors.append("OCR fallback skipped: request deadline near Gunicorn timeout")
 
     fallback_candidate = _normalize_candidate({}, barcode_hint)
     combined_error = "; ".join(provider_errors)

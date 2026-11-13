@@ -31,7 +31,7 @@ def _get_ocr_engine() -> Any:
         return None
 
 
-def _preprocess_image_for_ocr(img_bytes: bytes, max_dimension: int = 1200) -> bytes | None:
+def _preprocess_image_for_ocr(img_bytes: bytes, max_dimension: int = 800) -> bytes | None:
     """Normalize EXIF orientation, enhance contrast, and resize for local OCR."""
     try:
         with Image.open(io.BytesIO(img_bytes)) as opened:
