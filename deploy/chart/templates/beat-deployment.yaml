@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stackvault-beat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stackvault-beat
+  template:
+    metadata:
+      labels:
+        app: stackvault-beat
+    spec:
+      containers:
+        - name: beat
+          image: {{ .Values.backend.image }}
+          command: ["celery", "-A", "config", "beat", "-l", "info"]
+          envFrom:
+            - secretRef:
+                name: {{ .Values.env.SECRET_NAME }}
+          env:
+            - name: DJANGO_DEBUG
+              value: {{ .Values.env.DJANGO_DEBUG | quote }}
+            - name: DATABASE_URL
+              value: {{ .Values.env.DATABASE_URL | quote }}
+            - name: REDIS_URL
+              value: {{ .Values.env.REDIS_URL | quote }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+

@@ -1,0 +1,7 @@
+apiVersion: v2
+name: stackvault
+description: Enterprise-grade multi-tenant coins, paper currency, and bullion collection tracker
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+

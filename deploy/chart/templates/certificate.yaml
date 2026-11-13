@@ -1,0 +1,14 @@
+{{- if .Values.tls.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: stackvault-tls
+spec:
+  secretName: {{ .Values.tls.secretName }}
+  issuerRef:
+    name: {{ .Values.tls.issuerName }}
+    kind: ClusterIssuer
+  dnsNames:
+    - {{ .Values.hostname | quote }}
+{{- end }}
+

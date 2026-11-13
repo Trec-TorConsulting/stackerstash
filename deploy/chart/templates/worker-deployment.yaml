@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stackvault-worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      app: stackvault-worker
+  template:
+    metadata:
+      labels:
+        app: stackvault-worker
+    spec:
+      containers:
+        - name: worker
+          image: {{ .Values.backend.image }}
+          command: ["celery", "-A", "config", "worker", "-l", "info"]
+          envFrom:
+            - secretRef:
+                name: {{ .Values.env.SECRET_NAME }}
+          env:
+            - name: DJANGO_DEBUG
+              value: {{ .Values.env.DJANGO_DEBUG | quote }}
+            - name: DATABASE_URL
+              value: {{ .Values.env.DATABASE_URL | quote }}
+            - name: REDIS_URL
+              value: {{ .Values.env.REDIS_URL | quote }}
+            - name: MEDIA_ROOT
+              value: {{ .Values.media.mountPath | quote }}
+          volumeMounts:
+            - name: media
+              mountPath: {{ .Values.media.mountPath }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+      volumes:
+        - name: media
+          persistentVolumeClaim:
+            claimName: stackvault-media
+

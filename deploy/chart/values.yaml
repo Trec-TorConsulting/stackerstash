@@ -1,0 +1,58 @@
+hostname: stackvault.example.com
+
+gateway:
+  enabled: true
+  name: traefik-gateway
+  namespace: traefik
+  sectionName: websecure
+
+tls:
+  enabled: true
+  issuerName: letsencrypt-prod
+  secretName: stackvault-tls
+
+backend:
+  image: registry.homelab.local/stackvault-backend:0.1.0
+  replicas: 2
+  port: 8000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+worker:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+frontend:
+  image: registry.homelab.local/stackvault-frontend:0.1.0
+  replicas: 2
+  port: 80
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+media:
+  storageClassName: longhorn
+  size: 20Gi
+  mountPath: /app/media
+
+env:
+  DJANGO_DEBUG: "false"
+  DATABASE_URL: "postgresql://stackvault:changeme@postgresql.postgresql.svc.cluster.local:5432/stackvault"
+  REDIS_URL: "redis://redis.redis.svc.cluster.local:6379/0"
+  SECRET_NAME: "stackvault-secrets"
+

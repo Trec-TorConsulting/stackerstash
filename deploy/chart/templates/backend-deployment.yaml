@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stackvault-backend
+spec:
+  replicas: {{ .Values.backend.replicas }}
+  selector:
+    matchLabels:
+      app: stackvault-backend
+  template:
+    metadata:
+      labels:
+        app: stackvault-backend
+    spec:
+      initContainers:
+        - name: migrate
+          image: {{ .Values.backend.image }}
+          command: ["python", "manage.py", "migrate", "--noinput"]
+          envFrom:
+            - secretRef:
+                name: {{ .Values.env.SECRET_NAME }}
+          env:
+            - name: DJANGO_DEBUG
+              value: {{ .Values.env.DJANGO_DEBUG | quote }}
+            - name: DATABASE_URL
+              value: {{ .Values.env.DATABASE_URL | quote }}
+            - name: REDIS_URL
+              value: {{ .Values.env.REDIS_URL | quote }}
+      containers:
+        - name: backend
+          image: {{ .Values.backend.image }}
+          ports:
+            - containerPort: {{ .Values.backend.port }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.env.SECRET_NAME }}
+          env:
+            - name: DJANGO_DEBUG
+              value: {{ .Values.env.DJANGO_DEBUG | quote }}
+            - name: DATABASE_URL
+              value: {{ .Values.env.DATABASE_URL | quote }}
+            - name: REDIS_URL
+              value: {{ .Values.env.REDIS_URL | quote }}
+            - name: MEDIA_ROOT
+              value: {{ .Values.media.mountPath | quote }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.backend.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: {{ .Values.backend.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: media
+              mountPath: {{ .Values.media.mountPath }}
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+      volumes:
+        - name: media
+          persistentVolumeClaim:
+            claimName: stackvault-media
+

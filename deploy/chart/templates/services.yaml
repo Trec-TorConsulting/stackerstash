@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: stackvault-backend
+spec:
+  selector:
+    app: stackvault-backend
+  ports:
+    - port: {{ .Values.backend.port }}
+      targetPort: {{ .Values.backend.port }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stackvault-frontend
+spec:
+  selector:
+    app: stackvault-frontend
+  ports:
+    - port: {{ .Values.frontend.port }}
+      targetPort: {{ .Values.frontend.port }}
+
