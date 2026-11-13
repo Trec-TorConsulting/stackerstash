@@ -5,7 +5,9 @@ RUN pip install --no-cache-dir uv
 COPY pyproject.toml ./
 RUN uv venv /app/.venv \
     && uv pip install --python /app/.venv/bin/python -r pyproject.toml \
-    && uv pip install --python /app/.venv/bin/python packaging
+    && uv pip install --python /app/.venv/bin/python packaging \
+    && uv pip uninstall --python /app/.venv/bin/python opencv-python \
+    && uv pip install --python /app/.venv/bin/python opencv-python-headless
 
 FROM python:3.12-slim
 
