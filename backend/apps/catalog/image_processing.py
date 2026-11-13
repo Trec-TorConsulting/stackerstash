@@ -4,10 +4,12 @@ import io
 from collections import deque
 from typing import Any
 
+import cv2
+import numpy as np
 from PIL import ExifTags, Image, ImageEnhance, ImageFilter, ImageOps, ImageStat
 
 MAX_IMAGE_DIMENSION = 2400
-CROP_PADDING_RATIO = 0.04
+CROP_PADDING_RATIO = 0.015
 
 
 def _color_distance_sq(c1: tuple[int, int, int], c2: tuple[int, int, int]) -> int:
@@ -138,11 +140,221 @@ def _remove_background_floodfill(img: Image.Image) -> Image.Image:
     return Image.merge("RGBA", (r, g, b, full_mask))
 
 
+def _remove_background_grabcut(img: Image.Image) -> Image.Image:
+    """
+    Remove exterior background (including textured/patterned surfaces) using OpenCV GrabCut,
+    largest-connected-component filtering to eliminate speckles, and exterior contour hole-filling.
+    """
+    rgba = img.convert("RGBA")
+    orig_w, orig_h = rgba.size
+    if orig_w < 16 or orig_h < 16:
+        return rgba
+
+    arr = np.array(rgba)
+    has_alpha = img.mode in ("RGBA", "LA") and bool((arr[:, :, 3] < 240).any())
+
+    work_max = 560
+    scale = min(1.0, work_max / max(orig_w, orig_h))
+    work_w = max(16, int(round(orig_w * scale)))
+    work_h = max(16, int(round(orig_h * scale)))
+
+    work_rgba = np.array(rgba.resize((work_w, work_h), Image.Resampling.BILINEAR))
+    work_rgb = work_rgba[:, :, :3]
+    work_alpha = work_rgba[:, :, 3]
+    work_bgr = cv2.cvtColor(work_rgb, cv2.COLOR_RGB2BGR)
+
+    # Estimate border color in LAB space for color-distance saliency
+    lab = cv2.cvtColor(work_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    border_lab = np.concatenate([lab[0, :], lab[-1, :], lab[:, 0], lab[:, -1]], axis=0)
+    bg_lab = np.median(border_lab, axis=0)
+    lab_dist = np.linalg.norm(lab - bg_lab, axis=2)
+
+    # Guard against uniform solid-color images (nothing distinct from border to segment)
+    if not has_alpha and float((lab_dist > 12).mean()) < 0.01:
+        return rgba
+
+    gc_mask = np.full((work_h, work_w), cv2.GC_PR_BGD, dtype=np.uint8)
+    bx = max(2, int(work_w * 0.02))
+    by = max(2, int(work_h * 0.02))
+    gc_mask[:by, :] = cv2.GC_BGD
+    gc_mask[-by:, :] = cv2.GC_BGD
+    gc_mask[:, :bx] = cv2.GC_BGD
+    gc_mask[:, -bx:] = cv2.GC_BGD
+
+    if has_alpha:
+        gc_mask[work_alpha < 20] = cv2.GC_BGD
+        opaque = (work_alpha >= 20).astype(np.uint8)
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(opaque, connectivity=8)
+        if num_labels > 1:
+            largest_lbl = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+            main_comp = labels == largest_lbl
+            kernel = np.ones((5, 5), np.uint8)
+            eroded = cv2.erode(main_comp.astype(np.uint8), kernel, iterations=2)
+            gc_mask[main_comp] = cv2.GC_PR_FGD
+            gc_mask[eroded > 0] = cv2.GC_FGD
+            gc_mask[~main_comp] = cv2.GC_BGD
+    else:
+        y1, y2 = int(work_h * 0.12), int(work_h * 0.88)
+        x1, x2 = int(work_w * 0.12), int(work_w * 0.88)
+        gc_mask[y1:y2, x1:x2] = cv2.GC_PR_FGD
+        gc_mask[(lab_dist > 18) & (gc_mask != cv2.GC_BGD)] = cv2.GC_PR_FGD
+        cy1, cy2 = int(work_h * 0.30), int(work_h * 0.70)
+        cx1, cx2 = int(work_w * 0.30), int(work_w * 0.70)
+        gc_mask[cy1:cy2, cx1:cx2] = cv2.GC_FGD
+
+    if (gc_mask == cv2.GC_BGD).any() and (
+        (gc_mask == cv2.GC_FGD).any() or (gc_mask == cv2.GC_PR_FGD).any()
+    ):
+        bgd_model = np.zeros((1, 65), np.float64)
+        fgd_model = np.zeros((1, 65), np.float64)
+        if not (gc_mask == cv2.GC_FGD).any():
+            gc_mask[work_h // 2, work_w // 2] = cv2.GC_FGD
+        cv2.grabCut(work_bgr, gc_mask, None, bgd_model, fgd_model, 5, cv2.GC_INIT_WITH_MASK)
+        fg_mask = np.where((gc_mask == cv2.GC_FGD) | (gc_mask == cv2.GC_PR_FGD), 255, 0).astype(
+            np.uint8
+        )
+    else:
+        return _remove_background_floodfill(img)
+
+    fg_ratio = float((fg_mask > 0).mean())
+    if fg_ratio < 0.01 or fg_ratio > 0.97:
+        return _remove_background_floodfill(img)
+
+    # Keep only the largest connected component to eliminate disconnected background speckles
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(fg_mask, connectivity=8)
+    if num_labels > 1:
+        largest_lbl = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+        fg_mask = np.where(labels == largest_lbl, 255, 0).astype(np.uint8)
+
+    # Fill interior holes so white slab inserts/labels are preserved
+    contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    filled_mask = np.zeros_like(fg_mask)
+    if contours:
+        largest_cnt = max(contours, key=cv2.contourArea)
+        cv2.drawContours(filled_mask, [largest_cnt], -1, 255, thickness=cv2.FILLED)
+    else:
+        filled_mask = fg_mask
+
+    full_mask = cv2.resize(filled_mask, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+    full_mask = cv2.GaussianBlur(full_mask, (3, 3), 0.8)
+
+    out_arr = arr.copy()
+    out_arr[:, :, 3] = full_mask
+    return Image.fromarray(out_arr, mode="RGBA")
+
+
+def detect_coin_in_slab(rgba: Image.Image) -> tuple[int, int, int] | None:
+    """
+    Detect a circular coin (cx, cy, r) inside a tall slabbed coin image.
+    Returns None if the image does not appear to be a coin inside a rectangular slab.
+    """
+    arr = np.array(rgba.convert("RGBA"))
+    alpha = arr[:, :, 3]
+    ys, xs = np.where(alpha > 24)
+    if len(xs) == 0:
+        return None
+    x0, x1 = int(xs.min()), int(xs.max())
+    y0, y1 = int(ys.min()), int(ys.max())
+    slab_w = x1 - x0
+    slab_h = y1 - y0
+    if slab_w < 60 or slab_h < 60 or (slab_h / max(1, slab_w)) < 1.15:
+        return None
+
+    rgb = arr[:, :, :3].copy()
+    rgb[alpha < 24] = 255
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+
+    crop = gray[y0:y1, x0:x1]
+    target_w = 400.0
+    scale = target_w / slab_w
+    sw = max(32, int(round(slab_w * scale)))
+    sh = max(32, int(round(slab_h * scale)))
+    small = cv2.resize(crop, (sw, sh), interpolation=cv2.INTER_AREA)
+    blurred = cv2.GaussianBlur(small, (5, 5), 1.2)
+    edges = cv2.Canny(blurred, 50, 140)
+
+    min_r = max(8, int(sw * 0.25))
+    max_r = max(min_r + 4, int(sw * 0.42))
+    circles = cv2.HoughCircles(
+        blurred,
+        cv2.HOUGH_GRADIENT,
+        dp=1.2,
+        minDist=sw * 0.15,
+        param1=90,
+        param2=24,
+        minRadius=min_r,
+        maxRadius=max_r,
+    )
+    if circles is None:
+        return None
+
+    angles = np.linspace(0, 2 * np.pi, 72, endpoint=False)
+    cos_a = np.cos(angles)
+    sin_a = np.sin(angles)
+
+    best: tuple[float, float, float] | None = None
+    best_score = -1e9
+    for c in circles[0]:
+        cx_s, cy_s, r_s = float(c[0]), float(c[1]), float(c[2])
+        horiz_err = abs(cx_s - 0.5 * sw) / sw
+        if horiz_err > 0.15:
+            continue
+        if cy_s < 0.50 * sh or cy_s > 0.82 * sh:
+            continue
+        if cy_s - r_s < 0.28 * sh or cy_s + r_s > 0.97 * sh:
+            continue
+        if cx_s - r_s < 0.03 * sw or cx_s + r_s > 0.97 * sw:
+            continue
+
+        support = 0
+        for dr in (-1.5, 0.0, 1.5):
+            rr = r_s + dr
+            px = np.clip(np.round(cx_s + rr * cos_a).astype(int), 0, sw - 1)
+            py = np.clip(np.round(cy_s + rr * sin_a).astype(int), 0, sh - 1)
+            support += int((edges[py, px] > 0).sum())
+        score = support - horiz_err * 80.0
+        if score > best_score:
+            best_score = score
+            best = (cx_s, cy_s, r_s)
+
+    if best is None or best_score < 28:
+        return None
+
+    cx = int(round(x0 + best[0] / scale))
+    cy = int(round(y0 + best[1] / scale))
+    r = int(round(best[2] / scale))
+    return cx, cy, r
+
+
+def extract_coin_cutout(rgba: Image.Image, cx: int, cy: int, r: int) -> Image.Image:
+    """Crop tightly around a detected circular coin and apply a clean anti-aliased circular alpha mask."""
+    w, h = rgba.size
+    pad = max(2, int(round(r * CROP_PADDING_RATIO)))
+    left = max(0, cx - r - pad)
+    top = max(0, cy - r - pad)
+    right = min(w, cx + r + pad)
+    bottom = min(h, cy + r + pad)
+
+    cropped = rgba.convert("RGBA").crop((left, top, right, bottom))
+    cw, ch = cropped.size
+    ccx = cx - left
+    ccy = cy - top
+
+    yy, xx = np.ogrid[:ch, :cw]
+    dist = np.sqrt((xx - ccx) ** 2 + (yy - ccy) ** 2)
+    mask = np.clip((r + 0.75 - dist) / 1.5, 0.0, 1.0) * 255.0
+    mask_u8 = mask.astype(np.uint8)
+
+    arr = np.array(cropped)
+    arr[:, :, 3] = np.minimum(arr[:, :, 3], mask_u8)
+    return _crop_to_subject(Image.fromarray(arr, mode="RGBA"))
+
+
 def _crop_to_subject(rgba: Image.Image) -> Image.Image:
-    """Crop tightly around non-transparent subject with balanced padding."""
+    """Crop tightly around non-transparent subject with minimal padding."""
     alpha = rgba.getchannel("A")
     # Threshold faint feathering noise when computing bounding box
-    hard_mask = alpha.point(lambda a: 255 if a > 24 else 0)
+    hard_mask = alpha.point(lambda a: 255 if a > 32 else 0)
     bbox = hard_mask.getbbox()
     if not bbox:
         return rgba
@@ -153,8 +365,8 @@ def _crop_to_subject(rgba: Image.Image) -> Image.Image:
     if subj_w < 8 or subj_h < 8:
         return rgba
 
-    pad_x = max(4, int(round(subj_w * CROP_PADDING_RATIO)))
-    pad_y = max(4, int(round(subj_h * CROP_PADDING_RATIO)))
+    pad_x = max(2, int(round(subj_w * CROP_PADDING_RATIO)))
+    pad_y = max(2, int(round(subj_h * CROP_PADDING_RATIO)))
 
     w, h = rgba.size
     crop_box = (
@@ -182,6 +394,29 @@ def _enhance_detail(img: Image.Image) -> Image.Image:
     return rgb
 
 
+def _encode_processed_image(
+    img: Image.Image,
+    *,
+    orig_format: str = "PNG",
+    force_png: bool = False,
+) -> tuple[bytes, int, int, str]:
+    out = io.BytesIO()
+    if img.mode == "RGBA" or force_png:
+        img.save(out, format="PNG", optimize=True)
+        ext = "png"
+    elif orig_format in {"JPEG", "JPG"}:
+        img.convert("RGB").save(out, format="JPEG", quality=95, optimize=True)
+        ext = "jpg"
+    elif orig_format == "WEBP":
+        img.save(out, format="WEBP", quality=95, method=4)
+        ext = "webp"
+    else:
+        img.save(out, format="PNG", optimize=True)
+        ext = "png"
+    width, height = img.size
+    return out.getvalue(), width, height, ext
+
+
 def process_item_image(
     raw_bytes: bytes,
     *,
@@ -201,31 +436,44 @@ def process_item_image(
             img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
 
         if remove_background:
-            if _has_existing_transparency(img):
-                rgba = img.convert("RGBA")
-            else:
-                rgba = _remove_background_floodfill(img)
+            rgba = _remove_background_grabcut(img)
             img = _crop_to_subject(rgba)
 
         if enhance:
             img = _enhance_detail(img)
 
-        out = io.BytesIO()
-        if img.mode == "RGBA" or remove_background:
-            img.save(out, format="PNG", optimize=True)
-            ext = "png"
-        elif orig_format in {"JPEG", "JPG"}:
-            img.convert("RGB").save(out, format="JPEG", quality=95, optimize=True)
-            ext = "jpg"
-        elif orig_format == "WEBP":
-            img.save(out, format="WEBP", quality=95, method=4)
-            ext = "webp"
-        else:
-            img.save(out, format="PNG", optimize=True)
-            ext = "png"
+        return _encode_processed_image(img, orig_format=orig_format, force_png=remove_background)
 
-        width, height = img.size
-        return out.getvalue(), width, height, ext
+
+def extract_coin_and_slab_images(
+    raw_bytes: bytes,
+    *,
+    enhance: bool = True,
+    max_dimension: int = MAX_IMAGE_DIMENSION,
+) -> tuple[tuple[bytes, int, int, str], tuple[bytes, int, int, str] | None]:
+    """
+    Remove background cleanly and check if the image is a coin inside a rectangular grading slab.
+    If a slabbed coin is detected, returns ((coin_bytes, cw, ch, 'png'), (slab_bytes, sw, sh, 'png')).
+    Otherwise returns ((cleaned_bytes, w, h, 'png'), None).
+    """
+    with Image.open(io.BytesIO(raw_bytes)) as opened:
+        img = ImageOps.exif_transpose(opened)
+        if max(img.size) > max_dimension:
+            img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+
+        slab_rgba = _crop_to_subject(_remove_background_grabcut(img))
+        circle = detect_coin_in_slab(slab_rgba)
+
+        slab_final = _enhance_detail(slab_rgba) if enhance else slab_rgba
+        slab_encoded = _encode_processed_image(slab_final, force_png=True)
+
+        if not circle:
+            return slab_encoded, None
+
+        coin_rgba = extract_coin_cutout(slab_rgba, *circle)
+        coin_final = _enhance_detail(coin_rgba) if enhance else coin_rgba
+        coin_encoded = _encode_processed_image(coin_final, force_png=True)
+        return coin_encoded, slab_encoded
 
 
 _SUSPICIOUS_SOFTWARE_MARKERS = (

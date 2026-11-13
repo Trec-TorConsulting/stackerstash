@@ -311,3 +311,90 @@ def test_media_files_served_when_debug_false(api_client, user_a, settings):
     assert media_resp.status_code == 200
     assert media_resp["Content-Type"] == "image/png"
 
+
+@pytest.mark.django_db
+def test_patterned_background_removal_and_slab_coin_extraction(api_client, user_a):
+    from PIL import ImageDraw
+
+    from apps.catalog.image_processing import process_item_image
+
+    # Build a 400x560 synthetic NGC-like slab on a textured/speckled background
+    img = Image.new("RGB", (400, 560), color=(245, 245, 245))
+    draw = ImageDraw.Draw(img)
+    # Add disconnected dark background speckles in bottom-right (simulating patterned desk/mat)
+    for y in range(420, 555, 8):
+        for x in range(280, 395, 8):
+            draw.rectangle((x, y, x + 4, y + 4), fill=(45, 45, 45))
+
+    # Draw slab body (white insert with dark outer rim)
+    draw.rounded_rectangle((60, 40, 340, 500), radius=18, fill=(238, 238, 238), outline=(70, 70, 70), width=6)
+    # Top label area
+    draw.rectangle((80, 60, 320, 175), fill=(250, 250, 250), outline=(140, 140, 140), width=2)
+    draw.rectangle((95, 80, 240, 110), fill=(40, 40, 40))
+    # Circular silver coin in lower half of slab (cx=200, cy=335, r=95)
+    draw.ellipse((105, 240, 295, 430), fill=(175, 178, 182), outline=(60, 60, 60), width=4)
+    draw.ellipse((135, 270, 265, 400), fill=(205, 208, 212))
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=95)
+
+    # 1. process_item_image removes all disconnected speckles and preserves the full slab
+    cleaned_bytes, cw, ch, cext = process_item_image(buf.getvalue(), remove_background=True, enhance=True)
+    assert cext == "png"
+    cleaned_img = Image.open(io.BytesIO(cleaned_bytes))
+    assert cleaned_img.mode == "RGBA"
+    # Full slab should be roughly 280x460 (+padding), not bloated by bottom-right speckles
+    assert cw < 320
+    assert ch < 515
+    assert cleaned_img.getpixel((0, 0))[3] == 0
+    assert cleaned_img.getpixel((cw - 1, ch - 1))[3] == 0
+
+    # 2. Uploading OBVERSE & REVERSE on a SLAB item extracts coin-only front/back + auto-saves SLAB_LABEL
+    _, _, token_a = user_a
+    headers_a = {"HTTP_AUTHORIZATION": f"Bearer {token_a}"}
+    item = api_client.post(
+        "/api/v1/catalog/items",
+        data=json.dumps({
+            "title": "2025 W Eagle S$1",
+            "category": "SLAB",
+            "grading_service": "NGC",
+            "grade": "PF 70 ULTRA CAMEO",
+        }),
+        content_type="application/json",
+        **headers_a,
+    ).json()
+
+    obv_upload = SimpleUploadedFile("slab_front.jpg", buf.getvalue(), content_type="image/jpeg")
+    obv_resp = api_client.post(
+        f"/api/v1/catalog/items/{item['id']}/photos",
+        data={"file": obv_upload, "label": "OBVERSE", "is_primary": "true", "remove_background": "true"},
+        **headers_a,
+    )
+    assert obv_resp.status_code == 201
+    obv_data = obv_resp.json()
+    # Coin-only cutout should be roughly square (~190x190 + padding), much shorter than the full slab
+    assert abs(obv_data["width"] - obv_data["height"]) < 25
+    assert obv_data["height"] < 260
+
+    rev_upload = SimpleUploadedFile("slab_back.jpg", buf.getvalue(), content_type="image/jpeg")
+    rev_resp = api_client.post(
+        f"/api/v1/catalog/items/{item['id']}/photos",
+        data={"file": rev_upload, "label": "REVERSE", "is_primary": "false", "remove_background": "true"},
+        **headers_a,
+    )
+    assert rev_resp.status_code == 201
+    rev_data = rev_resp.json()
+    assert abs(rev_data["width"] - rev_data["height"]) < 25
+    assert rev_data["height"] < 260
+
+    # Item should now have 3 photos: OBVERSE (coin), REVERSE (coin), and SLAB_LABEL (full slab view)
+    detail = api_client.get(f"/api/v1/catalog/items/{item['id']}", **headers_a).json()
+    labels = [p["label"] for p in detail["photos"]]
+    assert "OBVERSE" in labels
+    assert "REVERSE" in labels
+    assert "SLAB_LABEL" in labels
+    slab_photo = next(p for p in detail["photos"] if p["label"] == "SLAB_LABEL")
+    assert slab_photo["height"] > slab_photo["width"] * 1.2
+    assert slab_photo["is_primary"] is False
+
+

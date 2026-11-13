@@ -243,8 +243,18 @@ export function ItemDetailPage() {
   }
 
   const displayUrl = activePhotoUrl || item.primary_photo_url;
+  const activePhoto = item.photos.find((p) => p.url === displayUrl) || item.photos[0] || null;
   const slabDesignation = String(item.attributes?.slab_designation || "");
   const flatContainers = flattenContainers(containers);
+
+  const PHOTO_LABEL_SHORT: Record<string, string> = {
+    OBVERSE: "Front",
+    REVERSE: "Back",
+    SLAB_LABEL: "Slab",
+    ASSAY: "Assay",
+    RECEIPT: "Receipt",
+    OTHER: "Other",
+  };
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -339,6 +349,21 @@ export function ItemDetailPage() {
             ) : (
               <span className="text-sm text-slate-500">No photos attached</span>
             )}
+            {activePhoto && activePhoto.label !== "RECEIPT" && (
+              <button
+                type="button"
+                title="Re-run background removal & coin extraction"
+                onClick={async () => {
+                  const updated = await api.removePhotoBackground(item.id, activePhoto.id);
+                  setActivePhotoUrl(updated.url);
+                  qc.invalidateQueries({ queryKey: ["item", id] });
+                }}
+                className="absolute bottom-2.5 right-2.5 flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-950/85 hover:bg-slate-900 border border-slate-700 text-[11px] font-medium text-slate-200 cursor-pointer transition"
+              >
+                <Sparkles className="h-3 w-3 text-amber-400" />
+                Clean BG
+              </button>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {item.photos.map((p) => (
@@ -346,11 +371,14 @@ export function ItemDetailPage() {
                 <button
                   type="button"
                   onClick={() => setActivePhotoUrl(p.url)}
-                  className={`h-16 w-16 rounded-xl overflow-hidden border ${
+                  className={`h-16 w-16 rounded-xl overflow-hidden border relative ${
                     displayUrl === p.url ? "border-amber-400" : "border-slate-800"
                   }`}
                 >
                   <img src={p.url} alt={p.label} className="h-full w-full object-cover" />
+                  <span className="absolute inset-x-0 bottom-0 bg-slate-950/80 text-[9px] text-slate-200 px-1 py-0.5 text-center truncate">
+                    {PHOTO_LABEL_SHORT[p.label] || p.label}
+                  </span>
                 </button>
                 <button
                   type="button"

@@ -18,7 +18,7 @@ from PIL import Image
 
 from apps.accounts.auth import WorkspaceAuth
 
-from .image_processing import process_item_image
+from .image_processing import extract_coin_and_slab_images, process_item_image
 from .importer import TARGET_FIELDS, import_mapped_csv, preview_csv
 from .models import CollectionItem, Container, ItemPhoto
 from .presets import ITEM_PRESETS
@@ -861,6 +861,20 @@ def delete_item(request, item_id: UUID):
 # ---------------------------------------------------------------------------
 
 
+def _should_extract_coin_from_slab(item: CollectionItem, label: str) -> bool:
+    """Return True when an OBVERSE/REVERSE upload may contain a circular coin inside a grading slab."""
+    if label not in (ItemPhoto.Label.OBVERSE, ItemPhoto.Label.REVERSE):
+        return False
+    if item.category in (CollectionItem.Category.PAPER, CollectionItem.Category.BAR):
+        return False
+    if item.grading_service in (
+        CollectionItem.GradingService.PMG,
+        CollectionItem.GradingService.PCGS_BANKNOTE,
+    ):
+        return False
+    return True
+
+
 @catalog_router.post("/items/{item_id}/photos", response={201: PhotoOut})
 @transaction.atomic
 def upload_item_photo(
@@ -882,12 +896,17 @@ def upload_item_photo(
     width: int | None = None
     height: int | None = None
     upload_content: ContentFile | UploadedFile = file
+    slab_result: tuple[bytes, int, int, str] | None = None
     try:
-        processed_bytes, width, height, ext = process_item_image(
-            raw_bytes,
-            remove_background=should_remove_bg,
-            enhance=True,
-        )
+        if should_remove_bg and _should_extract_coin_from_slab(item, label):
+            primary_result, slab_result = extract_coin_and_slab_images(raw_bytes, enhance=True)
+            processed_bytes, width, height, ext = primary_result
+        else:
+            processed_bytes, width, height, ext = process_item_image(
+                raw_bytes,
+                remove_background=should_remove_bg,
+                enhance=True,
+            )
         upload_content = ContentFile(processed_bytes, name=f"photo-{label.lower()}.{ext}")
     except Exception:
         try:
@@ -903,7 +922,7 @@ def upload_item_photo(
     if make_primary:
         item.photos.update(is_primary=False)
 
-    next_order = (item.photos.count() + 1)
+    next_order = item.photos.count() + 1
     photo = ItemPhoto.objects.create(
         workspace=request.workspace,
         item=item,
@@ -914,6 +933,24 @@ def upload_item_photo(
         width=width,
         height=height,
     )
+
+    if (
+        slab_result is not None
+        and label == ItemPhoto.Label.OBVERSE
+        and not item.photos.filter(label=ItemPhoto.Label.SLAB_LABEL).exists()
+    ):
+        slab_bytes, slab_w, slab_h, slab_ext = slab_result
+        ItemPhoto.objects.create(
+            workspace=request.workspace,
+            item=item,
+            image=ContentFile(slab_bytes, name=f"photo-slab_label.{slab_ext}"),
+            label=ItemPhoto.Label.SLAB_LABEL,
+            is_primary=False,
+            sort_order=next_order + 1,
+            width=slab_w,
+            height=slab_h,
+        )
+
     return 201, _photo_to_out(photo)
 
 
@@ -924,9 +961,16 @@ def remove_photo_background(request, item_id: UUID, photo_id: UUID):
     photo = get_object_or_404(ItemPhoto, id=photo_id, item=item, workspace=request.workspace)
     with photo.image.open("rb") as fh:
         raw_bytes = fh.read()
-    processed_bytes, width, height, ext = process_item_image(
-        raw_bytes, remove_background=True, enhance=True
-    )
+
+    slab_result: tuple[bytes, int, int, str] | None = None
+    if _should_extract_coin_from_slab(item, photo.label):
+        primary_result, slab_result = extract_coin_and_slab_images(raw_bytes, enhance=True)
+        processed_bytes, width, height, ext = primary_result
+    else:
+        processed_bytes, width, height, ext = process_item_image(
+            raw_bytes, remove_background=True, enhance=True
+        )
+
     old_name = photo.image.name
     photo.image.save(f"clean-{photo.label.lower()}.{ext}", ContentFile(processed_bytes), save=False)
     photo.width = width
@@ -934,6 +978,24 @@ def remove_photo_background(request, item_id: UUID, photo_id: UUID):
     photo.save(update_fields=["image", "width", "height"])
     if old_name and old_name != photo.image.name:
         photo.image.storage.delete(old_name)
+
+    if (
+        slab_result is not None
+        and photo.label == ItemPhoto.Label.OBVERSE
+        and not item.photos.filter(label=ItemPhoto.Label.SLAB_LABEL).exists()
+    ):
+        slab_bytes, slab_w, slab_h, slab_ext = slab_result
+        ItemPhoto.objects.create(
+            workspace=request.workspace,
+            item=item,
+            image=ContentFile(slab_bytes, name=f"photo-slab_label.{slab_ext}"),
+            label=ItemPhoto.Label.SLAB_LABEL,
+            is_primary=False,
+            sort_order=item.photos.count() + 1,
+            width=slab_w,
+            height=slab_h,
+        )
+
     return _photo_to_out(photo)
 
 
