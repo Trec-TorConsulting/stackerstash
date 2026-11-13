@@ -3,6 +3,8 @@ schema: spec-driven
 context: |
   App Name: Stackers Stash
   Production Domain: stackerstash.com
+  Environment Model: Development is local (SQLite/Docker Compose + Vite); the HomeLab K3S cluster is production (namespace `stackerstash`, Helm chart `~/Projects/Personal/HomeLab-Redo/stackerstash`, never `deploy/chart/`).
+  GitHub Workflow: Always use `branch -> commit -> push -> PR -> merge` (never push directly to `main`; overriding branch protection with `--admin` when merging is allowed).
   Keep general project documentation and discoverable codebase facts out of this section.
 
 # Project context (optional)

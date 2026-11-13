@@ -30,6 +30,21 @@ class WorkspaceOut(Schema):
     name: str
     slug: str
     default_currency: str
+    auto_sort_enabled: bool = True
+
+
+class WorkspaceSettingsOut(Schema):
+    id: UUID
+    name: str
+    slug: str
+    default_currency: str
+    auto_sort_enabled: bool
+
+
+class WorkspaceSettingsPatchIn(Schema):
+    name: str | None = None
+    default_currency: str | None = None
+    auto_sort_enabled: bool | None = None
 
 
 class UserOut(Schema):
@@ -37,6 +52,7 @@ class UserOut(Schema):
     email: str
     display_name: str
     is_staff: bool
+    is_superuser: bool
     workspace: WorkspaceOut
 
 
@@ -67,11 +83,13 @@ def _serialize_user(user: User, workspace=None) -> UserOut:
         email=user.email,
         display_name=user.display_name,
         is_staff=user.is_staff,
+        is_superuser=user.is_superuser,
         workspace=WorkspaceOut(
             id=ws.id,
             name=ws.name,
             slug=ws.slug,
             default_currency=ws.default_currency,
+            auto_sort_enabled=ws.auto_sort_enabled,
         ),
     )
 
@@ -110,6 +128,42 @@ def login(request, payload: LoginIn):
 @auth_router.get("/me", response=UserOut, auth=WorkspaceAuth())
 def me(request):
     return _serialize_user(request.user, request.workspace)
+
+
+@settings_router.get("/workspace", response=WorkspaceSettingsOut)
+def get_workspace_settings(request):
+    ws = request.workspace
+    return WorkspaceSettingsOut(
+        id=ws.id,
+        name=ws.name,
+        slug=ws.slug,
+        default_currency=ws.default_currency,
+        auto_sort_enabled=ws.auto_sort_enabled,
+    )
+
+
+@settings_router.patch("/workspace", response=WorkspaceSettingsOut)
+def update_workspace_settings(request, payload: WorkspaceSettingsPatchIn):
+    ws = request.workspace
+    update_fields: list[str] = []
+    if payload.name is not None and payload.name.strip():
+        ws.name = payload.name.strip()[:120]
+        update_fields.append("name")
+    if payload.default_currency is not None and payload.default_currency.strip():
+        ws.default_currency = payload.default_currency.strip().upper()[:3]
+        update_fields.append("default_currency")
+    if payload.auto_sort_enabled is not None:
+        ws.auto_sort_enabled = payload.auto_sort_enabled
+        update_fields.append("auto_sort_enabled")
+    if update_fields:
+        ws.save(update_fields=update_fields)
+    return WorkspaceSettingsOut(
+        id=ws.id,
+        name=ws.name,
+        slug=ws.slug,
+        default_currency=ws.default_currency,
+        auto_sort_enabled=ws.auto_sort_enabled,
+    )
 
 
 @settings_router.get("/credentials", response=list[CredentialOut])

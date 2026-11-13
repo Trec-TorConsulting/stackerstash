@@ -39,3 +39,4 @@
 - [x] 6.1 Create production multi-stage `backend/Dockerfile`, `frontend/Dockerfile` (Nginx), and local `docker-compose.yml` for end-to-end dev/test.
 - [x] 6.2 Create Helm chart in `deploy/chart/` (web, celery-worker, celery-beat, frontend, Longhorn media PVC, Traefik Gateway API `HTTPRoute`, `cert-manager` `Certificate`, probes, and resource limits).
 - [x] 6.3 Run `openspec validate mvp-core-platform --strict`, full `pytest` suite, `npm run build` + `vitest`, and `helm lint` / `helm template`.
+- [x] 6.4 Record the live K3S deploy in `openspec/specs/k3s-deployment/spec.md`. Production rolls use `~/Projects/Personal/HomeLab-Redo/stackerstash`, not `deploy/chart/`.

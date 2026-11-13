@@ -10,7 +10,7 @@ admin.site.site_header = "Stacker Stash Admin"
 admin.site.site_title = "Stacker Stash Operator Portal"
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
+    path("super-admin/", admin.site.urls),
     path("healthz", healthz, name="healthz"),
     path("readyz", readyz, name="readyz"),
     path("api/v1/", api.urls),

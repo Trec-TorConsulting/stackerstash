@@ -35,9 +35,15 @@ Welcome to **Stacker Stash** — your self-hosted or SaaS vault for tracking coi
 ## 3. Adding Items via Vision AI Scan or Presets
 1. Navigate to **Scan / Add** in the top navigation bar.
 2. **Option A — Quick Presets**: Pick a common bullion preset (e.g., *1 oz American Silver Eagle*, *1 kg Copper Bar*, *10 oz Geiger Silver Bar*, *1 oz Gold Buffalo*) to pre-fill weight, purity, and metal type.
-3. **Option B — Vision AI Scan**: Upload or snap obverse/reverse photos (or enter a slab barcode/cert number) and click **Identify with Vision AI**.
-   - Uses your workspace's **Gemini Vision** key first, falls back to self-hosted **Ollama** if configured, or lets you edit fields manually.
-4. Assign a storage container, enter purchase price/date if desired, and click **Save to Vault**.
+3. **Option B — Guided Camera Capture**: Click **Take Photo** to open the CoinSnap-style guided viewfinder:
+   - Choose a **Coin (Circle)** or **Note / Bar (Rect)** reticle and adjust **1x–3x zoom** to center the item.
+   - Live framing feedback monitors brightness and edge sharpness (*"Sharp & well-lit — ready"*).
+   - Capture **Front (Obverse)** followed by **Back (Reverse)** (or skip the back for single-sided bars/slabs). A native camera capture fallback is provided automatically if browser camera access is unavailable.
+4. **Option C — Upload Photos**: Click **Upload Obverse / Reverse** to upload existing images.
+   - **Coins & Paper Notes** require both **Front (Obverse)** and **Back (Reverse)** photos before AI identification; Bars and Slabs accept a single photo.
+   - Uploaded photos undergo deeper quality and authenticity checks (resolution, blur, exposure, EXIF software/AI/screenshot markers, and screen-moiré detection). If a photo is flagged, you can review the warning and either replace the photo or click **Proceed Anyway** (which records an `OVERRIDDEN` verification badge on the item).
+5. Click **Identify with AI** to auto-fill specs, metal, estimated raw grade, and market value, then click **Save Item to Vault**.
+   - Titles are automatically normalized for uniformity across your vault, and a background appraisal job starts immediately upon saving (you will see live appraisal progress on the item's detail page).
 
 ---
 
@@ -55,7 +61,7 @@ Stacker Stash includes an **Import / Migrate** wizard on the **Collection** page
    - Review or adjust any **Column Mapping** dropdowns (or set columns to `— Skip —`).
    - Check the **Sample Preview** table to verify synthesized titles, metals, grades, and values.
    - *(Optional)* If your CSV contains image URLs (such as CoinSnap's `Obverse Image` / `Reverse Image`), keep **Download and attach photos** checked to import them best-effort.
-4. Click **Import Items**. Stacker Stash strips currency formatting (`$1,250.00`), normalizes metal/composition strings (`"90% Silver"` → `SILVER`, `"Copper-Nickel Clad"` → `NONE`), and synthesizes titles when a dedicated title column isn't present.
+4. Click **Import Items**. Stacker Stash strips currency formatting (`$1,250.00`), normalizes metal/composition strings (`"90% Silver"` → `SILVER`, `"Copper-Nickel Clad"` → `NONE`), cleans up item titles for vault uniformity, and automatically queues throttled background appraisals for newly imported items.
 
 ---
 
@@ -66,13 +72,16 @@ Stacker Stash includes an **Import / Migrate** wizard on the **Collection** page
 
 ---
 
-## 6. Appraisals, Cert Verification & Insurance Reports
-- **Appraise Item**: On any item's detail page, click **Appraise / Refresh Value** to run the valuation waterfall:
-  1. Live Spot Melt (for bullion)
-  2. PCGS Price Guide (when BYOK PCGS token is set)
-  3. Greysheet CDN (when BYOK Greysheet credentials are set)
-  4. AI Estimate fallback (clearly badged `AI Estimate`)
-- **Official Cert Links**: Graded slabs (PCGS, NGC, PMG, PCGS Banknote, CACG, ANACS) include direct one-click links to the grader's official cert verification page.
+## 6. Appraisals, Specs, Explainability & Offline Coin-Show Mode
+- **Multi-Source Appraise Now**: On any item's detail page, click **Appraise Now** to run a non-blocking, concurrent appraisal pipeline:
+  1. **Live Spot Melt Floor**: Immediately updates precious-metal melt value and ensures market value never drops below melt.
+  2. **Numismatic Specs Enrichment**: Pulls mintage, composition, diameter, weight, edge, designer, and catalog numbers from PCGS, Numista, or AI (preserving any specs you manually edited).
+  3. **Price Guides & Certs**: Evaluates PCGS, Greysheet CDN, NumisMedia FMV, and official cert links (PCGS, NGC, PMG, PCGS Banknote, CACG, ANACS).
+  4. **Realized Sold Comps & Active Market Asks**: Aggregates recent eBay sold listings (or falls back to eBay Browse active asking prices when Marketplace Insights access isn't enabled), plus zero-key **Verify Comps** quick links to eBay Sold, Heritage Auctions, GreatCollections, and Stack's Bowers.
+  5. **Multimodal AI Vision & Raw Grade Estimation**: Analyzes your obverse/reverse/slab photos alongside metadata (and optional Gemini Google Search grounding) to produce a price range, value drivers, collectibility thesis, and—for raw/unslabbed coins and notes—an **Estimated Grade**, likely grade range, and **Grading ROI** analysis.
+- **Why It's Valued Here**: View the Melt vs. Collector Premium % bar, Low–Fair–High range, Confidence badge (`HIGH` / `MEDIUM` / `LOW`), key value drivers, and expandable Source Comparison table.
+- **Collectibility & Hold Thesis**: Understand whether an item is *Bullion / Melt-Driven*, *Semi-Numismatic*, *Key Date / Scarce*, or *Numismatic*, including grading upside tips for raw coins.
+- **Offline Coin-Show Mode (PWA)**: Viewed items, their valuation breakdowns, specs, and photos are cached locally in the PWA so you can inspect them at coin shows or local coin shops even without internet access.
 - **Insurance / Print Report**: On the **Collection** page, click **Print Report** (or **Export CSV** / download JSON from `/api/v1/catalog/items/export/json`) for a clean, print-ready inventory report.
 
 ---

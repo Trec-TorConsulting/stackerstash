@@ -64,6 +64,7 @@ class Workspace(models.Model):
         User, on_delete=models.CASCADE, related_name="owned_workspaces"
     )
     default_currency = models.CharField(max_length=3, default="USD")
+    auto_sort_enabled = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -106,6 +107,10 @@ class ProviderCredential(models.Model):
         PCGS = "PCGS", "PCGS API Token"
         GREYSHEET_KEY = "GREYSHEET_KEY", "Greysheet API Key"
         GREYSHEET_TOKEN = "GREYSHEET_TOKEN", "Greysheet API Token"
+        NUMISTA_KEY = "NUMISTA_KEY", "Numista API Key"
+        NUMISMEDIA_KEY = "NUMISMEDIA_KEY", "NumisMedia FMV API Key"
+        EBAY_CLIENT_ID = "EBAY_CLIENT_ID", "eBay App Client ID"
+        EBAY_CLIENT_SECRET = "EBAY_CLIENT_SECRET", "eBay App Client Secret"
         OLLAMA_URL = "OLLAMA_URL", "Self-Hosted Ollama URL"
         OLLAMA_MODEL = "OLLAMA_MODEL", "Self-Hosted Ollama Vision Model"
 

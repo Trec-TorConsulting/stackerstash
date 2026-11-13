@@ -9,6 +9,45 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: "autoUpdate",
+      includeAssets: ["favicon.svg", "favicon-32x32.png", "apple-touch-icon.png"],
+      devOptions: {
+        enabled: true,
+      },
+      workbox: {
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) =>
+              url.pathname.startsWith("/api/v1/catalog/items") ||
+              url.pathname.startsWith("/api/v1/valuation"),
+            handler: "NetworkFirst",
+            options: {
+              cacheName: "api-items-valuation-cache",
+              networkTimeoutSeconds: 4,
+              expiration: {
+                maxEntries: 200,
+                maxAgeSeconds: 60 * 60 * 24 * 7,
+              },
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
+            },
+          },
+          {
+            urlPattern: ({ url }) => url.pathname.startsWith("/media/"),
+            handler: "CacheFirst",
+            options: {
+              cacheName: "item-media-cache",
+              expiration: {
+                maxEntries: 300,
+                maxAgeSeconds: 60 * 60 * 24 * 30,
+              },
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
+            },
+          },
+        ],
+      },
       manifest: {
         name: "Stacker Stash — Coins, Currency & Bullion",
         short_name: "Stacker Stash",
@@ -16,7 +55,27 @@ export default defineConfig({
         theme_color: "#0b0f19",
         background_color: "#0b0f19",
         display: "standalone",
+        start_url: "/",
+        scope: "/",
         icons: [
+          {
+            src: "/icon-192.png",
+            sizes: "192x192",
+            type: "image/png",
+            purpose: "any",
+          },
+          {
+            src: "/icon-512.png",
+            sizes: "512x512",
+            type: "image/png",
+            purpose: "any",
+          },
+          {
+            src: "/icon-512.png",
+            sizes: "512x512",
+            type: "image/png",
+            purpose: "maskable",
+          },
           {
             src: "/icon-192.svg",
             sizes: "192x192",
@@ -35,7 +94,8 @@ export default defineConfig({
     proxy: {
       "/api": "http://127.0.0.1:8000",
       "/media": "http://127.0.0.1:8000",
-      "/admin": "http://127.0.0.1:8000",
+      "/static": "http://127.0.0.1:8000",
+      "/super-admin": "http://127.0.0.1:8000",
     },
   },
   test: {

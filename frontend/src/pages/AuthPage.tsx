@@ -1,13 +1,16 @@
 import { useState } from "react";
-import { ShieldCheck } from "lucide-react";
+import { Link } from "react-router-dom";
+import { BrandLogo } from "../components/BrandLogo";
+import { SiteFooter } from "../components/SiteFooter";
 import { api, setAuthToken, type AuthUser } from "../lib/api";
 
 interface AuthPageProps {
   onAuth: (user: AuthUser) => void;
+  initialMode?: "login" | "register";
 }
 
-export function AuthPage({ onAuth }: AuthPageProps) {
-  const [mode, setMode] = useState<"login" | "register">("login");
+export function AuthPage({ onAuth, initialMode = "login" }: AuthPageProps) {
+  const [mode, setMode] = useState<"login" | "register">(initialMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -33,19 +36,20 @@ export function AuthPage({ onAuth }: AuthPageProps) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 md:p-8 shadow-2xl">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="h-11 w-11 rounded-xl bg-amber-500/15 border border-amber-500/40 flex items-center justify-center text-amber-400">
-            <ShieldCheck className="h-6 w-6" />
+    <div className="min-h-screen bg-slate-950 flex flex-col">
+      <header className="border-b border-slate-800/80 bg-slate-950/90 px-4 md:px-8 h-16 flex items-center justify-between">
+        <Link to="/">
+          <BrandLogo size="sm" />
+        </Link>
+        <Link to="/" className="text-xs text-slate-400 hover:text-amber-400 transition">
+          Back to Home
+        </Link>
+      </header>
+      <div className="flex-1 flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 md:p-8 shadow-2xl">
+          <div className="mb-6">
+            <BrandLogo size="lg" subtitle="Coins, Paper Currency, Slabs & Bullion" />
           </div>
-          <div>
-            <h1 className="text-xl font-bold text-slate-100">Stacker Stash</h1>
-            <p className="text-xs text-slate-400">
-              Coins, Paper Currency, Slabs &amp; Bullion Tracker
-            </p>
-          </div>
-        </div>
 
         <div className="grid grid-cols-2 gap-2 p-1 bg-slate-950 rounded-xl mb-6 border border-slate-800">
           <button
@@ -120,7 +124,9 @@ export function AuthPage({ onAuth }: AuthPageProps) {
             {loading ? "Please wait..." : mode === "login" ? "Sign In" : "Create Account"}
           </button>
         </form>
+        </div>
       </div>
+      <SiteFooter compact />
     </div>
   );
 }

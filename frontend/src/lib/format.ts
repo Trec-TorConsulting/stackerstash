@@ -27,6 +27,16 @@ export const CATEGORY_LABELS: Record<string, string> = {
   OTHER: "Other",
 };
 
+export const SORT_CATEGORY_LABELS: Record<string, string> = {
+  COIN: "Coins",
+  PAPER: "Paper Currency",
+  BAR: "Bars / Ingots",
+  ROUND: "Rounds",
+  OTHER: "Other",
+};
+
+export const SORT_CATEGORY_ORDER: string[] = ["COIN", "PAPER", "BAR", "ROUND", "OTHER"];
+
 export const METAL_LABELS: Record<string, string> = {
   NONE: "Non-Bullion",
   GOLD: "Gold (Au)",

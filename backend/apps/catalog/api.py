@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
+from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import Q
 from django.http import HttpResponse
@@ -17,6 +18,7 @@ from PIL import Image
 
 from apps.accounts.auth import WorkspaceAuth
 
+from .image_processing import process_item_image
 from .importer import TARGET_FIELDS, import_mapped_csv, preview_csv
 from .models import CollectionItem, Container, ItemPhoto
 from .presets import ITEM_PRESETS
@@ -60,6 +62,8 @@ class PhotoOut(Schema):
     sort_order: int
     width: int | None
     height: int | None
+    verification_status: str
+    verification_notes: list[str]
     created_at: datetime
 
 
@@ -92,6 +96,20 @@ class ItemIn(Schema):
     market_value_unit: Decimal = Decimal("0.00")
     valuation_source: str = CollectionItem.ValuationSource.MANUAL
     is_estimate: bool = False
+    mint_mark: str = ""
+    mintage: int | None = None
+    variety: str = ""
+    composition: str = ""
+    gross_weight_grams: Decimal | None = None
+    diameter_mm: Decimal | None = None
+    thickness_mm: Decimal | None = None
+    edge_type: str = ""
+    designer: str = ""
+    catalog_numbers: dict[str, Any] = {}
+    intake_source: str = CollectionItem.IntakeSource.MANUAL
+    photo_verification_status: str = CollectionItem.PhotoVerificationStatus.NONE
+    photo_verification_notes: list[str] = []
+    auto_appraise: bool = True
     tags: list[str] = []
     attributes: dict[str, Any] = {}
     notes: str = ""
@@ -116,6 +134,9 @@ class ItemPatch(Schema):
     cert_number: str | None = None
     grade: str | None = None
     estimated_grade: str | None = None
+    estimated_grade_range: str | None = None
+    estimated_grade_rationale: str | None = None
+    grading_upside_usd: Decimal | None = None
     ai_confidence: float | None = None
     serial_number: str | None = None
     purchase_price: Decimal | None = None
@@ -126,6 +147,19 @@ class ItemPatch(Schema):
     market_value_unit: Decimal | None = None
     valuation_source: str | None = None
     is_estimate: bool | None = None
+    mint_mark: str | None = None
+    mintage: int | None = None
+    variety: str | None = None
+    composition: str | None = None
+    gross_weight_grams: Decimal | None = None
+    diameter_mm: Decimal | None = None
+    thickness_mm: Decimal | None = None
+    edge_type: str | None = None
+    designer: str | None = None
+    catalog_numbers: dict[str, Any] | None = None
+    sort_category: str | None = None
+    sort_subcategory: str | None = None
+    sort_override: bool | None = None
     tags: list[str] | None = None
     attributes: dict[str, Any] | None = None
     notes: str | None = None
@@ -153,6 +187,9 @@ class ItemOut(Schema):
     cert_number: str
     grade: str
     estimated_grade: str
+    estimated_grade_range: str
+    estimated_grade_rationale: str
+    grading_upside_usd: Decimal | None
     ai_confidence: float | None
     serial_number: str
     purchase_price: Decimal | None
@@ -162,13 +199,40 @@ class ItemOut(Schema):
     sold_date: date | None
     melt_value_unit: Decimal
     market_value_unit: Decimal
+    market_value_low: Decimal | None
+    market_value_high: Decimal | None
     total_melt_value: Decimal
     total_market_value: Decimal
     collector_premium_total: Decimal
+    collector_premium_pct: float | None
     unrealized_gain_loss: Decimal | None
     valuation_source: str
+    valuation_confidence: str
+    collectibility_tier: str
+    hold_outlook: str
+    valuation_drivers: list[str]
     is_estimate: bool
     valued_at: datetime | None
+    mint_mark: str
+    mintage: int | None
+    variety: str
+    composition: str
+    gross_weight_grams: Decimal | None
+    diameter_mm: Decimal | None
+    thickness_mm: Decimal | None
+    edge_type: str
+    designer: str
+    catalog_numbers: dict[str, Any]
+    specs_provenance: dict[str, str]
+    intake_source: str
+    photo_verification_status: str
+    photo_verification_notes: list[str]
+    sort_category: str
+    sort_subcategory: str
+    sort_override: bool
+    sort_updated_at: datetime | None
+    is_graded: bool
+    appraisal_job_id: UUID | None = None
     tags: list[str]
     attributes: dict[str, Any]
     notes: str
@@ -200,8 +264,33 @@ class CsvImportPreviewOut(Schema):
 
 class MappedCsvImportResult(Schema):
     created_count: int
+    queued_appraisals: int = 0
     errors: list[CsvImportRowError]
     warnings: list[str]
+
+
+class BulkDeleteIn(Schema):
+    item_ids: list[UUID]
+
+
+class BulkDeleteOut(Schema):
+    deleted_count: int
+
+
+class BulkUpdateIn(Schema):
+    item_ids: list[UUID]
+    category: str | None = None
+    status: str | None = None
+    container_id: UUID | None = None
+    clear_container: bool = False
+    metal_type: str | None = None
+    grading_service: str | None = None
+    add_tags: list[str] | None = None
+    remove_tags: list[str] | None = None
+
+
+class BulkUpdateOut(Schema):
+    updated_count: int
 
 
 # ---------------------------------------------------------------------------
@@ -218,11 +307,13 @@ def _photo_to_out(photo: ItemPhoto) -> PhotoOut:
         sort_order=photo.sort_order,
         width=photo.width,
         height=photo.height,
+        verification_status=photo.verification_status,
+        verification_notes=photo.verification_notes or [],
         created_at=photo.created_at,
     )
 
 
-def _item_to_out(item: CollectionItem) -> ItemOut:
+def _item_to_out(item: CollectionItem, appraisal_job_id: UUID | None = None) -> ItemOut:
     photos = list(item.photos.all())
     primary = next((p for p in photos if p.is_primary), photos[0] if photos else None)
     return ItemOut(
@@ -247,6 +338,9 @@ def _item_to_out(item: CollectionItem) -> ItemOut:
         cert_number=item.cert_number,
         grade=item.grade,
         estimated_grade=item.estimated_grade,
+        estimated_grade_range=item.estimated_grade_range,
+        estimated_grade_rationale=item.estimated_grade_rationale,
+        grading_upside_usd=item.grading_upside_usd,
         ai_confidence=item.ai_confidence,
         serial_number=item.serial_number,
         purchase_price=item.purchase_price,
@@ -256,13 +350,40 @@ def _item_to_out(item: CollectionItem) -> ItemOut:
         sold_date=item.sold_date,
         melt_value_unit=item.melt_value_unit,
         market_value_unit=item.market_value_unit,
+        market_value_low=item.market_value_low,
+        market_value_high=item.market_value_high,
         total_melt_value=item.total_melt_value,
         total_market_value=item.total_market_value,
         collector_premium_total=item.collector_premium_total,
+        collector_premium_pct=item.collector_premium_pct,
         unrealized_gain_loss=item.unrealized_gain_loss,
         valuation_source=item.valuation_source,
+        valuation_confidence=item.valuation_confidence,
+        collectibility_tier=item.collectibility_tier,
+        hold_outlook=item.hold_outlook,
+        valuation_drivers=item.valuation_drivers or [],
         is_estimate=item.is_estimate,
         valued_at=item.valued_at,
+        mint_mark=item.mint_mark,
+        mintage=item.mintage,
+        variety=item.variety,
+        composition=item.composition,
+        gross_weight_grams=item.gross_weight_grams,
+        diameter_mm=item.diameter_mm,
+        thickness_mm=item.thickness_mm,
+        edge_type=item.edge_type,
+        designer=item.designer,
+        catalog_numbers=item.catalog_numbers or {},
+        specs_provenance=item.specs_provenance or {},
+        intake_source=item.intake_source,
+        photo_verification_status=item.photo_verification_status,
+        photo_verification_notes=item.photo_verification_notes or [],
+        sort_category=item.sort_category,
+        sort_subcategory=item.sort_subcategory,
+        sort_override=item.sort_override,
+        sort_updated_at=item.sort_updated_at,
+        is_graded=item.is_graded,
+        appraisal_job_id=appraisal_job_id,
         tags=item.tags or [],
         attributes=item.attributes or {},
         notes=item.notes,
@@ -404,6 +525,9 @@ def get_item_presets(request):
 def list_items(
     request,
     category: str | None = None,
+    sort_category: str | None = None,
+    sort_subcategory: str | None = None,
+    graded: bool | None = None,
     metal_type: str | None = None,
     container_id: UUID | None = None,
     grading_service: str | None = None,
@@ -421,6 +545,19 @@ def list_items(
 
     if category:
         qs = qs.filter(category=category)
+    if sort_category:
+        qs = qs.filter(sort_category=sort_category)
+    if sort_subcategory:
+        qs = qs.filter(sort_subcategory=sort_subcategory)
+    if graded is True:
+        qs = qs.filter(
+            Q(category=CollectionItem.Category.SLAB)
+            | ~Q(grading_service__in=["", CollectionItem.GradingService.NONE])
+        )
+    elif graded is False:
+        qs = qs.exclude(category=CollectionItem.Category.SLAB).filter(
+            grading_service__in=["", CollectionItem.GradingService.NONE]
+        )
     if metal_type:
         qs = qs.filter(metal_type=metal_type)
     if container_id:
@@ -503,11 +640,148 @@ def create_item(request, payload: ItemIn):
         notes=payload.notes,
     )
     # Compute live melt value if a spot snapshot exists
-    from apps.valuation.services import refresh_item_melt_from_latest_spot
+    from apps.valuation.services import (
+        _clean_item_title,
+        refresh_item_melt_from_latest_spot,
+        start_appraisal_job,
+    )
+
+    raw_title = payload.title.strip()
+    if payload.intake_source in {
+        CollectionItem.IntakeSource.CAMERA,
+        CollectionItem.IntakeSource.UPLOAD,
+        CollectionItem.IntakeSource.CSV,
+    }:
+        cleaned = _clean_item_title(raw_title)
+        if cleaned:
+            item.title = cleaned
+
+    item.intake_source = payload.intake_source
+    item.photo_verification_status = payload.photo_verification_status
+    item.photo_verification_notes = payload.photo_verification_notes
+    item.mint_mark = payload.mint_mark
+    item.mintage = payload.mintage
+    item.variety = payload.variety
+    item.composition = payload.composition
+    item.gross_weight_grams = payload.gross_weight_grams
+    item.diameter_mm = payload.diameter_mm
+    item.thickness_mm = payload.thickness_mm
+    item.edge_type = payload.edge_type
+    item.designer = payload.designer
+    item.catalog_numbers = payload.catalog_numbers
 
     item.save()
     refresh_item_melt_from_latest_spot(item)
-    return 201, _item_to_out(item)
+
+    from apps.catalog.auto_sort import enqueue_item_auto_sort
+
+    enqueue_item_auto_sort(item)
+
+    job_id: UUID | None = None
+    if payload.auto_appraise and payload.intake_source in {
+        CollectionItem.IntakeSource.CAMERA,
+        CollectionItem.IntakeSource.UPLOAD,
+    }:
+        job = start_appraisal_job(item, request.workspace)
+        job_id = job.id
+
+    return 201, _item_to_out(item, appraisal_job_id=job_id)
+
+
+@catalog_router.post("/items/bulk-delete", response=BulkDeleteOut)
+@transaction.atomic
+def bulk_delete_items(request, payload: BulkDeleteIn):
+    if not payload.item_ids:
+        return BulkDeleteOut(deleted_count=0)
+    qs = CollectionItem.objects.filter(
+        workspace=request.workspace, id__in=payload.item_ids
+    ).prefetch_related("photos")
+    items = list(qs)
+    for item in items:
+        for photo in item.photos.all():
+            photo.image.delete(save=False)
+    CollectionItem.objects.filter(
+        workspace=request.workspace, id__in=[item.id for item in items]
+    ).delete()
+    return BulkDeleteOut(deleted_count=len(items))
+
+
+@catalog_router.post("/items/bulk-update", response=BulkUpdateOut)
+@transaction.atomic
+def bulk_update_items(request, payload: BulkUpdateIn):
+    if not payload.item_ids:
+        return BulkUpdateOut(updated_count=0)
+
+    if payload.category is not None and payload.category not in dict(CollectionItem.Category.choices):
+        raise HttpError(400, f"Invalid category: {payload.category}")
+    if payload.status is not None and payload.status not in dict(CollectionItem.Status.choices):
+        raise HttpError(400, f"Invalid status: {payload.status}")
+    if payload.metal_type is not None and payload.metal_type not in dict(CollectionItem.MetalType.choices):
+        raise HttpError(400, f"Invalid metal_type: {payload.metal_type}")
+    if payload.grading_service is not None and payload.grading_service not in dict(
+        CollectionItem.GradingService.choices
+    ):
+        raise HttpError(400, f"Invalid grading_service: {payload.grading_service}")
+
+    target_container = None
+    update_container = False
+    if payload.clear_container:
+        update_container = True
+        target_container = None
+    elif payload.container_id is not None:
+        update_container = True
+        target_container = _validate_container(request.workspace, payload.container_id)
+
+    items = list(
+        CollectionItem.objects.filter(workspace=request.workspace, id__in=payload.item_ids)
+    )
+    if not items:
+        return BulkUpdateOut(updated_count=0)
+
+    from apps.valuation.services import refresh_item_melt_from_latest_spot
+
+    add_tags = [t.strip() for t in (payload.add_tags or []) if t.strip()]
+    remove_tags_set = {t.strip().lower() for t in (payload.remove_tags or []) if t.strip()}
+
+    for item in items:
+        if payload.category is not None:
+            item.category = payload.category
+        if payload.status is not None:
+            item.status = payload.status
+        if update_container:
+            item.container = target_container
+        if payload.metal_type is not None:
+            item.metal_type = payload.metal_type
+        if payload.grading_service is not None:
+            item.grading_service = payload.grading_service
+        if add_tags or remove_tags_set:
+            existing = list(item.tags or [])
+            if remove_tags_set:
+                existing = [t for t in existing if t.lower() not in remove_tags_set]
+            existing_lower = {t.lower() for t in existing}
+            for t in add_tags:
+                if t.lower() not in existing_lower:
+                    existing.append(t)
+                    existing_lower.add(t.lower())
+            item.tags = existing
+
+        item.save()
+        if payload.metal_type is not None:
+            refresh_item_melt_from_latest_spot(item)
+
+    return BulkUpdateOut(updated_count=len(items))
+
+
+class ResortOut(Schema):
+    queued_count: int
+
+
+@catalog_router.post("/items/resort", response=ResortOut)
+def resort_workspace_items(request):
+    from apps.catalog.auto_sort import enqueue_workspace_resort
+
+    queued = enqueue_workspace_resort(request.workspace.id)
+    return ResortOut(queued_count=queued)
 
 
 @catalog_router.get("/items/{item_id}", response=ItemOut)
@@ -520,6 +794,22 @@ def get_item(request, item_id: UUID):
     return _item_to_out(item)
 
 
+SPEC_FIELDS = {
+    "title",
+    "estimated_grade",
+    "mint_mark",
+    "mintage",
+    "variety",
+    "composition",
+    "gross_weight_grams",
+    "diameter_mm",
+    "thickness_mm",
+    "edge_type",
+    "designer",
+    "catalog_numbers",
+}
+
+
 @catalog_router.patch("/items/{item_id}", response=ItemOut)
 def update_item(request, item_id: UUID, payload: ItemPatch):
     item = get_object_or_404(
@@ -530,11 +820,26 @@ def update_item(request, item_id: UUID, payload: ItemPatch):
     data = payload.dict(exclude_unset=True)
     if "container_id" in data:
         item.container = _validate_container(request.workspace, data.pop("container_id"))
+    provenance = dict(item.specs_provenance or {})
     for field, value in data.items():
         setattr(item, field, value)
+        if field in SPEC_FIELDS:
+            if value not in (None, "", {}):
+                provenance[field] = "USER"
+            else:
+                provenance.pop(field, None)
+    item.specs_provenance = provenance
+    if ("sort_category" in data or "sort_subcategory" in data) and data.get("sort_override") is not False:
+        item.sort_override = True
+        item.sort_updated_at = timezone.now()
     if "market_value_unit" in data:
         item.valued_at = timezone.now()
     item.save()
+
+    if data.get("sort_override") is False:
+        from apps.catalog.auto_sort import enqueue_item_auto_sort
+
+        enqueue_item_auto_sort(item, force=True)
 
     from apps.valuation.services import refresh_item_melt_from_latest_spot
 
@@ -545,6 +850,8 @@ def update_item(request, item_id: UUID, payload: ItemPatch):
 @catalog_router.delete("/items/{item_id}", response={204: None})
 def delete_item(request, item_id: UUID):
     item = get_object_or_404(CollectionItem, id=item_id, workspace=request.workspace)
+    for photo in item.photos.all():
+        photo.image.delete(save=False)
     item.delete()
     return 204, None
 
@@ -562,20 +869,34 @@ def upload_item_photo(
     file: UploadedFile = File(...),
     label: str = Form(ItemPhoto.Label.OBVERSE),
     is_primary: bool = Form(False),
+    remove_background: bool = Form(True),
 ):
     item = get_object_or_404(CollectionItem, id=item_id, workspace=request.workspace)
     if label not in dict(ItemPhoto.Label.choices):
         raise HttpError(400, f"Invalid photo label: {label}")
 
+    file.seek(0)
+    raw_bytes = file.read()
+    should_remove_bg = remove_background and label != ItemPhoto.Label.RECEIPT
+
     width: int | None = None
     height: int | None = None
+    upload_content: ContentFile | UploadedFile = file
     try:
-        file.seek(0)
-        with Image.open(file) as img:
-            width, height = img.size
-        file.seek(0)
+        processed_bytes, width, height, ext = process_item_image(
+            raw_bytes,
+            remove_background=should_remove_bg,
+            enhance=True,
+        )
+        upload_content = ContentFile(processed_bytes, name=f"photo-{label.lower()}.{ext}")
     except Exception:
+        try:
+            with Image.open(io.BytesIO(raw_bytes)) as img:
+                width, height = img.size
+        except Exception:
+            pass
         file.seek(0)
+        upload_content = file
 
     has_existing = item.photos.exists()
     make_primary = is_primary or not has_existing
@@ -586,7 +907,7 @@ def upload_item_photo(
     photo = ItemPhoto.objects.create(
         workspace=request.workspace,
         item=item,
-        image=file,
+        image=upload_content,
         label=label,
         is_primary=make_primary,
         sort_order=next_order,
@@ -594,6 +915,26 @@ def upload_item_photo(
         height=height,
     )
     return 201, _photo_to_out(photo)
+
+
+@catalog_router.post("/items/{item_id}/photos/{photo_id}/remove-background", response=PhotoOut)
+@transaction.atomic
+def remove_photo_background(request, item_id: UUID, photo_id: UUID):
+    item = get_object_or_404(CollectionItem, id=item_id, workspace=request.workspace)
+    photo = get_object_or_404(ItemPhoto, id=photo_id, item=item, workspace=request.workspace)
+    with photo.image.open("rb") as fh:
+        raw_bytes = fh.read()
+    processed_bytes, width, height, ext = process_item_image(
+        raw_bytes, remove_background=True, enhance=True
+    )
+    old_name = photo.image.name
+    photo.image.save(f"clean-{photo.label.lower()}.{ext}", ContentFile(processed_bytes), save=False)
+    photo.width = width
+    photo.height = height
+    photo.save(update_fields=["image", "width", "height"])
+    if old_name and old_name != photo.image.name:
+        photo.image.storage.delete(old_name)
+    return _photo_to_out(photo)
 
 
 @catalog_router.patch("/items/{item_id}/photos/{photo_id}/primary", response=PhotoOut)
@@ -717,7 +1058,7 @@ def import_items_csv(request, file: UploadedFile = File(...)):
             purchase_val = (
                 Decimal(row["purchase_price"]) if row.get("purchase_price") else None
             )
-            CollectionItem.objects.create(
+            created_item = CollectionItem.objects.create(
                 workspace=request.workspace,
                 title=title,
                 category=(row.get("category") or "COIN").upper(),
@@ -738,6 +1079,9 @@ def import_items_csv(request, file: UploadedFile = File(...)):
                 market_value_unit=market_val,
                 notes=row.get("notes") or "",
             )
+            from apps.catalog.auto_sort import enqueue_item_auto_sort
+
+            enqueue_item_auto_sort(created_item)
             created_count += 1
         except (InvalidOperation, ValueError) as exc:
             errors.append(CsvImportRowError(row=idx, error=str(exc)))
@@ -765,6 +1109,7 @@ def import_items_csv_mapped(
     file: UploadedFile = File(...),
     mapping: str = Form(""),
     import_photos: bool = Form(False),
+    remove_background: bool = Form(True),
 ):
     parsed_mapping: dict[str, str] | None = None
     if mapping.strip():
@@ -781,9 +1126,11 @@ def import_items_csv_mapped(
         workspace=request.workspace,
         mapping=parsed_mapping,
         import_photos=import_photos,
+        remove_background=remove_background,
     )
     return MappedCsvImportResult(
         created_count=res.created_count,
+        queued_appraisals=res.queued_appraisals,
         errors=[CsvImportRowError(**e) for e in res.errors],
         warnings=res.warnings,
     )
