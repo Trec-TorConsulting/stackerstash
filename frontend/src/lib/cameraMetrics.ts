@@ -10,10 +10,15 @@ export interface FrameMetricsResult {
   meanFrameDiff: number;
   innerEdge: number;
   ringEdge: number;
+  glareRatio: number;
+  hasGlare: boolean;
   isSteady: boolean;
   quality: FrameQuality;
   recommendedZoom: number;
 }
+
+const GLARE_LUMA_THRESHOLD = 240;
+const GLARE_RATIO_THRESHOLD = 0.04;
 
 /**
  * Compute mean gradient sharpness score for a grayscale luma buffer.
@@ -40,8 +45,8 @@ export function computeSharpnessScore(
 }
 
 /**
- * Evaluate exposure, sharpness, frame-to-frame stability, and center-vs-ring
- * subject framing from a grayscale luma buffer (typically 160x120).
+ * Evaluate exposure, reticle-weighted sharpness, specular glare, frame-to-frame
+ * stability, and center-vs-ring subject framing from a grayscale luma buffer.
  */
 export function evaluateFrameMetrics(
   luma: Float32Array,
@@ -81,6 +86,8 @@ export function evaluateFrameMetrics(
   let edgeCount = 0;
   let innerEdgeSum = 0;
   let innerCount = 0;
+  let innerLumaSum = 0;
+  let innerGlareCount = 0;
   let ringEdgeSum = 0;
   let ringCount = 0;
 
@@ -96,6 +103,10 @@ export function evaluateFrameMetrics(
       const inInner = col >= innerX0 && col <= innerX1 && row >= innerY0 && row <= innerY1;
       if (inInner) {
         innerEdgeSum += g;
+        innerLumaSum += luma[p];
+        if (luma[p] > GLARE_LUMA_THRESHOLD) {
+          innerGlareCount++;
+        }
         innerCount++;
       } else if (col >= outerX0 && col <= outerX1 && row >= outerY0 && row <= outerY1) {
         ringEdgeSum += g;
@@ -106,15 +117,23 @@ export function evaluateFrameMetrics(
 
   const meanEdge = edgeCount > 0 ? edgeSum / edgeCount : 0;
   const innerEdge = innerCount > 0 ? innerEdgeSum / innerCount : 0;
+  const innerLuma = innerCount > 0 ? innerLumaSum / innerCount : meanLuma;
+  const glareRatio = innerCount > 0 ? innerGlareCount / innerCount : 0;
+  const hasGlare = glareRatio > GLARE_RATIO_THRESHOLD;
   const ringEdge = ringCount > 0 ? ringEdgeSum / ringCount : 0;
   const isSteady = prevLuma !== null && meanFrameDiff < 11.5;
 
+  // Weight sharpness toward the subject inside the reticle
+  const effectiveEdge = Math.max(meanEdge, innerEdge * 0.75);
+
   let quality: FrameQuality;
-  if (meanLuma < 45) {
+  if (hasGlare) {
+    quality = { label: 'Glare detected — tilt item or diffuse light', tone: 'warn', isGood: false };
+  } else if (innerLuma < 45 && meanLuma < 45) {
     quality = { label: 'Too dark — add more light', tone: 'warn', isGood: false };
-  } else if (meanLuma > 238) {
+  } else if (innerLuma > 238 || meanLuma > 238) {
     quality = { label: 'Too bright — reduce glare', tone: 'warn', isGood: false };
-  } else if (meanEdge < 7.5) {
+  } else if (effectiveEdge < 7.5) {
     quality = { label: 'Focus closer for sharper detail', tone: 'warn', isGood: false };
   } else {
     quality = {
@@ -135,9 +154,10 @@ export function evaluateFrameMetrics(
     meanFrameDiff,
     innerEdge,
     ringEdge,
+    glareRatio,
+    hasGlare,
     isSteady,
     quality,
     recommendedZoom,
   };
 }
-

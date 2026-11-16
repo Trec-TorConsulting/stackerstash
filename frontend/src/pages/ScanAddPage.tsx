@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Camera, CheckCircle2, Sparkles, Upload } from "lucide-react";
+import { AlertTriangle, Camera, CheckCircle2, Crop, Sparkles, Upload, X } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { GuidedCameraModal, type GuidedCameraResult } from "../components/GuidedCameraModal";
+import { PhotoCropRotateView } from "../components/PhotoCropRotateView";
 import { api, type ContainerNode } from "../lib/api";
 import { CATEGORY_LABELS, METAL_LABELS } from "../lib/format";
 import { normalizeImageFileForUpload } from "../lib/imageUtils";
@@ -28,6 +29,7 @@ export function ScanAddPage() {
   });
 
   const [files, setFiles] = useState<Array<{ file: File; label: string; preview: string }>>([]);
+  const [editingPhotoIndex, setEditingPhotoIndex] = useState<number | null>(null);
   const [cameraModalOpen, setCameraModalOpen] = useState(false);
   const [intakeSource, setIntakeSource] = useState<"CAMERA" | "UPLOAD" | "MANUAL">("MANUAL");
   const [verificationStatus, setVerificationStatus] = useState<"NONE" | "VERIFIED" | "FLAGGED" | "OVERRIDDEN">("NONE");
@@ -245,7 +247,8 @@ export function ScanAddPage() {
       });
 
       for (let i = 0; i < files.length; i++) {
-        await api.uploadPhoto(created.id, files[i].file, files[i].label, i === 0, removeBackground);
+        const uploadFile = await normalizeImageFileForUpload(files[i].file, 2048, 0.92);
+        await api.uploadPhoto(created.id, uploadFile, files[i].label, i === 0, removeBackground);
       }
       qc.invalidateQueries({ queryKey: ["items"] });
       qc.invalidateQueries({ queryKey: ["portfolio-summary"] });
@@ -311,11 +314,21 @@ export function ScanAddPage() {
             <div className="flex flex-wrap gap-3">
               {files.map((f, idx) => (
                 <div key={idx} className="w-24 space-y-1">
-                  <img
-                    src={f.preview}
-                    alt={`Upload ${idx + 1}`}
-                    className="h-24 w-24 object-cover rounded-xl border border-slate-700"
-                  />
+                  <div className="relative">
+                    <img
+                      src={f.preview}
+                      alt={`Upload ${idx + 1}`}
+                      className="h-24 w-24 object-cover rounded-xl border border-slate-700"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setEditingPhotoIndex(idx)}
+                      aria-label={`Crop or rotate ${f.label} photo`}
+                      className="absolute bottom-1 right-1 inline-flex items-center gap-1 rounded-md bg-slate-950/85 px-1.5 py-0.5 text-[10px] font-medium text-amber-300 ring-1 ring-slate-700 hover:bg-slate-900"
+                    >
+                      <Crop className="h-2.5 w-2.5" /> Edit
+                    </button>
+                  </div>
                   <select
                     value={f.label}
                     onChange={(e) => {
@@ -413,6 +426,54 @@ export function ScanAddPage() {
         requireBack={form.category === "COIN" || form.category === "PAPER"}
         initialShape={form.category === "COIN" ? "circle" : "rect"}
       />
+
+      {editingPhotoIndex !== null && files[editingPhotoIndex] && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Edit Draft Photo"
+        >
+          <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3">
+              <span className="text-sm font-semibold text-white">
+                Edit {files[editingPhotoIndex].label} Photo
+              </span>
+              <button
+                type="button"
+                onClick={() => setEditingPhotoIndex(null)}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
+                aria-label="Close photo editor"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <PhotoCropRotateView
+              imageFile={files[editingPhotoIndex].file}
+              title={`Adjust ${files[editingPhotoIndex].label}`}
+              initialPreset={form.category === "COIN" ? "coin" : form.category === "PAPER" ? "note" : "slab"}
+              confirmLabel="Save Changes"
+              cancelLabel="Cancel"
+              onConfirm={(croppedFile) => {
+                const targetIdx = editingPhotoIndex;
+                setFiles((prev) =>
+                  prev.map((item, idx) => {
+                    if (idx !== targetIdx) return item;
+                    URL.revokeObjectURL(item.preview);
+                    return {
+                      ...item,
+                      file: croppedFile,
+                      preview: URL.createObjectURL(croppedFile),
+                    };
+                  })
+                );
+                setEditingPhotoIndex(null);
+              }}
+              onCancel={() => setEditingPhotoIndex(null)}
+            />
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm">

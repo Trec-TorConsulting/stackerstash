@@ -1,7 +1,154 @@
+export interface PixelCropRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface SourceCropRect {
+  sx: number;
+  sy: number;
+  sw: number;
+  sh: number;
+}
+
+/**
+ * Decode a Blob or File into an ImageBitmap with EXIF orientation baked upright.
+ */
+export async function decodeImageBitmapUpright(source: Blob): Promise<ImageBitmap> {
+  try {
+    return await createImageBitmap(source, { imageOrientation: "from-image" });
+  } catch {
+    return await createImageBitmap(source);
+  }
+}
+
+/**
+ * Compute the exact source-pixel crop rectangle matching a centered CSS
+ * `object-cover` container of `targetAspect` (e.g. 4/3) and software `zoom`.
+ */
+export function computeCoverCropRect(
+  srcW: number,
+  srcH: number,
+  targetAspect: number,
+  zoom = 1,
+): SourceCropRect {
+  const safeW = Math.max(1, srcW);
+  const safeH = Math.max(1, srcH);
+  const safeZoom = Math.max(1, zoom);
+  const srcAspect = safeW / safeH;
+
+  let visW = safeW;
+  let visH = safeH;
+  if (srcAspect > targetAspect) {
+    visW = safeH * targetAspect;
+  } else if (srcAspect < targetAspect) {
+    visH = safeW / targetAspect;
+  }
+
+  const sw = Math.max(1, Math.min(safeW, Math.round(visW / safeZoom)));
+  const sh = Math.max(1, Math.min(safeH, Math.round(visH / safeZoom)));
+  const sx = Math.max(0, Math.round((safeW - sw) / 2));
+  const sy = Math.max(0, Math.round((safeH - sh) / 2));
+  return { sx, sy, sw, sh };
+}
+
+/**
+ * Render a cropped and rotated JPEG File from an image URL or Blob,
+ * respecting EXIF orientation and bounding output dimensions.
+ */
+export async function renderCroppedRotatedImage(
+  source: string | Blob,
+  cropAreaPixels: PixelCropRect,
+  rotationDeg: number,
+  filename: string,
+  maxDimension = 1600,
+  quality = 0.94,
+): Promise<File | null> {
+  if (typeof document === "undefined") return null;
+
+  let bitmap: ImageBitmap | null = null;
+  let imgEl: HTMLImageElement | null = null;
+  let srcW = 0;
+  let srcH = 0;
+
+  try {
+    if (typeof source !== "string" && typeof createImageBitmap === "function") {
+      bitmap = await decodeImageBitmapUpright(source);
+      srcW = bitmap.width;
+      srcH = bitmap.height;
+    } else {
+      const url = typeof source === "string" ? source : URL.createObjectURL(source);
+      try {
+        imgEl = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const el = new Image();
+          el.onload = () => resolve(el);
+          el.onerror = () => reject(new Error("Failed to decode image for crop"));
+          el.src = url;
+        });
+        srcW = imgEl.naturalWidth || imgEl.width;
+        srcH = imgEl.naturalHeight || imgEl.height;
+      } finally {
+        if (typeof source !== "string") {
+          URL.revokeObjectURL(url);
+        }
+      }
+    }
+
+    const drawSource: CanvasImageSource | null = bitmap ?? imgEl;
+    if (!drawSource || !srcW || !srcH) return null;
+
+    const rad = (rotationDeg * Math.PI) / 180;
+    const sin = Math.abs(Math.sin(rad));
+    const cos = Math.abs(Math.cos(rad));
+    const rotW = Math.max(1, Math.round(srcW * cos + srcH * sin));
+    const rotH = Math.max(1, Math.round(srcW * sin + srcH * cos));
+
+    const rotCanvas = document.createElement("canvas");
+    rotCanvas.width = rotW;
+    rotCanvas.height = rotH;
+    const rotCtx = rotCanvas.getContext("2d");
+    if (!rotCtx) return null;
+
+    rotCtx.translate(rotW / 2, rotH / 2);
+    rotCtx.rotate(rad);
+    rotCtx.drawImage(drawSource, -srcW / 2, -srcH / 2);
+
+    const cropX = Math.max(0, Math.min(rotW - 1, Math.round(cropAreaPixels.x)));
+    const cropY = Math.max(0, Math.min(rotH - 1, Math.round(cropAreaPixels.y)));
+    const cropW = Math.max(1, Math.min(rotW - cropX, Math.round(cropAreaPixels.width)));
+    const cropH = Math.max(1, Math.min(rotH - cropY, Math.round(cropAreaPixels.height)));
+
+    const scale = Math.min(1, maxDimension / Math.max(cropW, cropH));
+    const outW = Math.max(1, Math.round(cropW * scale));
+    const outH = Math.max(1, Math.round(cropH * scale));
+
+    const outCanvas = document.createElement("canvas");
+    outCanvas.width = outW;
+    outCanvas.height = outH;
+    const outCtx = outCanvas.getContext("2d");
+    if (!outCtx) return null;
+
+    outCtx.imageSmoothingEnabled = true;
+    outCtx.imageSmoothingQuality = "high";
+    outCtx.drawImage(rotCanvas, cropX, cropY, cropW, cropH, 0, 0, outW, outH);
+
+    const blob = await new Promise<Blob | null>((resolve) =>
+      outCanvas.toBlob((b) => resolve(b), "image/jpeg", quality)
+    );
+    if (!blob) return null;
+    return new File([blob], filename, { type: "image/jpeg" });
+  } catch {
+    return null;
+  } finally {
+    bitmap?.close();
+  }
+}
+
 /**
  * Normalize a captured or picked image file (e.g., iPhone HEIC/HEIF or 12MP+ JPEG)
- * into a compact JPEG suitable for Vision AI APIs, while gracefully falling back
- * to the original file if browser canvas decoding is unavailable.
+ * into a compact upright JPEG suitable for Vision AI APIs and upload, while
+ * gracefully falling back to the original file if browser canvas decoding is unavailable.
  */
 export async function normalizeImageFileForUpload(
   file: File,
@@ -28,7 +175,7 @@ export async function normalizeImageFileForUpload(
     let bitmap: ImageBitmap | null = null;
 
     if (typeof createImageBitmap === "function") {
-      bitmap = await createImageBitmap(file);
+      bitmap = await decodeImageBitmapUpright(file);
       width = bitmap.width;
       height = bitmap.height;
       drawSource = bitmap;
@@ -82,4 +229,3 @@ export async function normalizeImageFileForUpload(
     }
   }
 }
-
