@@ -23,7 +23,7 @@ def _get_ocr_engine() -> Any:
     try:
         from rapidocr_onnxruntime import RapidOCR
 
-        _OCR_ENGINE = RapidOCR()
+        _OCR_ENGINE = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)
         return _OCR_ENGINE
     except Exception as exc:
         _OCR_INIT_FAILED = True
