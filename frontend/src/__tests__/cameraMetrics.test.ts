@@ -174,4 +174,29 @@ describe("cameraMetrics", () => {
     expect(smoothed!.x).toBeGreaterThan(clippedBox!.x);
     expect(smoothed!.x).toBeLessThan(offCenterBox!.x);
   });
+
+  it("detects centered collectible despite uneven shadowed/noisy border", () => {
+    const w = 80;
+    const h = 60;
+    const buf = new Float32Array(w * h).fill(85);
+    // Add a dark shadow/finger along the left 4 columns
+    for (let r = 0; r < h; r++) {
+      for (let c = 0; c < 4; c++) {
+        buf[r * w + c] = 20;
+      }
+    }
+    // Centered coin
+    for (let r = 0; r < h; r++) {
+      for (let c = 0; c < w; c++) {
+        if (Math.hypot(c - 40, r - 30) <= 14) {
+          buf[r * w + c] = 205;
+        }
+      }
+    }
+    const box = detectSubjectBox(buf, w, h);
+    expect(box).not.toBeNull();
+    expect(box!.shape).toBe("coin");
+    expect(box!.centerX).toBeGreaterThan(0.35);
+    expect(box!.centerX).toBeLessThan(0.65);
+  });
 });
