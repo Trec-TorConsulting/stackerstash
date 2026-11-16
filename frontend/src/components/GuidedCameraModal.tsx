@@ -319,6 +319,21 @@ export function GuidedCameraModal({
     };
   }, [frontPreview]);
 
+  // Ensure <video> retains srcObject and playback across Front -> Review -> Back transitions
+  useEffect(() => {
+    const video = videoRef.current;
+    const stream = streamRef.current;
+    if (!open || !video || !stream) return;
+    if (video.srcObject !== stream) {
+      video.srcObject = stream;
+    }
+    try {
+      Promise.resolve(video.play?.()).catch(() => {});
+    } catch {
+      // Ignore autoplay errors in headless test environments
+    }
+  }, [open, step, pendingReviewFile, cameraReady]);
+
   // Apply hardware zoom if supported by track capabilities
   useEffect(() => {
     const track = streamRef.current?.getVideoTracks()[0];
@@ -507,7 +522,7 @@ export function GuidedCameraModal({
           </button>
         </div>
 
-        {pendingReviewFile ? (
+        {pendingReviewFile && (
           <PhotoCropRotateView
             imageFile={pendingReviewFile}
             title={step === 'front' ? 'Review Front (Obverse)' : 'Review Back (Reverse)'}
@@ -526,10 +541,11 @@ export function GuidedCameraModal({
               steadyTicksRef.current = 0;
             }}
           />
-        ) : (
-          <>
-            {/* Viewfinder */}
-            <div className="relative flex aspect-[4/3] w-full items-center justify-center overflow-hidden bg-black">
+        )}
+
+        <div className={pendingReviewFile ? 'hidden' : 'flex flex-col'}>
+          {/* Viewfinder */}
+          <div className="relative flex aspect-[4/3] w-full items-center justify-center overflow-hidden bg-black">
               {cameraError ? (
                 <div className="flex max-w-sm flex-col items-center gap-3 px-6 text-center">
                   <Camera className="h-10 w-10 text-slate-500" />
@@ -748,8 +764,7 @@ export function GuidedCameraModal({
                 )}
               </div>
             </div>
-          </>
-        )}
+        </div>
       </div>
     </div>
   );

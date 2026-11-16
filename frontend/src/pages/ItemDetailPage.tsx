@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type AppraisalJob, type CollectionItem, type ContainerNode, type ValuationHistoryEntry } from "../lib/api";
 import { CATEGORY_LABELS, METAL_LABELS, SORT_CATEGORY_LABELS, SORT_CATEGORY_ORDER, STATUS_LABELS, formatOz, formatUsd } from "../lib/format";
+import { normalizeImageFileForUpload } from "../lib/imageUtils";
 import { cacheItemSnapshot, getCachedItemSnapshot } from "../lib/offlineCache";
 import { AppraisalProgressBanner } from "../components/valuation/AppraisalProgressBanner";
 import { CollectibilityThesisCard } from "../components/valuation/CollectibilityThesisCard";
@@ -185,9 +186,24 @@ export function ItemDetailPage() {
 
   async function handleAddPhoto(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file || !id) return;
-    await api.uploadPhoto(id, file, "OTHER", false, true);
-    qc.invalidateQueries({ queryKey: ["item", id] });
+    setIsRotating(true);
+    try {
+      const normalized = await normalizeImageFileForUpload(file, 2048, 0.92);
+      const existingLabels = new Set((item?.photos || []).map((p) => p.label));
+      const nextLabel = !existingLabels.has("OBVERSE")
+        ? "OBVERSE"
+        : !existingLabels.has("REVERSE")
+          ? "REVERSE"
+          : "OTHER";
+      const uploaded = await api.uploadPhoto(id, normalized, nextLabel, !existingLabels.size, true);
+      setActivePhotoUrl(uploaded.url);
+      qc.invalidateQueries({ queryKey: ["item", id] });
+      qc.invalidateQueries({ queryKey: ["items"] });
+    } finally {
+      setIsRotating(false);
+    }
   }
 
   function startEditing() {
@@ -374,26 +390,48 @@ export function ItemDetailPage() {
               const activePhoto = item.photos.find((p) => p.url === displayUrl) || item.photos[0];
               if (!activePhoto) return null;
               return (
-                <button
-                  type="button"
-                  disabled={isRotating}
-                  title="Rotate 90° clockwise"
-                  onClick={async () => {
-                    setIsRotating(true);
-                    try {
-                      const updated = await api.rotatePhoto(item.id, activePhoto.id, 90);
-                      setActivePhotoUrl(updated.url);
-                      qc.invalidateQueries({ queryKey: ["item", id] });
-                      qc.invalidateQueries({ queryKey: ["items"] });
-                    } finally {
-                      setIsRotating(false);
-                    }
-                  }}
-                  className="absolute top-3 right-3 inline-flex items-center gap-1.5 rounded-lg bg-slate-950/85 hover:bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-slate-200 transition disabled:opacity-50"
-                >
-                  <RotateCw className={`h-3.5 w-3.5 ${isRotating ? "animate-spin" : ""}`} />
-                  Rotate 90°
-                </button>
+                <div className="absolute top-3 right-3 flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={isRotating}
+                    title="Auto-crop & remove background"
+                    onClick={async () => {
+                      setIsRotating(true);
+                      try {
+                        const updated = await api.removePhotoBackground(item.id, activePhoto.id);
+                        setActivePhotoUrl(updated.url);
+                        qc.invalidateQueries({ queryKey: ["item", id] });
+                        qc.invalidateQueries({ queryKey: ["items"] });
+                      } finally {
+                        setIsRotating(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 rounded-lg bg-slate-950/85 hover:bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-amber-300 transition disabled:opacity-50"
+                  >
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Clean BG
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isRotating}
+                    title="Rotate 90° clockwise"
+                    onClick={async () => {
+                      setIsRotating(true);
+                      try {
+                        const updated = await api.rotatePhoto(item.id, activePhoto.id, 90);
+                        setActivePhotoUrl(updated.url);
+                        qc.invalidateQueries({ queryKey: ["item", id] });
+                        qc.invalidateQueries({ queryKey: ["items"] });
+                      } finally {
+                        setIsRotating(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-slate-950/85 hover:bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-slate-200 transition disabled:opacity-50"
+                  >
+                    <RotateCw className={`h-3.5 w-3.5 ${isRotating ? "animate-spin" : ""}`} />
+                    Rotate 90°
+                  </button>
+                </div>
               );
             })()}
           </div>

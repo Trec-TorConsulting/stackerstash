@@ -423,7 +423,7 @@ export function ScanAddPage() {
         open={cameraModalOpen}
         onClose={() => setCameraModalOpen(false)}
         onComplete={handleGuidedCameraComplete}
-        requireBack={form.category === "COIN" || form.category === "PAPER"}
+        requireBack={true}
         initialShape={form.category === "COIN" ? "circle" : "rect"}
       />
 

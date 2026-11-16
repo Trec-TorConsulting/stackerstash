@@ -140,6 +140,45 @@ def _remove_background_floodfill(img: Image.Image) -> Image.Image:
     return Image.merge("RGBA", (r, g, b, full_mask))
 
 
+def _border_palette_distance(
+    lab: np.ndarray,
+    bx: int,
+    by: int,
+) -> tuple[np.ndarray, float]:
+    """
+    Compute minimum chroma-weighted LAB distance to a 4-quartile border color palette.
+    Handles two-color printed/patterned backgrounds (e.g. white text printed across a
+    colored sheet) where a single median border color would misclassify the printed text
+    as foreground.
+    """
+    h, w = lab.shape[:2]
+    bw = max(bx, int(w * 0.05))
+    bh = max(by, int(h * 0.05))
+    border_mask = np.zeros((h, w), dtype=bool)
+    border_mask[:bh, :] = True
+    border_mask[-bh:, :] = True
+    border_mask[:, :bw] = True
+    border_mask[:, -bw:] = True
+    bp = lab[border_mask]
+    if len(bp) < 16:
+        bg = np.median(lab, axis=(0, 1))
+        d = np.linalg.norm(lab - bg, axis=2)
+        return d, 16.0
+
+    qs = np.percentile(bp[:, 0], [25, 50, 75])
+    masks = [
+        bp[:, 0] <= qs[0],
+        (bp[:, 0] > qs[0]) & (bp[:, 0] <= qs[1]),
+        (bp[:, 0] > qs[1]) & (bp[:, 0] <= qs[2]),
+        bp[:, 0] > qs[2],
+    ]
+    clusters = [np.median(bp[m], axis=0) for m in masks if m.any()]
+    weights = np.array([0.55, 1.55, 1.55], dtype=np.float32)
+    min_d = np.min([np.linalg.norm((lab - c) * weights, axis=2) for c in clusters], axis=0)
+    p92 = float(np.percentile(min_d[border_mask], 92))
+    return min_d, p92
+
+
 def _salient_foreground_mask(
     lab: np.ndarray,
     border_lab: np.ndarray,
@@ -153,18 +192,27 @@ def _salient_foreground_mask(
     border_dists = np.linalg.norm(border_lab - bg_lab, axis=1)
     bg_spread = float(np.percentile(border_dists, 90)) if len(border_dists) else 0.0
 
-    dist_u8 = np.clip(lab_dist, 0, 255).astype(np.uint8)
-    otsu_t, _ = cv2.threshold(dist_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    thresh = max(16.0, min(55.0, max(float(otsu_t), bg_spread * 1.45)))
+    # If the border has a wide spread (patterned / two-color printed sheet), use 4-quartile palette distance
+    if bg_spread > 28.0:
+        min_d, p92 = _border_palette_distance(lab, bx, by)
+        thresh = max(14.0, p92 * 1.35)
+        salient = (min_d > thresh).astype(np.uint8) * 255
+    else:
+        dist_u8 = np.clip(lab_dist, 0, 255).astype(np.uint8)
+        otsu_t, _ = cv2.threshold(dist_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        thresh = max(16.0, min(55.0, max(float(otsu_t), bg_spread * 1.45)))
+        salient = (lab_dist > thresh).astype(np.uint8) * 255
 
-    salient = (lab_dist > thresh).astype(np.uint8) * 255
     salient[:by, :] = 0
     salient[-by:, :] = 0
     salient[:, :bx] = 0
     salient[:, -bx:] = 0
 
     # Erode/open slightly so disconnected background speckles don't bridge to the main subject
-    salient = cv2.morphologyEx(salient, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    open_k = 5 if bg_spread > 28.0 else 3
+    salient = cv2.morphologyEx(salient, cv2.MORPH_OPEN, np.ones((open_k, open_k), np.uint8))
+    if bg_spread > 28.0:
+        salient = cv2.morphologyEx(salient, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8))
     cnts, _ = cv2.findContours(salient, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filled = np.zeros_like(salient)
     if cnts:
@@ -685,8 +733,11 @@ def _fit_tight_rect_from_mask(mask_u8: np.ndarray) -> tuple[float, float, float,
     roi = (aligned[y0:y1, x0:x1] > 127).astype(np.float32)
     row_occ = roi.mean(axis=1)
     col_occ = roi.mean(axis=0)
-    valid_rows = np.where(row_occ >= 0.45)[0]
-    valid_cols = np.where(col_occ >= 0.45)[0]
+    valid_rows = np.where(row_occ >= 0.62)[0]
+    valid_cols = np.where(col_occ >= 0.62)[0]
+    if len(valid_rows) <= 8 or len(valid_cols) <= 8:
+        valid_rows = np.where(row_occ >= 0.45)[0]
+        valid_cols = np.where(col_occ >= 0.45)[0]
     if len(valid_rows) > 8 and len(valid_cols) > 8:
         ny0 = y0 + int(valid_rows[0])
         ny1 = y0 + int(valid_rows[-1]) + 1
@@ -722,12 +773,36 @@ def detect_rectangular_subject(
     if fg_area < w * h * 0.03:
         return None
 
-    # If the foreground mask is irregular (extent < 0.92) or encloses a dark-backed sleeve/mat rim,
-    # refine via LAB-distance Otsu separation before fitting the tight oriented rectangle.
     extent = _contour_extent(fg_mask)
     bgr = cv2.cvtColor(arr[:, :, :3], cv2.COLOR_RGB2BGR)
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
     L = lab[:, :, 0]
+
+    # If the foreground mask still covers almost the entire image (>80%) or has a patterned border,
+    # test 4-quartile chroma-weighted border palette separation first.
+    bx = max(4, int(w * 0.05))
+    by = max(4, int(h * 0.05))
+    min_d, p92 = _border_palette_distance(lab, bx, by)
+    palette_raw = (min_d > max(14.0, p92 * 1.35)).astype(np.uint8) * 255
+    palette_raw[:by, :] = 0
+    palette_raw[-by:, :] = 0
+    palette_raw[:, :bx] = 0
+    palette_raw[:, -bx:] = 0
+    palette_fg = cv2.morphologyEx(palette_raw, cv2.MORPH_OPEN, np.ones((7, 7), np.uint8))
+    palette_fg = cv2.morphologyEx(palette_fg, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
+    p_cnts, _ = cv2.findContours(palette_fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if p_cnts and (fg_area > w * h * 0.80 or extent < 0.88):
+        p_best = max(p_cnts, key=cv2.contourArea)
+        p_filled = np.zeros_like(palette_fg)
+        cv2.drawContours(p_filled, [p_best], -1, 255, thickness=cv2.FILLED)
+        p_area = int((p_filled > 0).sum())
+        p_extent = _contour_extent(p_filled)
+        if 0.12 * w * h <= p_area <= 0.88 * w * h and p_extent >= 0.82:
+            # Use raw unclosed palette mask for tight edge trimming so border text bridges are removed
+            fg_mask = np.where((p_filled > 0) & (palette_raw > 0), 255, 0).astype(np.uint8)
+            extent = p_extent
+            fg_area = p_area
+
     opaque = alpha > 128
     if int(opaque.sum()) >= 64:
         rim_k = max(7, int(min(h, w) * 0.08) | 1)
