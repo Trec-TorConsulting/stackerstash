@@ -184,7 +184,7 @@ class CollectionItem(models.Model):
     metal_type = models.CharField(
         max_length=16, choices=MetalType.choices, default=MetalType.NONE
     )
-    weight_value = models.DecimalField(max_digits=12, decimal_places=4, default=Decimal("0"))
+    weight_value = models.DecimalField(max_digits=14, decimal_places=6, default=Decimal("0"))
     weight_unit = models.CharField(
         max_length=12, choices=WeightUnit.choices, default=WeightUnit.OZ_T
     )

@@ -1032,7 +1032,7 @@ def auto_orient_upright(img: Image.Image) -> Image.Image:
     h_mean = float(h_grad.mean())
     v_mean = float(v_grad.mean())
 
-    if w > h * 1.15 and v_mean > max(12.0, h_mean * 1.32):
+    if w > h * 1.15 and v_mean > max(18.0, h_mean * 1.55):
         rw = roi.shape[1]
         left_v = float(v_grad[:, : max(1, int(rw * 0.38))].mean())
         right_v = float(v_grad[:, min(rw - 1, int(rw * 0.62)) :].mean())
@@ -1114,7 +1114,7 @@ def process_item_image(
         if enhance:
             img = _enhance_detail(img)
 
-        if remove_background and shape_hint in ("note", "bar", "rect", None):
+        if remove_background and shape_hint in ("note", "rect", None):
             img = auto_orient_upright(img)
 
         return _encode_processed_image(img, orig_format=orig_format, force_png=remove_background)
