@@ -40,14 +40,16 @@ describe("GuidedCameraModal", () => {
     );
 
     expect(screen.getByText(/Guided Capture — Step 1: Front/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Auto-Detect" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Coin (Circle)" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Slab / Bar" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Note / Bar (Rect)" })).toBeInTheDocument();
     expect(screen.getByLabelText("Camera zoom")).toBeInTheDocument();
     expect(screen.getByText(/Capture Front Photo/i)).toBeInTheDocument();
-    const autoBtn = screen.getByRole("button", { name: /Auto-Capture Off/i });
-    expect(autoBtn).toHaveAttribute("aria-pressed", "false");
+    const autoBtn = screen.getByRole("button", { name: /Auto-Capture On/i });
+    expect(autoBtn).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(autoBtn);
-    expect(screen.getByRole("button", { name: /Auto-Capture On/i })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /Auto-Capture Off/i })).toHaveAttribute("aria-pressed", "false");
     expect(screen.queryByRole("button", { name: /Auto-Zoom/i })).not.toBeInTheDocument();
   });
 
@@ -252,6 +254,105 @@ describe("GuidedCameraModal", () => {
     } finally {
       Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: origMediaDevices });
       (window as unknown as { ImageCapture?: unknown }).ImageCapture = origImageCapture;
+      HTMLCanvasElement.prototype.getContext = origGetContext;
+      HTMLCanvasElement.prototype.toBlob = origToBlob;
+    }
+  });
+
+  it("auto-detects a banknote/Goldback in Auto-Detect mode and auto-snaps when steady", async () => {
+    const mockTrack = {
+      stop: vi.fn(),
+      getCapabilities: vi.fn(() => ({})),
+      applyConstraints: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const mockStream = {
+      getTracks: () => [mockTrack],
+      getVideoTracks: () => [mockTrack],
+    } as unknown as MediaStream;
+
+    const origMediaDevices = navigator.mediaDevices;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue(mockStream) },
+    });
+
+    const takePhoto = vi.fn().mockResolvedValue(new Blob(["note-jpeg"], { type: "image/jpeg" }));
+    const origImageCapture = (window as unknown as { ImageCapture?: unknown }).ImageCapture;
+    (window as unknown as { ImageCapture: unknown }).ImageCapture = vi.fn(() => ({ takePhoto }));
+
+    const origCreateImageBitmap = window.createImageBitmap;
+    window.createImageBitmap = vi.fn().mockResolvedValue({
+      width: 2400,
+      height: 1800,
+      close: vi.fn(),
+    } as unknown as ImageBitmap);
+
+    // Synthesize a sharp, wide banknote/Goldback in a 160x120 RGBA buffer
+    const noteRgba = new Uint8ClampedArray(160 * 120 * 4);
+    for (let r = 0; r < 120; r++) {
+      for (let c = 0; c < 160; c++) {
+        const idx = (r * 160 + c) * 4;
+        const inNote = r >= 38 && r <= 82 && c >= 28 && c <= 132;
+        const v = inNote ? ((r + c) % 2 === 0 ? 215 : 55) : 70;
+        noteRgba[idx] = v;
+        noteRgba[idx + 1] = v;
+        noteRgba[idx + 2] = v;
+        noteRgba[idx + 3] = 255;
+      }
+    }
+
+    const origGetContext = HTMLCanvasElement.prototype.getContext;
+    const origToBlob = HTMLCanvasElement.prototype.toBlob;
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
+      drawImage: vi.fn(),
+      getImageData: vi.fn(() => ({ data: noteRgba })),
+      imageSmoothingEnabled: true,
+      imageSmoothingQuality: "high",
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.toBlob = vi.fn(function (this: HTMLCanvasElement, cb: BlobCallback) {
+      cb(new Blob(["auto-snapped-note"], { type: "image/jpeg" }));
+    });
+
+    const onComplete = vi.fn();
+    try {
+      const { container } = render(
+        <GuidedCameraModal
+          open={true}
+          onClose={vi.fn()}
+          onComplete={onComplete}
+          requireBack={false}
+          initialShape="auto"
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /Capture Front/i })).toBeEnabled();
+      });
+
+      const video = container.querySelector("video") as HTMLVideoElement;
+      Object.defineProperty(video, "readyState", { configurable: true, value: 4 });
+      Object.defineProperty(video, "videoWidth", { configurable: true, value: 1920 });
+      Object.defineProperty(video, "videoHeight", { configurable: true, value: 1440 });
+
+      // Wait for consecutive evaluation ticks (~180ms each) to lock onto the note and auto-snap
+      await waitFor(
+        () => {
+          expect(takePhoto).toHaveBeenCalledTimes(1);
+          expect(screen.getByText(/Review Front \(Obverse\)/i)).toBeInTheDocument();
+        },
+        { timeout: 2500 }
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /Use Front Photo/i }));
+
+      await waitFor(() => {
+        expect(onComplete).toHaveBeenCalledTimes(1);
+      });
+      expect(onComplete.mock.calls[0][0].detectedShape).toBe("note");
+    } finally {
+      Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: origMediaDevices });
+      (window as unknown as { ImageCapture?: unknown }).ImageCapture = origImageCapture;
+      window.createImageBitmap = origCreateImageBitmap;
       HTMLCanvasElement.prototype.getContext = origGetContext;
       HTMLCanvasElement.prototype.toBlob = origToBlob;
     }

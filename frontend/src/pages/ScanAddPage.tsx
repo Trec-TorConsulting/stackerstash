@@ -128,6 +128,15 @@ export function ScanAddPage() {
     setVerificationStatus("NONE");
     setVerificationWarnings([]);
     setOverrideConfirmed(false);
+    if (result.detectedShape) {
+      const mappedCategory =
+        result.detectedShape === "note"
+          ? "PAPER"
+          : result.detectedShape === "slab"
+            ? "SLAB"
+            : "COIN";
+      setForm((prev) => ({ ...prev, category: mappedCategory }));
+    }
     const next: Array<{ file: File; label: string; preview: string }> = [
       {
         file: result.frontFile,
@@ -424,7 +433,7 @@ export function ScanAddPage() {
         onClose={() => setCameraModalOpen(false)}
         onComplete={handleGuidedCameraComplete}
         requireBack={true}
-        initialShape={form.category === "COIN" ? "circle" : "rect"}
+        initialShape="auto"
       />
 
       {editingPhotoIndex !== null && files[editingPhotoIndex] && (
