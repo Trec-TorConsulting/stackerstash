@@ -46,10 +46,10 @@ describe("GuidedCameraModal", () => {
     expect(screen.getByRole("button", { name: "Note / Bar (Rect)" })).toBeInTheDocument();
     expect(screen.getByLabelText("Camera zoom")).toBeInTheDocument();
     expect(screen.getByText(/Capture Front Photo/i)).toBeInTheDocument();
-    const autoBtn = screen.getByRole("button", { name: /Auto-Capture On/i });
-    expect(autoBtn).toHaveAttribute("aria-pressed", "true");
+    const autoBtn = screen.getByRole("button", { name: /Auto-Capture Off/i });
+    expect(autoBtn).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(autoBtn);
-    expect(screen.getByRole("button", { name: /Auto-Capture Off/i })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: /Auto-Capture On/i })).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByRole("button", { name: /Auto-Zoom/i })).not.toBeInTheDocument();
   });
 
@@ -220,6 +220,7 @@ describe("GuidedCameraModal", () => {
         expect(screen.getByRole("button", { name: /Capture Front/i })).toBeEnabled();
       });
 
+      // Enable Auto-Capture explicitly (manual shutter is default)
       const video = container.querySelector("video") as HTMLVideoElement;
       Object.defineProperty(video, "videoWidth", { configurable: true, value: 1280 });
       Object.defineProperty(video, "videoHeight", { configurable: true, value: 720 });
@@ -328,6 +329,9 @@ describe("GuidedCameraModal", () => {
       await waitFor(() => {
         expect(screen.getByRole("button", { name: /Capture Front/i })).toBeEnabled();
       });
+
+      // Enable Auto-Capture explicitly (manual shutter is default)
+      fireEvent.click(screen.getByRole("button", { name: /Auto-Capture Off/i }));
 
       const video = container.querySelector("video") as HTMLVideoElement;
       Object.defineProperty(video, "readyState", { configurable: true, value: 4 });

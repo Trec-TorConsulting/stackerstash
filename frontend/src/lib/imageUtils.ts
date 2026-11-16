@@ -278,3 +278,63 @@ export async function normalizeImageFileForUpload(
     }
   }
 }
+
+/**
+ * Rotate an image File 90 degrees clockwise and return a new JPEG File.
+ */
+export async function rotateImageFile90(file: File, quality = 0.94): Promise<File> {
+  if (typeof document === "undefined") return file;
+
+  let bitmap: ImageBitmap | null = null;
+  let imgEl: HTMLImageElement | null = null;
+  let objectUrl: string | null = null;
+
+  try {
+    let srcW = 0;
+    let srcH = 0;
+    let drawSource: CanvasImageSource;
+
+    if (typeof createImageBitmap === "function") {
+      bitmap = await decodeImageBitmapUpright(file);
+      srcW = bitmap.width;
+      srcH = bitmap.height;
+      drawSource = bitmap;
+    } else {
+      objectUrl = URL.createObjectURL(file);
+      imgEl = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error("Failed to decode image for rotation"));
+        el.src = objectUrl!;
+      });
+      srcW = imgEl.naturalWidth || imgEl.width;
+      srcH = imgEl.naturalHeight || imgEl.height;
+      drawSource = imgEl;
+    }
+
+    if (!srcW || !srcH) return file;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = srcH;
+    canvas.height = srcW;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return file;
+
+    ctx.translate(srcH / 2, srcW / 2);
+    ctx.rotate(Math.PI / 2);
+    ctx.drawImage(drawSource, -srcW / 2, -srcH / 2);
+
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob((b) => resolve(b), "image/jpeg", quality)
+    );
+    if (!blob) return file;
+
+    const baseName = file.name.replace(/\.[^.]+$/, "") || "photo";
+    return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
+  } catch {
+    return file;
+  } finally {
+    bitmap?.close();
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+  }
+}

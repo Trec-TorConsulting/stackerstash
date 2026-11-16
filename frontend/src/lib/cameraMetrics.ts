@@ -47,8 +47,8 @@ export interface FrameMetricsResult {
   recommendedZoom: number;
 }
 
-const GLARE_LUMA_THRESHOLD = 240;
-const GLARE_RATIO_THRESHOLD = 0.04;
+const GLARE_LUMA_THRESHOLD = 245;
+const GLARE_RATIO_THRESHOLD = 0.12;
 const DEFAULT_VIEWFINDER_ASPECT = 4 / 3;
 
 function sortedPercentile(values: number[], q: number): number {
@@ -296,7 +296,7 @@ export function detectSubjectBox(
 export function smoothSubjectBox(
   prev: SubjectBox | null,
   next: SubjectBox | null,
-  alpha = 0.45,
+  alpha = 0.25,
   viewfinderAspect = DEFAULT_VIEWFINDER_ASPECT,
 ): SubjectBox | null {
   if (!next) return null;
@@ -333,16 +333,16 @@ export function smoothSubjectBox(
 export function evaluateFramingState(subjectBox: SubjectBox | null): FramingState {
   if (!subjectBox) return 'none';
   const touchesEdge =
-    subjectBox.x <= 0.02 ||
-    subjectBox.y <= 0.02 ||
-    subjectBox.x + subjectBox.width >= 0.98 ||
-    subjectBox.y + subjectBox.height >= 0.98;
+    subjectBox.x <= 0.01 ||
+    subjectBox.y <= 0.01 ||
+    subjectBox.x + subjectBox.width >= 0.99 ||
+    subjectBox.y + subjectBox.height >= 0.99;
   if (touchesEdge) return 'edge_clipped';
-  if (subjectBox.areaRatio < 0.05 || (subjectBox.width < 0.18 && subjectBox.height < 0.18)) {
+  if (subjectBox.areaRatio < 0.04 || (subjectBox.width < 0.16 && subjectBox.height < 0.16)) {
     return 'too_small';
   }
   const centerOffset = Math.hypot(subjectBox.centerX - 0.5, subjectBox.centerY - 0.5);
-  if (centerOffset > 0.24) {
+  if (centerOffset > 0.30) {
     return 'off_center';
   }
   return 'locked';
@@ -478,9 +478,9 @@ export function evaluateFrameMetrics(
       ? Math.hypot(
           subjectBox.centerX - prevSubjectBox.centerX,
           subjectBox.centerY - prevSubjectBox.centerY,
-        ) > 0.045
+        ) > 0.06
       : false;
-  const isSteady = prevLuma !== null && meanFrameDiff < 11.5 && !boxMoved;
+  const isSteady = prevLuma !== null && meanFrameDiff < 14 && !boxMoved;
 
   // Weight sharpness toward the subject inside the reticle
   const effectiveEdge = Math.max(meanEdge, innerEdge * 0.75);

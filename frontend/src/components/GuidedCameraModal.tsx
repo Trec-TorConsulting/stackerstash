@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Camera,
+  Check,
   CheckCircle2,
+  Crop,
   Flashlight,
   RefreshCw,
+  RotateCw,
   Scan,
   Sparkles,
   Upload,
@@ -16,22 +19,20 @@ import {
   type DetectedShape,
   type FrameQuality,
   type FramingState,
-  type SubjectBox,
 } from '../lib/cameraMetrics';
 import {
   computeCoverCropRect,
-  computeSubjectCropRect,
   decodeImageBitmapUpright,
   normalizeImageFileForUpload,
+  rotateImageFile90,
 } from '../lib/imageUtils';
 import { PhotoCropRotateView } from './PhotoCropRotateView';
 
 const MAX_CAPTURE_DIM = 2048;
 const VIEWFINDER_ASPECT = 4 / 3;
-const CIRCLE_RETICLE_ZOOM_BOOST = 1.35;
 const BURST_FRAMES = 5;
 const BURST_INTERVAL_MS = 50;
-const AUTO_CAPTURE_TICKS = 3;
+const AUTO_CAPTURE_TICKS = 5;
 
 export type ReticleMode = 'auto' | 'coin' | 'slab' | 'note';
 
@@ -82,29 +83,14 @@ function drawNormalizedSource(
   srcH: number,
   zoom: number,
   applySoftwareZoom: boolean,
-  activeShape: DetectedShape,
-  subjectBox: SubjectBox | null,
+  reticleMode: ReticleMode,
   targetCanvas: HTMLCanvasElement,
 ): boolean {
   const baseZoom = applySoftwareZoom && zoom > 1 ? zoom : 1;
+  // True WYSIWYG: match the exact centered viewfinder (1:1 square when Coin reticle is explicitly selected, 4:3 otherwise)
+  const targetAspect = reticleMode === 'coin' ? 1 : VIEWFINDER_ASPECT;
+  const { sx, sy, sw, sh } = computeCoverCropRect(srcW, srcH, targetAspect, baseZoom);
 
-  let cropRect;
-  if (subjectBox && subjectBox.areaRatio >= 0.05) {
-    cropRect = computeSubjectCropRect(srcW, srcH, VIEWFINDER_ASPECT, baseZoom, {
-      x: subjectBox.x,
-      y: subjectBox.y,
-      width: subjectBox.width,
-      height: subjectBox.height,
-      shape: activeShape,
-    });
-  } else {
-    const targetAspect = activeShape === 'coin' ? 1 : VIEWFINDER_ASPECT;
-    const effectiveZoom =
-      activeShape === 'coin' ? baseZoom * CIRCLE_RETICLE_ZOOM_BOOST : baseZoom;
-    cropRect = computeCoverCropRect(srcW, srcH, targetAspect, effectiveZoom);
-  }
-
-  const { sx, sy, sw, sh } = cropRect;
   const scale = Math.min(1, MAX_CAPTURE_DIM / Math.max(sw, sh));
   const outW = Math.max(1, Math.round(sw * scale));
   const outH = Math.max(1, Math.round(sh * scale));
@@ -123,8 +109,7 @@ async function normalizePhotoBlob(
   blob: Blob,
   zoom: number,
   applySoftwareZoom: boolean,
-  activeShape: DetectedShape,
-  subjectBox: SubjectBox | null,
+  reticleMode: ReticleMode,
   filename: string,
 ): Promise<File | null> {
   const canvas = document.createElement('canvas');
@@ -137,8 +122,7 @@ async function normalizePhotoBlob(
         bitmap.height,
         zoom,
         applySoftwareZoom,
-        activeShape,
-        subjectBox,
+        reticleMode,
         canvas,
       );
       return ok ? await canvasToJpegFile(canvas, filename) : null;
@@ -161,8 +145,7 @@ async function normalizePhotoBlob(
       img.naturalHeight,
       zoom,
       applySoftwareZoom,
-      activeShape,
-      subjectBox,
+      reticleMode,
       canvas,
     );
     return ok ? await canvasToJpegFile(canvas, filename) : null;
@@ -175,8 +158,7 @@ async function captureBestBurstFrame(
   video: HTMLVideoElement,
   zoom: number,
   applySoftwareZoom: boolean,
-  activeShape: DetectedShape,
-  subjectBox: SubjectBox | null,
+  reticleMode: ReticleMode,
   filename: string,
 ): Promise<File | null> {
   const sampleW = 160;
@@ -210,8 +192,7 @@ async function captureBestBurstFrame(
         video.videoHeight,
         zoom,
         applySoftwareZoom,
-        activeShape,
-        subjectBox,
+        reticleMode,
         bestCanvas,
       );
     }
@@ -249,30 +230,33 @@ export function GuidedCameraModal({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const prevLumaRef = useRef<Float32Array | null>(null);
-  const subjectBoxRef = useRef<SubjectBox | null>(null);
   const hardwareZoomSupportedRef = useRef(false);
   const steadyTicksRef = useRef(0);
 
   const [reticleMode, setReticleMode] = useState<ReticleMode>(() => resolveInitialMode(initialShape));
   const [detectedShape, setDetectedShape] = useState<DetectedShape>('coin');
-  const [subjectBox, setSubjectBox] = useState<SubjectBox | null>(null);
+  const [hasSubject, setHasSubject] = useState(false);
   const [framingState, setFramingState] = useState<FramingState>('none');
   const [lockProgress, setLockProgress] = useState<number>(0);
   const [shutterFlash, setShutterFlash] = useState(false);
   const [zoom, setZoom] = useState<number>(1);
-  const [recommendedZoom, setRecommendedZoom] = useState<number>(1);
   const [torchSupported, setTorchSupported] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
-  const [autoCapture, setAutoCapture] = useState(true);
+  const [autoCapture, setAutoCapture] = useState(false);
   const [step, setStep] = useState<'front' | 'back'>('front');
+
   const [pendingReviewFile, setPendingReviewFile] = useState<File | null>(null);
+  const [pendingReviewUrl, setPendingReviewUrl] = useState<string | null>(null);
+  const [showCropper, setShowCropper] = useState(false);
+  const [rotating, setRotating] = useState(false);
+
   const [frontFile, setFrontFile] = useState<File | null>(null);
   const [frontPreview, setFrontPreview] = useState<string | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [quality, setQuality] = useState<FrameQuality>({
-    label: 'Place coin, note, bar, or slab in frame',
+    label: 'Center item and tap shutter',
     tone: 'warn',
     isGood: false,
   });
@@ -298,22 +282,21 @@ export function GuidedCameraModal({
     setReticleMode(resolveInitialMode(initialShape));
     setStep('front');
     setPendingReviewFile(null);
+    setShowCropper(false);
     setFrontFile(null);
     setFrontPreview(null);
-    setSubjectBox(null);
-    subjectBoxRef.current = null;
+    setHasSubject(false);
     setFramingState('none');
     setLockProgress(0);
     setShutterFlash(false);
     setZoom(1);
-    setRecommendedZoom(1);
     setTorchOn(false);
     steadyTicksRef.current = 0;
     prevLumaRef.current = null;
     setCameraError(null);
 
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      setCameraError('Live camera preview is unavailable in this browser. Use native camera capture below.');
+      setCameraError('Live camera preview is unavailable in this browser. Use Native Camera below.');
       return;
     }
 
@@ -322,8 +305,8 @@ export function GuidedCameraModal({
       .getUserMedia({
         video: {
           facingMode: { ideal: 'environment' },
-          width: { ideal: 4032 },
-          height: { ideal: 3024 },
+          width: { ideal: 1920 },
+          height: { ideal: 1440 },
         },
         audio: false,
       })
@@ -362,7 +345,7 @@ export function GuidedCameraModal({
       })
       .catch(() => {
         if (!cancelled) {
-          setCameraError('Camera access was denied or unavailable. Use native camera capture below.');
+          setCameraError('Camera access was denied or unavailable. Use Native Camera below.');
         }
       });
 
@@ -371,6 +354,18 @@ export function GuidedCameraModal({
       stopStream();
     };
   }, [open, initialShape, stopStream]);
+
+  useEffect(() => {
+    if (!pendingReviewFile) {
+      setPendingReviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(pendingReviewFile);
+    setPendingReviewUrl(url);
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [pendingReviewFile]);
 
   useEffect(() => {
     return () => {
@@ -411,14 +406,35 @@ export function GuidedCameraModal({
     track.applyConstraints({ advanced: [{ torch: torchOn } as MediaTrackConstraintSet] }).catch(() => {});
   }, [torchOn, torchSupported]);
 
+  const triggerTapFocus = useCallback(() => {
+    const track = streamRef.current?.getVideoTracks()[0];
+    if (!track || typeof track.getCapabilities !== 'function' || typeof track.applyConstraints !== 'function') {
+      return;
+    }
+    const caps = track.getCapabilities() as ExtendedCapabilities;
+    if (Array.isArray(caps.focusMode)) {
+      const mode = caps.focusMode.includes('continuous')
+        ? 'continuous'
+        : caps.focusMode.includes('single-shot')
+          ? 'single-shot'
+          : null;
+      if (mode) {
+        track
+          .applyConstraints({ advanced: [{ focusMode: mode } as MediaTrackConstraintSet] })
+          .catch(() => {});
+      }
+    }
+  }, []);
+
   const captureCurrentFrame = useCallback(async () => {
     const video = videoRef.current;
     if (!video || capturing) return;
 
     const filename = step === 'front' ? 'capture-front.jpg' : 'capture-back.jpg';
     const applySoftwareZoom = !hardwareZoomSupportedRef.current;
-    const boxForCrop = reticleMode === 'auto' ? subjectBoxRef.current : null;
     setCapturing(true);
+    setShutterFlash(true);
+    window.setTimeout(() => setShutterFlash(false), 160);
 
     try {
       const videoTrack = streamRef.current?.getVideoTracks()[0];
@@ -434,11 +450,11 @@ export function GuidedCameraModal({
             photoBlob,
             zoom,
             applySoftwareZoom,
-            activeShape,
-            boxForCrop,
+            reticleMode,
             filename,
           );
           if (file) {
+            setShowCropper(false);
             setPendingReviewFile(file);
             return;
           }
@@ -452,19 +468,32 @@ export function GuidedCameraModal({
         video,
         zoom,
         applySoftwareZoom,
-        activeShape,
-        boxForCrop,
+        reticleMode,
         filename,
       );
       if (file) {
+        setShowCropper(false);
         setPendingReviewFile(file);
       }
     } finally {
       setCapturing(false);
     }
-  }, [activeShape, capturing, reticleMode, step, zoom]);
+  }, [capturing, reticleMode, step, zoom]);
 
-  // Live subject detection, sharpness, exposure, glare, and auto-snap loop (every 180ms)
+  // Spacebar shortcut on desktop when viewfinder is active
+  useEffect(() => {
+    if (!open || !cameraReady || pendingReviewFile || cameraError) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.repeat) {
+        e.preventDefault();
+        void captureCurrentFrame();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, cameraReady, pendingReviewFile, cameraError, captureCurrentFrame]);
+
+  // Calm live frame metrics & optional Auto-Capture loop (every 200ms)
   useEffect(() => {
     if (!open || !cameraReady || pendingReviewFile) {
       steadyTicksRef.current = 0;
@@ -505,17 +534,15 @@ export function GuidedCameraModal({
         sampleH,
         zoom,
         data,
-        subjectBoxRef.current,
+        null,
       );
       prevLumaRef.current = luma;
-      subjectBoxRef.current = metrics.subjectBox;
-      setSubjectBox(metrics.subjectBox);
+      setHasSubject(metrics.hasSubject);
       setFramingState(metrics.framingState);
       if (metrics.subjectBox) {
         setDetectedShape(metrics.detectedShape);
       }
       setQuality(metrics.quality);
-      setRecommendedZoom(metrics.recommendedZoom);
 
       if (
         autoCapture &&
@@ -531,8 +558,6 @@ export function GuidedCameraModal({
         if (steadyTicksRef.current >= AUTO_CAPTURE_TICKS) {
           steadyTicksRef.current = 0;
           setLockProgress(100);
-          setShutterFlash(true);
-          window.setTimeout(() => setShutterFlash(false), 180);
           try {
             navigator.vibrate?.(35);
           } catch {
@@ -544,7 +569,7 @@ export function GuidedCameraModal({
         steadyTicksRef.current = 0;
         setLockProgress(0);
       }
-    }, 180);
+    }, 200);
 
     return () => window.clearInterval(timer);
   }, [open, cameraReady, pendingReviewFile, zoom, autoCapture, capturing, captureCurrentFrame]);
@@ -553,6 +578,7 @@ export function GuidedCameraModal({
 
   const handleConfirmReviewedFile = (confirmedFile: File) => {
     setPendingReviewFile(null);
+    setShowCropper(false);
     steadyTicksRef.current = 0;
     setLockProgress(0);
     if (step === 'front') {
@@ -570,11 +596,23 @@ export function GuidedCameraModal({
     }
   };
 
+  const handleQuickRotate = async () => {
+    if (!pendingReviewFile || rotating) return;
+    setRotating(true);
+    try {
+      const rotated = await rotateImageFile90(pendingReviewFile);
+      setPendingReviewFile(rotated);
+    } finally {
+      setRotating(false);
+    }
+  };
+
   const handleNativeFallback = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawFile = e.target.files?.[0];
     e.target.value = '';
     if (!rawFile) return;
     const normalized = await normalizeImageFileForUpload(rawFile, 2048, 0.94);
+    setShowCropper(false);
     setPendingReviewFile(normalized);
   };
 
@@ -584,65 +622,165 @@ export function GuidedCameraModal({
     onComplete({ frontFile, backFile: null, detectedShape: activeShape });
   };
 
+  const confirmLabel =
+    step === 'front'
+      ? requireBack
+        ? 'Confirm Front → Back'
+        : 'Use Front Photo'
+      : 'Confirm Back & Finish';
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/95 sm:p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-label="Guided Camera Capture"
     >
-      <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 shadow-2xl">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3.5">
+      <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-slate-900 shadow-2xl sm:h-auto sm:max-h-[92vh] sm:max-w-xl sm:rounded-2xl sm:border sm:border-slate-800">
+        {/* Clean Header */}
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-800 px-4 py-3">
           <div className="flex items-center gap-2.5">
             <Camera className="h-5 w-5 text-amber-400" />
             <div>
               <h3 className="text-sm font-semibold text-white">
                 Guided Capture — {step === 'front' ? 'Step 1: Front (Obverse)' : 'Step 2: Back (Reverse)'}
               </h3>
-              <p className="text-xs text-slate-400">
-                Live AI framing detects coins, notes, bars &amp; slabs and auto-snaps when sharp.
+              <p className="text-[11px] text-slate-400">
+                {pendingReviewFile
+                  ? 'Check clarity, then confirm or retake.'
+                  : 'Frame item inside guide and tap the shutter button.'}
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              stopStream();
-              onClose();
-            }}
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
-            aria-label="Close camera"
-          >
-            <X className="h-5 w-5" />
-          </button>
+
+          <div className="flex items-center gap-1.5">
+            {!pendingReviewFile && (
+              <button
+                type="button"
+                aria-pressed={autoCapture}
+                onClick={() => setAutoCapture((v) => !v)}
+                className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
+                  autoCapture
+                    ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300'
+                    : 'border-slate-700 text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Auto-Capture</span> {autoCapture ? 'On' : 'Off'}
+              </button>
+            )}
+
+            {!pendingReviewFile && torchSupported && (
+              <button
+                type="button"
+                aria-pressed={torchOn}
+                onClick={() => setTorchOn((v) => !v)}
+                className={`inline-flex items-center gap-1 rounded-lg border p-1.5 text-xs font-medium transition ${
+                  torchOn
+                    ? 'border-amber-400/60 bg-amber-500/15 text-amber-300'
+                    : 'border-slate-700 text-slate-300 hover:bg-slate-800'
+                }`}
+                aria-label="Toggle flash light"
+              >
+                <Flashlight className="h-4 w-4" />
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                stopStream();
+                onClose();
+              }}
+              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
+              aria-label="Close camera"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </div>
 
-        {pendingReviewFile && (
+        {/* Optional Crop/Rotate Editor OR Fast 1-Tap Photo Review */}
+        {pendingReviewFile && showCropper && (
           <PhotoCropRotateView
             imageFile={pendingReviewFile}
             title={step === 'front' ? 'Review Front (Obverse)' : 'Review Back (Reverse)'}
             initialPreset={activeShape}
-            confirmLabel={
-              step === 'front'
-                ? requireBack
-                  ? 'Confirm Front → Back'
-                  : 'Use Front Photo'
-                : 'Confirm Back & Finish'
-            }
-            cancelLabel="Retake"
+            confirmLabel={confirmLabel}
+            cancelLabel="Back to Preview"
             onConfirm={handleConfirmReviewedFile}
-            onCancel={() => {
-              setPendingReviewFile(null);
-              steadyTicksRef.current = 0;
-              setLockProgress(0);
-            }}
+            onCancel={() => setShowCropper(false)}
           />
         )}
 
-        <div className={pendingReviewFile ? 'hidden' : 'flex flex-col'}>
+        {pendingReviewFile && !showCropper && (
+          <div className="flex flex-1 flex-col justify-between overflow-hidden">
+            <div className="sr-only">
+              {step === 'front' ? 'Review Front (Obverse)' : 'Review Back (Reverse)'}
+            </div>
+            <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-black p-3">
+              {pendingReviewUrl && (
+                <img
+                  src={pendingReviewUrl}
+                  alt={step === 'front' ? 'Front photo preview' : 'Back photo preview'}
+                  className="max-h-[55vh] w-full rounded-lg object-contain"
+                />
+              )}
+            </div>
+
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2.5 border-t border-slate-800 bg-slate-900/95 px-4 py-3.5">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPendingReviewFile(null);
+                    setShowCropper(false);
+                    steadyTicksRef.current = 0;
+                    setLockProgress(0);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 hover:bg-slate-800"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Retake
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleQuickRotate()}
+                  disabled={rotating}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+                >
+                  <RotateCw className="h-3.5 w-3.5" />
+                  Rotate
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCropper(true)}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 hover:bg-slate-800"
+                >
+                  <Crop className="h-3.5 w-3.5" />
+                  Crop
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleConfirmReviewedFile(pendingReviewFile)}
+                className="inline-flex flex-1 sm:flex-none items-center justify-center gap-1.5 rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-400"
+              >
+                <Check className="h-4 w-4" />
+                {confirmLabel}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Live Viewfinder + Controls */}
+        <div className={pendingReviewFile ? 'hidden' : 'flex flex-1 flex-col justify-between overflow-hidden'}>
           {/* Viewfinder */}
-          <div className="relative flex aspect-[4/3] w-full items-center justify-center overflow-hidden bg-black">
+          <div
+            className="relative flex aspect-[4/3] w-full flex-1 items-center justify-center overflow-hidden bg-black sm:flex-none"
+            onClick={triggerTapFocus}
+          >
             {cameraError ? (
               <div className="flex max-w-sm flex-col items-center gap-3 px-6 text-center">
                 <Camera className="h-10 w-10 text-slate-500" />
@@ -671,7 +809,6 @@ export function GuidedCameraModal({
                   }}
                 />
 
-                {/* Shutter Flash Overlay */}
                 {shutterFlash && (
                   <div
                     data-testid="shutter-flash"
@@ -679,74 +816,51 @@ export function GuidedCameraModal({
                   />
                 )}
 
-                {/* Adaptive Reticle */}
+                {/* Calm, Stable Centered Guide Reticle */}
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                   {reticleMode === 'auto' ? (
-                    subjectBox ? (
-                      <div
-                        data-testid="dynamic-subject-reticle"
-                        style={{
-                          left: `${Math.max(4, Math.min(82, subjectBox.x * 100))}%`,
-                          top: `${Math.max(4, Math.min(82, subjectBox.y * 100))}%`,
-                          width: `${Math.max(16, Math.min(92, subjectBox.width * 100))}%`,
-                          height: `${Math.max(16, Math.min(92, subjectBox.height * 100))}%`,
-                        }}
-                        className={`absolute transition-all duration-150 ${
-                          detectedShape === 'coin'
-                            ? 'rounded-full'
-                            : detectedShape === 'slab'
-                              ? 'rounded-2xl'
-                              : 'rounded-xl'
-                        } border-2 ${
-                          quality.isGood
-                            ? 'border-emerald-400 shadow-[0_0_0_9999px_rgba(2,6,23,0.48)]'
-                            : 'border-dashed border-amber-400/90 shadow-[0_0_0_9999px_rgba(2,6,23,0.45)]'
-                        }`}
-                      >
-                        <div className="absolute -bottom-7 left-1/2 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full bg-slate-950/90 px-2.5 py-0.5 text-[11px] font-medium text-amber-300 ring-1 ring-slate-700">
-                          <Scan className="h-3 w-3 text-amber-400" />
-                          <span>Auto: {SHAPE_LABELS[detectedShape]}</span>
-                          {lockProgress > 0 && (
-                            <span className="font-mono text-emerald-300">• {lockProgress}%</span>
-                          )}
-                        </div>
+                    <div
+                      data-testid="auto-scan-brackets"
+                      className={`relative h-52 w-64 rounded-2xl border-2 border-dashed transition-colors duration-200 sm:h-60 sm:w-72 ${
+                        quality.isGood
+                          ? 'border-emerald-400/90 shadow-[0_0_0_9999px_rgba(2,6,23,0.38)]'
+                          : 'border-amber-400/75 shadow-[0_0_0_9999px_rgba(2,6,23,0.35)]'
+                      }`}
+                    >
+                      <div className="absolute -bottom-7 left-1/2 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full bg-slate-950/90 px-2.5 py-0.5 text-[11px] font-medium text-slate-200 ring-1 ring-slate-700">
+                        <Scan className="h-3 w-3 text-amber-400" />
+                        <span>{hasSubject ? `Detected: ${SHAPE_LABELS[detectedShape]}` : 'Align item in guide'}</span>
+                        {autoCapture && lockProgress > 0 && (
+                          <span className="font-mono text-emerald-300">• {lockProgress}%</span>
+                        )}
                       </div>
-                    ) : (
-                      <div
-                        data-testid="auto-scan-brackets"
-                        className="relative h-56 w-64 rounded-2xl border-2 border-dashed border-amber-400/75 shadow-[0_0_0_9999px_rgba(2,6,23,0.35)] sm:h-64 sm:w-72"
-                      >
-                        <div className="absolute -bottom-7 left-1/2 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full bg-slate-950/90 px-2.5 py-0.5 text-[11px] font-medium text-slate-300 ring-1 ring-slate-700">
-                          <Scan className="h-3 w-3 text-amber-400" />
-                          <span>Auto-Detect: Coin, Paper, Bar, Slab or Goldback</span>
-                        </div>
-                      </div>
-                    )
+                    </div>
                   ) : reticleMode === 'coin' ? (
-                    <div className="h-56 w-56 rounded-full border-2 border-dashed border-amber-400/90 shadow-[0_0_0_9999px_rgba(2,6,23,0.45)] sm:h-64 sm:w-64" />
+                    <div className="h-52 w-52 rounded-full border-2 border-dashed border-amber-400/90 shadow-[0_0_0_9999px_rgba(2,6,23,0.42)] sm:h-60 sm:w-60" />
                   ) : reticleMode === 'slab' ? (
-                    <div className="h-60 w-48 rounded-2xl border-2 border-dashed border-amber-400/90 shadow-[0_0_0_9999px_rgba(2,6,23,0.45)] sm:h-64 sm:w-52" />
+                    <div className="h-56 w-44 rounded-2xl border-2 border-dashed border-amber-400/90 shadow-[0_0_0_9999px_rgba(2,6,23,0.42)] sm:h-64 sm:w-48" />
                   ) : (
-                    <div className="h-44 w-72 rounded-xl border-2 border-dashed border-amber-400/90 shadow-[0_0_0_9999px_rgba(2,6,23,0.45)] sm:h-52 sm:w-80" />
+                    <div className="h-40 w-68 rounded-xl border-2 border-dashed border-amber-400/90 shadow-[0_0_0_9999px_rgba(2,6,23,0.42)] sm:h-48 sm:w-80" />
                   )}
                 </div>
 
-                {/* Live Quality Pill & Lock-On Progress */}
+                {/* Subtle Advisory Pill */}
                 <div className="pointer-events-none absolute top-3 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
                   <span
                     className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium backdrop-blur-md ${
                       quality.tone === 'good'
-                        ? 'bg-emerald-950/85 text-emerald-300 ring-1 ring-emerald-500/50'
-                        : 'bg-amber-950/85 text-amber-200 ring-1 ring-amber-500/40'
+                        ? 'bg-emerald-950/85 text-emerald-300 ring-1 ring-emerald-500/40'
+                        : 'bg-slate-950/80 text-slate-200 ring-1 ring-slate-700/80'
                     }`}
                   >
-                    <Sparkles className="h-3.5 w-3.5" />
-                    {lockProgress > 0 && autoCapture
+                    {autoCapture && lockProgress > 0
                       ? `Holding steady… Auto-snapping (${lockProgress}%)`
-                      : quality.label}
+                      : quality.isGood
+                        ? 'Ready — tap shutter'
+                        : quality.label}
                   </span>
                   {autoCapture && framingState === 'locked' && (
-                    <div className="h-1 w-36 overflow-hidden rounded-full bg-slate-900/90 ring-1 ring-slate-700">
+                    <div className="h-1 w-32 overflow-hidden rounded-full bg-slate-900/90 ring-1 ring-slate-700">
                       <div
                         data-testid="auto-snap-progress"
                         className="h-full bg-emerald-400 transition-all duration-150"
@@ -756,8 +870,11 @@ export function GuidedCameraModal({
                   )}
                 </div>
 
-                {/* Quick Macro Zoom Pills */}
-                <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full bg-slate-950/85 p-1 ring-1 ring-slate-700/80 backdrop-blur-md">
+                {/* Quick Zoom Pills */}
+                <div
+                  className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full bg-slate-950/85 p-1 ring-1 ring-slate-700/80 backdrop-blur-md"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   {[1, 1.5, 2, 3].map((presetZoom) => (
                     <button
                       key={presetZoom}
@@ -773,24 +890,12 @@ export function GuidedCameraModal({
                     </button>
                   ))}
                 </div>
-
-                {/* Recommended Zoom Prompt */}
-                {recommendedZoom > zoom && (
-                  <button
-                    type="button"
-                    onClick={() => setZoom(recommendedZoom)}
-                    className="absolute bottom-3 right-3 inline-flex items-center gap-1 rounded-full bg-slate-900/90 px-3 py-1 text-xs font-medium text-amber-300 ring-1 ring-amber-400/40 hover:bg-slate-800"
-                  >
-                    <ZoomIn className="h-3.5 w-3.5" />
-                    Zoom to {recommendedZoom.toFixed(2)}x
-                  </button>
-                )}
               </>
             )}
 
             {frontPreview && step === 'back' && (
               <div className="absolute bottom-3 left-3 flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/90 p-1.5 pr-2.5">
-                <img src={frontPreview} alt="Front captured" className="h-10 w-10 rounded object-cover" />
+                <img src={frontPreview} alt="Front captured" className="h-9 w-9 rounded object-cover" />
                 <span className="flex items-center gap-1 text-xs text-emerald-400">
                   <CheckCircle2 className="h-3.5 w-3.5" /> Front saved
                 </span>
@@ -800,15 +905,15 @@ export function GuidedCameraModal({
 
           <canvas ref={canvasRef} className="hidden" />
 
-          {/* Controls */}
-          <div className="flex flex-col gap-3 border-t border-slate-800 bg-slate-900/95 px-5 py-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              {/* Reticle Mode Toggle (Auto-Detect + Manual Stencil Overrides) */}
+          {/* Clean, Thumb-Friendly Controls */}
+          <div className="flex shrink-0 flex-col gap-3 border-t border-slate-800 bg-slate-900 px-4 py-3.5">
+            {/* Guide Shape & Zoom Row */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-1 rounded-lg bg-slate-800 p-1 text-xs">
                 <button
                   type="button"
                   onClick={() => setReticleMode('auto')}
-                  className={`rounded-md px-2.5 py-1 font-medium transition ${
+                  className={`rounded-md px-2 py-1 font-medium transition ${
                     reticleMode === 'auto' ? 'bg-amber-500 text-slate-950' : 'text-slate-300 hover:text-white'
                   }`}
                 >
@@ -817,7 +922,7 @@ export function GuidedCameraModal({
                 <button
                   type="button"
                   onClick={() => setReticleMode('coin')}
-                  className={`rounded-md px-2.5 py-1 font-medium transition ${
+                  className={`rounded-md px-2 py-1 font-medium transition ${
                     reticleMode === 'coin' ? 'bg-amber-500 text-slate-950' : 'text-slate-300 hover:text-white'
                   }`}
                 >
@@ -826,7 +931,7 @@ export function GuidedCameraModal({
                 <button
                   type="button"
                   onClick={() => setReticleMode('slab')}
-                  className={`rounded-md px-2.5 py-1 font-medium transition ${
+                  className={`rounded-md px-2 py-1 font-medium transition ${
                     reticleMode === 'slab' ? 'bg-amber-500 text-slate-950' : 'text-slate-300 hover:text-white'
                   }`}
                 >
@@ -835,7 +940,7 @@ export function GuidedCameraModal({
                 <button
                   type="button"
                   onClick={() => setReticleMode('note')}
-                  className={`rounded-md px-2.5 py-1 font-medium transition ${
+                  className={`rounded-md px-2 py-1 font-medium transition ${
                     reticleMode === 'note' ? 'bg-amber-500 text-slate-950' : 'text-slate-300 hover:text-white'
                   }`}
                 >
@@ -843,42 +948,8 @@ export function GuidedCameraModal({
                 </button>
               </div>
 
-              {/* Auto-Capture & Torch */}
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  aria-pressed={autoCapture}
-                  onClick={() => setAutoCapture((v) => !v)}
-                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
-                    autoCapture
-                      ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300'
-                      : 'border-slate-700 text-slate-300 hover:bg-slate-800'
-                  }`}
-                >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  Auto-Capture {autoCapture ? 'On' : 'Off'}
-                </button>
-
-                {torchSupported && (
-                  <button
-                    type="button"
-                    aria-pressed={torchOn}
-                    onClick={() => setTorchOn((v) => !v)}
-                    className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
-                      torchOn
-                        ? 'border-amber-400/60 bg-amber-500/15 text-amber-300'
-                        : 'border-slate-700 text-slate-300 hover:bg-slate-800'
-                    }`}
-                  >
-                    <Flashlight className="h-3.5 w-3.5" />
-                    Light
-                  </button>
-                )}
-              </div>
-
-              {/* Zoom Slider */}
-              <div className="flex items-center gap-2 text-xs text-slate-300">
-                <ZoomIn className="h-4 w-4 text-slate-400" />
+              <div className="hidden sm:flex items-center gap-1.5 text-xs text-slate-300">
+                <ZoomIn className="h-3.5 w-3.5 text-slate-400" />
                 <input
                   type="range"
                   min={1}
@@ -887,17 +958,18 @@ export function GuidedCameraModal({
                   value={zoom}
                   onChange={(e) => setZoom(parseFloat(e.target.value))}
                   aria-label="Camera zoom"
-                  className="w-28 accent-amber-400"
+                  className="w-20 accent-amber-400"
                 />
-                <span className="w-8 text-right font-mono">{zoom.toFixed(1)}x</span>
+                <span className="w-7 text-right font-mono">{zoom.toFixed(1)}x</span>
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2">
+            {/* Primary Shutter Bar */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
                 <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800">
                   <Upload className="h-3.5 w-3.5" />
-                  Native Camera
+                  <span>Native Camera</span>
                   <input
                     type="file"
                     accept="image/*"
@@ -906,27 +978,6 @@ export function GuidedCameraModal({
                     className="hidden"
                   />
                 </label>
-                {step === 'back' && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setStep('front');
-                        setFrontFile(null);
-                      }}
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800"
-                    >
-                      <RefreshCw className="h-3.5 w-3.5" /> Retake Front
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleFinishSingle}
-                      className="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800"
-                    >
-                      Skip Back (Single Photo)
-                    </button>
-                  </>
-                )}
               </div>
 
               {!cameraError && (
@@ -934,12 +985,40 @@ export function GuidedCameraModal({
                   type="button"
                   onClick={() => void captureCurrentFrame()}
                   disabled={!cameraReady || capturing}
-                  className="inline-flex items-center gap-2 rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-400 disabled:opacity-50"
+                  aria-label={`Capture ${step === 'front' ? 'Front' : 'Back'}`}
+                  className="group relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full border-4 border-white bg-amber-500 text-slate-950 shadow-lg transition active:scale-95 hover:bg-amber-400 disabled:opacity-50"
                 >
-                  <Camera className="h-4 w-4" />
-                  {capturing ? 'Capturing…' : `Capture ${step === 'front' ? 'Front' : 'Back'}`}
+                  <Camera className="h-6 w-6" />
                 </button>
               )}
+
+              <div className="flex items-center justify-end gap-1.5">
+                {step === 'back' ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStep('front');
+                        setFrontFile(null);
+                      }}
+                      className="inline-flex items-center gap-1 rounded-xl border border-slate-700 px-2.5 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                      title="Retake Front"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">Retake Front</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleFinishSingle}
+                      className="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200 hover:bg-slate-800"
+                    >
+                      Skip Back
+                    </button>
+                  </>
+                ) : (
+                  <div className="w-24 sm:w-28" />
+                )}
+              </div>
             </div>
           </div>
         </div>
