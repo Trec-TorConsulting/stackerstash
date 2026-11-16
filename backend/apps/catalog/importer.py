@@ -642,6 +642,12 @@ def import_mapped_csv(
                                 if task[0].category == CollectionItem.Category.BAR
                                 else "note"
                                 if task[0].category == CollectionItem.Category.PAPER
+                                else "coin"
+                                if (
+                                    task[0].category
+                                    in (CollectionItem.Category.COIN, CollectionItem.Category.ROUND)
+                                    and task[0].grading_service == CollectionItem.GradingService.NONE
+                                )
                                 else None
                             ),
                         ),

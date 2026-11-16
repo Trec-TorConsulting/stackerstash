@@ -249,7 +249,7 @@ export function CollectionPage() {
           >
             {isSelected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4" />}
           </button>
-          <div className="absolute top-2.5 left-2.5 flex flex-wrap items-center gap-1">
+          <div className="absolute top-2.5 left-2.5 right-10 flex flex-wrap items-center gap-1">
             <span
               className={`text-[11px] font-medium px-2 py-0.5 rounded-full border ${
                 METAL_BADGE_COLORS[item.metal_type] || METAL_BADGE_COLORS.NONE
@@ -257,7 +257,7 @@ export function CollectionPage() {
             >
               {item.metal_type !== "NONE" ? item.metal_type : CATEGORY_LABELS[item.category]}
             </span>
-            {isGraded && (
+            {isGraded && !(item.metal_type === "NONE" && item.category === "SLAB") && (
               <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full border bg-emerald-500/15 text-emerald-300 border-emerald-500/30">
                 Graded
               </span>
@@ -370,6 +370,9 @@ export function CollectionPage() {
           <div className="lg:col-span-2 relative">
             <Search className="h-4 w-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
+              id="collection-search"
+              name="q"
+              aria-label="Search collection items"
               type="text"
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -379,6 +382,8 @@ export function CollectionPage() {
           </div>
 
           <select
+            id="collection-sort-category"
+            name="sort_category"
             aria-label="Filter by sort category"
             value={sortCategory}
             onChange={(e) => {
@@ -396,6 +401,8 @@ export function CollectionPage() {
           </select>
 
           <select
+            id="collection-sort-subcategory"
+            name="sort_subcategory"
             aria-label="Filter by sub-category"
             value={sortSubcategory}
             onChange={(e) => setSortSubcategory(e.target.value)}
@@ -410,6 +417,8 @@ export function CollectionPage() {
           </select>
 
           <select
+            id="collection-graded-filter"
+            name="graded_filter"
             aria-label="Filter by graded status"
             value={gradedFilter}
             onChange={(e) => setGradedFilter(e.target.value)}
@@ -422,6 +431,8 @@ export function CollectionPage() {
 
           <div className="flex items-center gap-1.5 min-w-0">
             <select
+              id="collection-sort-order"
+              name="sort"
               aria-label="Sort items"
               value={sort}
               onChange={(e) => setSort(e.target.value)}

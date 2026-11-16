@@ -304,8 +304,17 @@ class CollectionItem(models.Model):
         ]
 
     def save(self, *args, **kwargs) -> None:
+        eff_weight = self.weight_value
+        eff_unit = self.weight_unit
+        if (
+            (eff_weight is None or eff_weight <= Decimal("0"))
+            and self.gross_weight_grams
+            and self.gross_weight_grams > Decimal("0")
+        ):
+            eff_weight = self.gross_weight_grams
+            eff_unit = self.WeightUnit.G
         self.fine_troy_oz = compute_fine_troy_oz(
-            self.weight_value, self.weight_unit, self.purity, self.metal_type
+            eff_weight, eff_unit, self.purity, self.metal_type
         )
         super().save(*args, **kwargs)
 

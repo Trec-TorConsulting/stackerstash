@@ -130,15 +130,19 @@ export function DashboardPage() {
         </div>
         <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
           <div className="text-xs text-slate-400 mb-1">Unrealized P&amp;L</div>
-          <div
-            className={`text-2xl font-bold font-mono flex items-center gap-1 ${
-              pnlNum >= 0 ? "text-emerald-400" : "text-rose-400"
-            }`}
-          >
-            <TrendingUp className="h-5 w-5" />
-            {pnlNum >= 0 ? "+" : ""}
-            {formatUsd(summary.unrealized_pnl)}
-          </div>
+          {Number(summary.total_cost_basis || 0) <= 0 ? (
+            <div className="text-2xl font-bold font-mono text-slate-400">—</div>
+          ) : (
+            <div
+              className={`text-2xl font-bold font-mono flex items-center gap-1 ${
+                pnlNum >= 0 ? "text-emerald-400" : "text-rose-400"
+              }`}
+            >
+              <TrendingUp className="h-5 w-5" />
+              {pnlNum >= 0 ? "+" : ""}
+              {formatUsd(summary.unrealized_pnl)}
+            </div>
+          )}
         </div>
       </div>
 

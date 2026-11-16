@@ -1,6 +1,7 @@
 import { Download } from "lucide-react";
 import { Link } from "react-router-dom";
 import { usePwaInstall } from "../hooks/usePwaInstall";
+import { getAuthToken } from "../lib/api";
 import { BrandLogo } from "./BrandLogo";
 
 interface SiteFooterProps {
@@ -9,6 +10,7 @@ interface SiteFooterProps {
 
 export function SiteFooter({ compact = false }: SiteFooterProps) {
   const { canInstall, promptInstall } = usePwaInstall();
+  const isSignedIn = Boolean(getAuthToken());
 
   return (
     <footer className="no-print border-t border-slate-800/80 bg-slate-950/90 text-slate-400">
@@ -31,8 +33,8 @@ export function SiteFooter({ compact = false }: SiteFooterProps) {
           <Link to="/marketing" className="hover:text-amber-400 transition">
             Features
           </Link>
-          <Link to="/login" className="hover:text-amber-400 transition">
-            Vault Sign In
+          <Link to={isSignedIn ? "/collection" : "/login"} className="hover:text-amber-400 transition">
+            {isSignedIn ? "Vault" : "Vault Sign In"}
           </Link>
           {canInstall && (
             <button

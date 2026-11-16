@@ -461,4 +461,129 @@ def test_bar_and_note_cropping_on_textured_dark_mat(api_client, user_a):
     assert 165 <= p_data["height"] <= 205
 
 
+@pytest.mark.django_db
+def test_proof_coin_and_sleeved_note_background_removal():
+    from PIL import ImageDraw
+
+    from apps.catalog.image_processing import extract_coin_and_slab_images, process_item_image
+
+    # Build a dark woven mat background (simulating carbon-fiber mat)
+    mat = Image.new("RGB", (480, 480), color=(22, 22, 24))
+    mat_draw = ImageDraw.Draw(mat)
+    for y in range(0, 480, 8):
+        for x in range(0, 480, 8):
+            if ((x // 8) + (y // 8)) % 2 == 0:
+                mat_draw.rectangle((x, y, x + 5, y + 5), fill=(42, 42, 46))
+
+    # 1. Proof silver round with dark mirror fields and bright rim/devices on dark mat
+    coin_img = mat.copy()
+    coin_draw = ImageDraw.Draw(coin_img)
+    # Bright silver rim, dark mirror interior, bright frosted center device
+    coin_draw.ellipse((110, 110, 370, 370), fill=(26, 28, 32), outline=(215, 218, 222), width=10)
+    coin_draw.ellipse((195, 195, 285, 285), fill=(205, 208, 214))
+    coin_buf = io.BytesIO()
+    coin_img.save(coin_buf, format="JPEG", quality=95)
+
+    (coin_bytes, cw, ch, cext), slab_res = extract_coin_and_slab_images(coin_buf.getvalue(), enhance=True)
+    assert slab_res is None
+    assert cext == "png"
+    assert 240 <= cw <= 290
+    assert 240 <= ch <= 290
+    coin_out = Image.open(io.BytesIO(coin_bytes))
+    assert coin_out.getpixel((0, 0))[3] == 0
+    # Dark mirror field inside coin must remain opaque (not eaten as background)
+    assert coin_out.getpixel((cw // 2, int(ch * 0.25)))[3] > 200
+    assert coin_out.getpixel((cw // 2, ch // 2))[3] > 200
+
+    # 2. Goldback/banknote inside a rectangular clear sleeve on a dark mat
+    note_img = mat.copy()
+    note_draw = ImageDraw.Draw(note_img)
+    # Clear sleeve outline (slightly lighter border over dark mat)
+    note_draw.rectangle((45, 95, 435, 345), fill=(36, 36, 40), outline=(145, 145, 150), width=3)
+    # Goldback note inside the sleeve
+    note_draw.rectangle((85, 135, 395, 305), fill=(195, 160, 75), outline=(225, 195, 110), width=4)
+    note_buf = io.BytesIO()
+    note_img.save(note_buf, format="JPEG", quality=95)
+
+    note_bytes, nw, nh, next_ = process_item_image(
+        note_buf.getvalue(), remove_background=True, enhance=True, shape_hint="note"
+    )
+    assert next_ == "png"
+    # Should snap tightly to the 310x170 note inside the 390x250 sleeve
+    assert 295 <= nw <= 335
+    assert 155 <= nh <= 190
+    note_out = Image.open(io.BytesIO(note_bytes))
+    assert note_out.getpixel((0, 0))[3] == 0
+    assert note_out.getpixel((nw // 2, nh // 2))[3] > 200
+
+
+@pytest.mark.django_db
+def test_small_slab_coin_extraction_rotate_and_gross_weight_fallback(api_client, user_a):
+    from decimal import Decimal
+
+    from PIL import ImageDraw
+
+    from apps.catalog.image_processing import extract_coin_and_slab_images
+    from apps.catalog.models import CollectionItem
+
+    # 1. Small-denomination coin (dime, r=42 in 260px-wide slab => ~0.16 * slab_w)
+    img = Image.new("RGB", (400, 560), color=(245, 245, 245))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle((70, 40, 330, 500), radius=18, fill=(238, 238, 238), outline=(70, 70, 70), width=6)
+    draw.rectangle((90, 60, 310, 170), fill=(250, 250, 250), outline=(140, 140, 140), width=2)
+    draw.ellipse((158, 290, 242, 374), fill=(180, 184, 190), outline=(55, 55, 55), width=4)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=95)
+
+    (coin_bytes, cw, ch, cext), slab_res = extract_coin_and_slab_images(buf.getvalue(), enhance=True)
+    assert slab_res is not None
+    assert cext == "png"
+    assert abs(cw - ch) < 20
+    assert cw < 120
+
+    # 2. Photo rotation endpoint swaps dimensions on 90-degree rotation
+    _, workspace_a, token_a = user_a
+    headers_a = {"HTTP_AUTHORIZATION": f"Bearer {token_a}"}
+    item_resp = api_client.post(
+        "/api/v1/catalog/items",
+        data=json.dumps({
+            "title": "Test Silver Round",
+            "category": "ROUND",
+            "metal_type": "SILVER",
+            "weight_value": "0",
+            "weight_unit": "OZ_T",
+            "purity": "0.999",
+            "gross_weight_grams": "31.10",
+        }),
+        content_type="application/json",
+        **headers_a,
+    ).json()
+
+    db_item = CollectionItem.objects.get(id=item_resp["id"], workspace=workspace_a)
+    assert db_item.fine_troy_oz > Decimal("0.99")
+
+    rect_img = Image.new("RGBA", (120, 80), color=(200, 170, 60, 255))
+    rect_buf = io.BytesIO()
+    rect_img.save(rect_buf, format="PNG")
+    upload = SimpleUploadedFile("bar.png", rect_buf.getvalue(), content_type="image/png")
+    p_resp = api_client.post(
+        f"/api/v1/catalog/items/{item_resp['id']}/photos",
+        data={"file": upload, "label": "OBVERSE", "is_primary": "true", "remove_background": "false"},
+        **headers_a,
+    ).json()
+
+    rot_resp = api_client.post(
+        f"/api/v1/catalog/items/{item_resp['id']}/photos/{p_resp['id']}/rotate",
+        data=json.dumps({"degrees": 90}),
+        content_type="application/json",
+        **headers_a,
+    )
+    assert rot_resp.status_code == 200
+    rot_data = rot_resp.json()
+    assert rot_data["width"] == 80
+    assert rot_data["height"] == 120
+
+
+
+
 
