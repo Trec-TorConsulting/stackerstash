@@ -384,64 +384,87 @@ def detect_coin_in_slab(rgba: Image.Image) -> tuple[int, int, int] | None:
     small = cv2.resize(crop, (sw, sh), interpolation=cv2.INTER_AREA)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(small)
     blurred = cv2.GaussianBlur(clahe, (5, 5), 1.2)
-    edges = cv2.Canny(blurred, 45, 135)
+    gx = cv2.Sobel(blurred, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(blurred, cv2.CV_32F, 0, 1, ksize=3)
+    mag = np.hypot(gx, gy) + 1e-5
+    edges = cv2.Canny(blurred, 40, 125)
 
-    min_r = max(8, int(sw * 0.13))
+    min_r = max(8, int(sw * 0.11))
     max_r = max(min_r + 4, int(sw * 0.43))
-    circles = cv2.HoughCircles(
-        blurred,
-        cv2.HOUGH_GRADIENT,
-        dp=1.2,
-        minDist=sw * 0.12,
-        param1=90,
-        param2=24,
-        minRadius=min_r,
-        maxRadius=max_r,
-    )
-    if circles is None:
+
+    candidates: list[tuple[float, float, float]] = []
+    for p1, p2 in ((90, 24), (80, 18)):
         circles = cv2.HoughCircles(
             blurred,
             cv2.HOUGH_GRADIENT,
             dp=1.2,
-            minDist=sw * 0.12,
-            param1=80,
-            param2=18,
+            minDist=sw * 0.08,
+            param1=p1,
+            param2=p2,
             minRadius=min_r,
             maxRadius=max_r,
         )
-    if circles is None:
-        return None
+        if circles is not None:
+            for c in circles[0]:
+                candidates.append((float(c[0]), float(c[1]), float(c[2])))
+
+    # Concentric sweep in lower-half slab region so outer plastic rings never suppress inner small coins
+    for cy_grid in np.linspace(0.54 * sh, 0.74 * sh, 7):
+        for cx_grid in np.linspace(0.44 * sw, 0.56 * sw, 5):
+            for r_grid in range(min_r, max_r + 1, 3):
+                candidates.append((float(cx_grid), float(cy_grid), float(r_grid)))
 
     angles = np.linspace(0, 2 * np.pi, 72, endpoint=False)
     cos_a = np.cos(angles)
     sin_a = np.sin(angles)
+    yy, xx = np.ogrid[:sh, :sw]
 
     best: tuple[float, float, float] | None = None
     best_score = -1e9
-    for c in circles[0]:
-        cx_s, cy_s, r_s = float(c[0]), float(c[1]), float(c[2])
+    for cx_s, cy_s, r_s in candidates:
         horiz_err = abs(cx_s - 0.5 * sw) / sw
-        if horiz_err > 0.15:
+        if horiz_err > 0.14:
             continue
-        if cy_s < 0.48 * sh or cy_s > 0.85 * sh:
+        if cy_s < 0.46 * sh or cy_s > 0.85 * sh:
             continue
-        if cy_s - r_s < 0.25 * sh or cy_s + r_s > 0.97 * sh:
+        if cy_s - r_s < 0.24 * sh or cy_s + r_s > 0.97 * sh:
             continue
         if cx_s - r_s < 0.03 * sw or cx_s + r_s > 0.97 * sw:
             continue
 
-        support = 0
-        for dr in (-1.5, 0.0, 1.5):
+        aligned = np.zeros(72, dtype=bool)
+        for dr in (-1.0, 0.0, 1.0):
             rr = r_s + dr
             px = np.clip(np.round(cx_s + rr * cos_a).astype(int), 0, sw - 1)
             py = np.clip(np.round(cy_s + rr * sin_a).astype(int), 0, sh - 1)
-            support += int((edges[py, px] > 0).sum())
-        score = support - horiz_err * 80.0
+            dot = np.abs(gx[py, px] * cos_a + gy[py, px] * sin_a) / mag[py, px]
+            aligned |= (edges[py, px] > 0) & (dot >= 0.74)
+        aligned_cov = int(aligned.sum())
+        if aligned_cov < 36:
+            continue
+
+        dist = np.sqrt((xx - cx_s) ** 2 + (yy - cy_s) ** 2)
+        core_mask = dist <= 0.82 * r_s
+        annulus_mask = (dist >= 1.12 * r_s) & (dist <= min(0.45 * sw, 1.60 * r_s))
+        core_grad = float(mag[core_mask].mean()) if core_mask.any() else 0.0
+        annulus_grad = float(mag[annulus_mask].mean()) if annulus_mask.any() else core_grad
+
+        # Reward coins whose interior relief is much richer than a smooth surrounding gasket/ring
+        relief_ratio_bonus = 0.0
+        if annulus_grad > 1.0 and core_grad > annulus_grad * 1.25:
+            relief_ratio_bonus = min(36.0, (core_grad / annulus_grad - 1.0) * 28.0)
+
+        score = (
+            aligned_cov * 1.8
+            + min(24.0, core_grad * 0.25)
+            + relief_ratio_bonus
+            - horiz_err * 95.0
+        )
         if score > best_score:
             best_score = score
             best = (cx_s, cy_s, r_s)
 
-    if best is None or best_score < 28:
+    if best is None:
         return None
 
     cx = int(round(x0 + best[0] / scale))
@@ -452,13 +475,19 @@ def detect_coin_in_slab(rgba: Image.Image) -> tuple[int, int, int] | None:
 
 def detect_circular_coin(img: Image.Image) -> tuple[int, int, int] | None:
     """
-    Detect a circular coin or round (cx, cy, r) directly from an original image.
-    Uses CLAHE + HoughCircles + angular edge coverage + radial LAB contrast so
-    dark proof mirror fields and underexposed photos still detect the full coin rim.
+    Detect a centered circular coin or round (cx, cy, r) directly from an image.
+    Uses CLAHE + Sobel radial-normal alignment + concentric inner-coin disambiguation
+    so small coins in assay cards/holder rings are extracted accurately while never
+    hallucinating off-center circles over text or sub-cropping already-cutout coins.
     """
     orig_w, orig_h = img.size
     if orig_w < 48 or orig_h < 48:
         return None
+
+    already_cutout = (
+        _has_existing_transparency(img)
+        and abs(orig_w - orig_h) <= 0.08 * max(orig_w, orig_h)
+    )
 
     work_max = 480.0
     scale = min(1.0, work_max / max(orig_w, orig_h))
@@ -472,63 +501,70 @@ def detect_circular_coin(img: Image.Image) -> tuple[int, int, int] | None:
 
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
     blurred = cv2.GaussianBlur(clahe, (5, 5), 1.2)
+    gx = cv2.Sobel(blurred, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(blurred, cv2.CV_32F, 0, 1, ksize=3)
+    mag = np.hypot(gx, gy) + 1e-5
     edges = cv2.Canny(blurred, 40, 120)
 
     min_dim = min(sw, sh)
-    min_r = max(14, int(min_dim * 0.14))
+    min_r = max(12, int(min_dim * 0.09))
     max_r = max(min_r + 6, int(min_dim * 0.49))
 
-    circles = cv2.HoughCircles(
-        blurred,
-        cv2.HOUGH_GRADIENT,
-        dp=1.2,
-        minDist=min_dim * 0.18,
-        param1=90,
-        param2=28,
-        minRadius=min_r,
-        maxRadius=max_r,
-    )
-    if circles is None:
+    candidates: list[tuple[float, float, float]] = []
+    for p1, p2 in ((90, 26), (80, 18)):
         circles = cv2.HoughCircles(
             blurred,
             cv2.HOUGH_GRADIENT,
             dp=1.2,
-            minDist=min_dim * 0.18,
-            param1=80,
-            param2=20,
+            minDist=min_dim * 0.10,
+            param1=p1,
+            param2=p2,
             minRadius=min_r,
             maxRadius=max_r,
         )
-    if circles is None:
-        return None
+        if circles is not None:
+            for c in circles[0]:
+                candidates.append((float(c[0]), float(c[1]), float(c[2])))
+
+    # Concentric sweep near image center so outer capsule/card borders never suppress inner small coins
+    for dy in range(-18, 19, 6):
+        for dx in range(-18, 19, 6):
+            cx_g = 0.5 * sw + dx
+            cy_g = 0.5 * sh + dy
+            for r_g in range(min_r, max_r + 1, 3):
+                candidates.append((float(cx_g), float(cy_g), float(r_g)))
 
     angles = np.linspace(0, 2 * np.pi, 72, endpoint=False)
     cos_a = np.cos(angles)
     sin_a = np.sin(angles)
     yy, xx = np.ogrid[:sh, :sw]
 
-    best: tuple[float, float, float] | None = None
-    best_score = -1e9
-    for c in circles[0]:
-        cx_s, cy_s, r_s = float(c[0]), float(c[1]), float(c[2])
-        if cx_s < 0.15 * sw or cx_s > 0.85 * sw or cy_s < 0.15 * sh or cy_s > 0.85 * sh:
+    best_inner: tuple[float, float, float] | None = None
+    best_inner_score = -1e9
+    best_outer: tuple[float, float, float] | None = None
+    best_outer_score = -1e9
+
+    for cx_s, cy_s, r_s in candidates:
+        # Must be near the center of the frame — never jump to off-center card text
+        if abs(cx_s - 0.5 * sw) > 0.18 * sw or abs(cy_s - 0.5 * sh) > 0.20 * sh:
             continue
         if (
-            cx_s - r_s < -0.04 * sw
-            or cx_s + r_s > 1.04 * sw
-            or cy_s - r_s < -0.04 * sh
-            or cy_s + r_s > 1.04 * sh
+            cx_s - r_s < -0.03 * sw
+            or cx_s + r_s > 1.03 * sw
+            or cy_s - r_s < -0.03 * sh
+            or cy_s + r_s > 1.03 * sh
         ):
             continue
 
-        covered = np.zeros(72, dtype=bool)
-        for dr in (-2.0, -1.0, 0.0, 1.0, 2.0):
+        aligned = np.zeros(72, dtype=bool)
+        for dr in (-1.0, 0.0, 1.0):
             rr = r_s + dr
             px = np.clip(np.round(cx_s + rr * cos_a).astype(int), 0, sw - 1)
             py = np.clip(np.round(cy_s + rr * sin_a).astype(int), 0, sh - 1)
-            covered |= edges[py, px] > 0
-        angular_cov = int(covered.sum())
-        if angular_cov < 40:
+            dot = np.abs(gx[py, px] * cos_a + gy[py, px] * sin_a) / mag[py, px]
+            aligned |= (edges[py, px] > 0) & (dot >= 0.76)
+        aligned_cov = int(aligned.sum())
+        if aligned_cov < 43:
             continue
 
         dist = np.sqrt((xx - cx_s) ** 2 + (yy - cy_s) ** 2)
@@ -538,28 +574,53 @@ def detect_circular_coin(img: Image.Image) -> tuple[int, int, int] | None:
         if inner_mask.any() and outer_mask.any():
             lab_diff = float(np.linalg.norm(lab[inner_mask].mean(axis=0) - lab[outer_mask].mean(axis=0)))
 
-        interior_mask = dist <= 0.88 * r_s
-        interior_std = float(gray[interior_mask].std()) if interior_mask.any() else 0.0
-        center_err = float(
-            np.hypot((cx_s - 0.5 * sw) / sw, (cy_s - 0.5 * sh) / sh)
-        )
+        core_mask = dist <= 0.82 * r_s
+        core_grad = float(mag[core_mask].mean()) if core_mask.any() else 0.0
+        interior_std = float(gray[core_mask].std()) if core_mask.any() else 0.0
+        center_err = float(np.hypot((cx_s - 0.5 * sw) / sw, (cy_s - 0.5 * sh) / sh))
 
-        score = (
-            angular_cov * 1.6
-            + min(30.0, lab_diff * 0.6)
-            + min(15.0, interior_std * 0.25)
-            - center_err * 35.0
-        )
-        if score > best_score:
-            best_score = score
-            best = (cx_s, cy_s, r_s)
+        annulus_mask = (dist >= 1.15 * r_s) & (dist <= min(0.44 * min_dim, 1.65 * r_s))
+        annulus_grad = float(mag[annulus_mask].mean()) if annulus_mask.any() else core_grad
 
-    if best is None:
+        # Check if this is a distinct smaller coin nested inside a gasket/assay card/holder ring
+        is_distinct_inner_coin = (
+            r_s <= 0.34 * min_dim
+            and center_err <= 0.11
+            and aligned_cov >= 48
+            and core_grad >= 48.0
+            and annulus_mask.any()
+            and core_grad >= annulus_grad * 1.45
+        )
+        if is_distinct_inner_coin:
+            inner_score = (
+                aligned_cov * 2.0
+                + min(35.0, (core_grad / max(1.0, annulus_grad) - 1.0) * 30.0)
+                + min(20.0, lab_diff * 0.5)
+                - center_err * 90.0
+            )
+            if inner_score > best_inner_score:
+                best_inner_score = inner_score
+                best_inner = (cx_s, cy_s, r_s)
+
+        if not already_cutout:
+            outer_score = (
+                aligned_cov * 1.6
+                + min(30.0, lab_diff * 0.6)
+                + min(15.0, interior_std * 0.25)
+                + min(18.0, (r_s / min_dim) * 36.0)
+                - center_err * 65.0
+            )
+            if outer_score > best_outer_score:
+                best_outer_score = outer_score
+                best_outer = (cx_s, cy_s, r_s)
+
+    chosen = best_inner if best_inner is not None else best_outer
+    if chosen is None:
         return None
 
-    cx = int(round(best[0] / scale))
-    cy = int(round(best[1] / scale))
-    r = int(round(best[2] / scale))
+    cx = int(round(chosen[0] / scale))
+    cy = int(round(chosen[1] / scale))
+    r = int(round(chosen[2] / scale))
     return cx, cy, r
 
 
