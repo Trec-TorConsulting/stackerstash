@@ -71,7 +71,7 @@ Strict rules:
 - Check carefully whether the image shows a real physical item vs. a photo of a screen/monitor, a printed photo, a screenshot, or a synthetic/edited image. Set authenticity flags and add concise warnings if suspicious.
 - If the item is encapsulated in a third-party grading slab (PCGS, NGC, PMG, PCGS Banknote, CACG, ANACS, ICG, etc.), set "category" to "SLAB", populate "grading_service", "grade", "cert_number" (the slab certification/registry number), and "slab_designation" (e.g., First Strike, Early Releases, DCAM, UCAM, PL, DMPL, EPQ, PPQ, Star, CAC, Pedigree).
 - For paper currency (including slabbed banknotes) or serialized bars, put the note/bar serial number in "serial_number" (separate from the slab "cert_number").
-- For Goldbacks (Aurum/Goldback Inc. 24K gold foil notes), NEVER confuse "1/4 Goldback" or "1/2 Goldback" with 1/4 oz or 1/2 oz: 1 Goldback = 0.001 ozt (1/1000 ozt), 1/2 Goldback = 0.0005 ozt (1/2000 ozt), 1/4 Goldback = 0.00025 ozt (1/4000 ozt), 5 Goldbacks = 0.005 ozt, 10 Goldbacks = 0.01 ozt, 25 Goldbacks = 0.025 ozt, 50 Goldbacks = 0.05 ozt, 100 Goldbacks = 0.1 ozt. Read the exact year (e.g. 2026 vs 2023) and serial number printed on the note.
+- For Goldbacks (Aurum/Goldback Inc. 24K .9999 gold foil voluntary currency notes across Utah, Nevada, New Hampshire, Wyoming, South Dakota, Florida, Oklahoma, Arizona, Idaho, California, etc.), NEVER confuse fractional Goldbacks with troy-ounce bullion: 1/4 = 0.00025 ozt (1/4,000), 1/2 = 0.0005 ozt (1/2,000), 1 = 0.001 ozt (1/1,000), 2 = 0.002 ozt (1/500), 5 = 0.005 ozt (1/200), 10 = 0.01 ozt (1/100), 25 = 0.025 ozt (1/40), 50 = 0.05 ozt (1/20), 100 = 0.1 ozt (1/10). Set category="PAPER", metal_type="GOLD", purity=0.9999, weight_unit="OZ_T", and read the exact year and serial number printed on the note.
 - Put certified slab grades in "grade" ONLY if it is a third-party slab; put raw/unverified condition estimates in "estimated_grade".
 - Set "ai_confidence" between 0.0 and 1.0.
 """
@@ -121,7 +121,9 @@ def _normalize_candidate(raw: dict[str, Any], barcode_hint: str | None = None) -
         "ai_confidence": float(raw.get("ai_confidence") or 0.0),
         "notes": raw.get("notes") or "",
     }
-    return candidate
+    from apps.catalog.goldback import normalize_goldback_candidate
+
+    return normalize_goldback_candidate(candidate)
 
 
 def _sanitize_error_message(message: str) -> str:
@@ -506,7 +508,9 @@ def _enrich_candidate_from_catalog(
             if specs.get("gross_weight_grams") and not candidate.get("weight_value"):
                 candidate["weight_value"] = float(specs["gross_weight_grams"])
                 candidate["weight_unit"] = "G"
-    return candidate
+    from apps.catalog.goldback import normalize_goldback_candidate
+
+    return normalize_goldback_candidate(candidate)
 
 
 def _attempt_ocr_fallback(

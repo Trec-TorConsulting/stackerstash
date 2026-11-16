@@ -532,5 +532,80 @@ def test_process_deferred_ai_enrichment_task_upgrades_pending_item(user_a, monke
     assert item.ai_enrichment_pending is False
 
 
+@pytest.mark.django_db
+def test_goldback_candidate_normalization_and_exchange_rate_valuation(user_a, monkeypatch):
+    from decimal import Decimal
+
+    from apps.catalog.auto_sort import classify_item_deterministic
+    from apps.catalog.goldback import GOLDBACK_DENOMINATION_WEIGHTS
+    from apps.catalog.models import CollectionItem
+    from apps.valuation.models import SpotPriceSnapshot, ValuationHistory
+    from apps.valuation.services import appraise_item
+    from apps.vision.services import _normalize_candidate
+
+    # 1. All 9 denominations normalize deterministically to exact troy-ounce weights
+    expected = {
+        "1/4": 0.00025,
+        "1/2": 0.0005,
+        "1": 0.001,
+        "2": 0.002,
+        "5": 0.005,
+        "10": 0.01,
+        "25": 0.025,
+        "50": 0.05,
+        "100": 0.1,
+    }
+    assert set(GOLDBACK_DENOMINATION_WEIGHTS.keys()) == set(expected.keys())
+    for denom, wt in expected.items():
+        norm = _normalize_candidate({
+            "category": "OTHER",
+            "title": f"2026 Florida {denom} Goldback Aurum Note",
+            "denomination": denom,
+            "weight_value": 0.25 if denom == "1/4" else 0,
+            "metal_type": "NONE",
+            "purity": 0.9,
+        })
+        assert norm["category"] == "PAPER"
+        assert norm["country"] == "United States"
+        assert norm["metal_type"] == "GOLD"
+        assert norm["weight_unit"] == "OZ_T"
+        assert norm["purity"] == pytest.approx(0.9999)
+        assert norm["weight_value"] == pytest.approx(wt)
+        assert norm["denomination"] == f"{denom} Goldback"
+
+    # 2. Auto-sort classifies Goldbacks into PAPER > United States
+    _, workspace, _ = user_a
+    SpotPriceSnapshot.objects.create(
+        metal_type=CollectionItem.MetalType.GOLD,
+        price_usd_per_troy_oz=Decimal("3840.00"),
+        source="test",
+    )
+    gb_item = CollectionItem.objects.create(
+        workspace=workspace,
+        title="2026 Utah 1/4 Goldback Aurum Gold Foil Note",
+        category=CollectionItem.Category.PAPER,
+        series="Utah",
+        denomination="1/4 Goldback",
+        metal_type=CollectionItem.MetalType.GOLD,
+        weight_value=Decimal("0.000250"),
+        weight_unit=CollectionItem.WeightUnit.OZ_T,
+        purity=Decimal("0.999900"),
+    )
+    sort_res = classify_item_deterministic(gb_item)
+    assert sort_res.sort_category == "PAPER"
+    assert sort_res.sort_subcategory == "United States"
+
+    # 3. Inflated AI estimate ($45.00) on a 1/4 Goldback ($0.96 melt) is grounded to ~2x melt (~$1.94)
+    monkeypatch.setattr(
+        "apps.vision.services.estimate_item_value_with_ai",
+        lambda _item, _ws: (Decimal("45.00"), {"low_usd": 30, "high_usd": 60, "photo_inspected": True}),
+    )
+    appraised = appraise_item(gb_item, workspace)
+    assert appraised.melt_value_unit == Decimal("0.96")
+    assert Decimal("1.80") <= appraised.market_value_unit <= Decimal("2.10")
+    assert any("Goldback Exchange Rate benchmark" in d for d in (appraised.valuation_drivers or []))
+
+
+
 
 

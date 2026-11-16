@@ -443,3 +443,32 @@ def lookup_bullion_dealer_benchmark(
             }
     return None
 
+
+def lookup_goldback_exchange_benchmark(
+    title: str,
+    series: str,
+    denomination: str,
+    melt_value_unit: Decimal,
+) -> dict[str, Any] | None:
+    """
+    Return the Goldback Official Exchange Rate benchmark band (~1.95x to 2.10x
+    24K gold melt value, reflecting Aurum polymer-foil manufacturing & parity).
+    """
+    from apps.catalog.goldback import is_goldback_text, parse_goldback_denomination
+
+    if not is_goldback_text(title, series, denomination):
+        return None
+    if not melt_value_unit or melt_value_unit <= Decimal("0.00"):
+        return None
+
+    denom = parse_goldback_denomination(denomination, title)
+    low = (melt_value_unit * Decimal("1.95")).quantize(Decimal("0.01"))
+    mid = (melt_value_unit * Decimal("2.02")).quantize(Decimal("0.01"))
+    high = (melt_value_unit * Decimal("2.10")).quantize(Decimal("0.01"))
+    return {
+        "denomination": denom,
+        "low_usd": str(low),
+        "mid_usd": str(mid),
+        "high_usd": str(high),
+    }
+

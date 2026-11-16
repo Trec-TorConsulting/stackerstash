@@ -19,6 +19,7 @@ from .providers import (
     lookup_bullion_dealer_benchmark,
     lookup_cert_metadata,
     lookup_ebay_sold_comps,
+    lookup_goldback_exchange_benchmark,
     lookup_greysheet,
     lookup_numismedia,
     lookup_numista_specs,
@@ -350,6 +351,34 @@ def appraise_item(
             "status": "BENCHMARK",
         }
 
+    goldback_bench = lookup_goldback_exchange_benchmark(
+        item.title, item.series, item.denomination, item.melt_value_unit or Decimal("0.00")
+    )
+    if goldback_bench:
+        sources_payload["GOLDBACK_EXCHANGE"] = {
+            "value": goldback_bench["mid_usd"],
+            "low": goldback_bench["low_usd"],
+            "high": goldback_bench["high_usd"],
+            "denomination": goldback_bench["denomination"],
+            "status": "BENCHMARK",
+        }
+        # Ground unverified AI estimates for Goldbacks when no realized comps or price guide exist
+        goldback_grounded = False
+        if (
+            quotes
+            and quotes[0][0] == CollectionItem.ValuationSource.AI_ESTIMATE
+            and item.melt_value_unit
+            and item.melt_value_unit > Decimal("0.00")
+        ):
+            ai_quote = quotes[0][1]
+            gb_min = (item.melt_value_unit * Decimal("1.50")).quantize(Decimal("0.01"))
+            gb_max = (item.melt_value_unit * Decimal("3.00")).quantize(Decimal("0.01"))
+            if ai_quote < gb_min or ai_quote > gb_max:
+                quotes[0] = (CollectionItem.ValuationSource.AI_ESTIMATE, Decimal(goldback_bench["mid_usd"]))
+                goldback_grounded = True
+    else:
+        goldback_grounded = False
+
     # 3. Reconcile primary market value & enforce melt-floor invariant
     melt_val = item.melt_value_unit or Decimal("0.00")
     primary_source, primary_val = quotes[0] if quotes else (None, None)
@@ -376,6 +405,9 @@ def appraise_item(
     if comps_res and comps_res.get("low") and comps_res.get("high"):
         low_val = Decimal(str(comps_res["low"]))
         high_val = Decimal(str(comps_res["high"]))
+    elif goldback_bench and goldback_grounded:
+        low_val = Decimal(goldback_bench["low_usd"])
+        high_val = Decimal(goldback_bench["high_usd"])
     elif ai_raw and ai_raw.get("low_usd") and ai_raw.get("high_usd"):
         low_val = Decimal(str(ai_raw["low_usd"]))
         high_val = Decimal(str(ai_raw["high_usd"]))
@@ -428,6 +460,10 @@ def appraise_item(
     if bullion_bench:
         drivers.append(
             f"Typical {bullion_bench['label']} dealer premium: +{bullion_bench['low_pct']:.0f}%–{bullion_bench['high_pct']:.0f}% over melt (${bullion_bench['low_usd']}–${bullion_bench['high_usd']})."
+        )
+    if goldback_bench:
+        drivers.append(
+            f"Goldback Exchange Rate benchmark (~1.95x–2.10x 24K melt): ${goldback_bench['low_usd']}–${goldback_bench['high_usd']}."
         )
     for d in ai_raw.get("valuation_drivers") or []:
         if d not in drivers:
