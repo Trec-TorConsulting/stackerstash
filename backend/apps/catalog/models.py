@@ -13,24 +13,32 @@ KG_GRAMS = Decimal("1000")
 
 
 def compute_fine_troy_oz(
-    weight_value: Decimal | None,
+    weight_value: Decimal | float | int | str | None,
     weight_unit: str,
-    purity: Decimal | None,
+    purity: Decimal | float | int | str | None,
     metal_type: str,
 ) -> Decimal:
     """Normalize any weight unit and purity into fine troy ounces."""
-    if metal_type == "NONE" or not weight_value or weight_value <= 0:
+    if metal_type == "NONE" or weight_value is None:
+        return Decimal("0.000000")
+    dec_weight = weight_value if isinstance(weight_value, Decimal) else Decimal(str(weight_value))
+    if dec_weight <= 0:
         return Decimal("0.000000")
 
-    effective_purity = purity if (purity and purity > 0) else Decimal("1.000000")
+    if purity is not None:
+        dec_purity = purity if isinstance(purity, Decimal) else Decimal(str(purity))
+        effective_purity = dec_purity if dec_purity > 0 else Decimal("1.000000")
+    else:
+        effective_purity = Decimal("1.000000")
+
     if weight_unit == "OZ_T":
-        troy_oz = weight_value
+        troy_oz = dec_weight
     elif weight_unit == "G":
-        troy_oz = weight_value / TROY_OZ_GRAMS
+        troy_oz = dec_weight / TROY_OZ_GRAMS
     elif weight_unit == "KG":
-        troy_oz = (weight_value * KG_GRAMS) / TROY_OZ_GRAMS
+        troy_oz = (dec_weight * KG_GRAMS) / TROY_OZ_GRAMS
     elif weight_unit == "OZ_AVDP":
-        troy_oz = (weight_value * AVDP_OZ_GRAMS) / TROY_OZ_GRAMS
+        troy_oz = (dec_weight * AVDP_OZ_GRAMS) / TROY_OZ_GRAMS
     else:
         troy_oz = Decimal("0")
 

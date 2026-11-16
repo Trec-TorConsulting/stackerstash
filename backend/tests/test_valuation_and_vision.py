@@ -425,6 +425,20 @@ def test_merge_enriched_specs_truncates_char_fields():
     assert len(item.variety) <= 120
 
 
+def test_merge_enriched_specs_coerces_float_gross_weight_to_decimal():
+    from decimal import Decimal
+
+    from apps.catalog.models import CollectionItem, compute_fine_troy_oz
+    from apps.valuation.services import _merge_enriched_specs
+
+    item = CollectionItem(title="1921 Morgan Dollar", category="COIN", metal_type="SILVER", purity=Decimal("0.900000"))
+    _merge_enriched_specs(item, [("AI", {"gross_weight_grams": 26.73, "diameter_mm": 38.1})])
+    assert isinstance(item.gross_weight_grams, Decimal)
+    assert item.gross_weight_grams == Decimal("26.73")
+    fine = compute_fine_troy_oz(26.73, "G", 0.9, "SILVER")
+    assert fine > Decimal("0.77")
+
+
 def test_gemini_vision_models_excludes_retired_models():
     from apps.vision.services import GEMINI_VISION_MODELS
 

@@ -132,6 +132,8 @@ def _merge_enriched_specs(
                     max_len = getattr(model_field, "max_length", None)
                     if max_len and isinstance(val, str):
                         val = val.strip()[:max_len]
+                    elif model_field.get_internal_type() == "DecimalField" and not isinstance(val, Decimal):
+                        val = Decimal(str(val))
                     setattr(item, field, val)
                 provenance[field] = source_tag
     item.specs_provenance = provenance
