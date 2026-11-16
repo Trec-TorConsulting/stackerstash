@@ -18,7 +18,7 @@ from PIL import Image
 
 from apps.accounts.auth import WorkspaceAuth
 
-from .image_processing import extract_coin_and_slab_images, process_item_image
+from .image_processing import extract_coin_and_slab_images, process_item_image, rotate_item_image
 from .importer import TARGET_FIELDS, import_mapped_csv, preview_csv
 from .models import CollectionItem, Container, ItemPhoto
 from .presets import ITEM_PRESETS
@@ -882,8 +882,8 @@ def _should_extract_coin_from_slab(item: CollectionItem, label: str) -> bool:
 
 
 def _item_shape_hint(item: CollectionItem, label: str) -> str | None:
-    """Return 'bar' or 'note' for rectangular items so cropping/masking snaps cleanly to their edges."""
-    if label == ItemPhoto.Label.RECEIPT:
+    """Return 'bar', 'note', or 'coin' so cropping/masking snaps cleanly to item edges."""
+    if label in (ItemPhoto.Label.RECEIPT, ItemPhoto.Label.SLAB_LABEL):
         return None
     if item.category == CollectionItem.Category.BAR:
         return "bar"
@@ -892,6 +892,11 @@ def _item_shape_hint(item: CollectionItem, label: str) -> str | None:
         CollectionItem.GradingService.PCGS_BANKNOTE,
     ):
         return "note"
+    if (
+        item.category in (CollectionItem.Category.COIN, CollectionItem.Category.ROUND)
+        and item.grading_service == CollectionItem.GradingService.NONE
+    ):
+        return "coin"
     return None
 
 
@@ -1019,6 +1024,34 @@ def remove_photo_background(request, item_id: UUID, photo_id: UUID):
             width=slab_w,
             height=slab_h,
         )
+
+    return _photo_to_out(photo)
+
+
+class RotatePhotoIn(Schema):
+    degrees: int = 90
+
+
+@catalog_router.post("/items/{item_id}/photos/{photo_id}/rotate", response=PhotoOut)
+@transaction.atomic
+def rotate_item_photo(request, item_id: UUID, photo_id: UUID, payload: RotatePhotoIn | None = None):
+    item = get_object_or_404(CollectionItem, id=item_id, workspace=request.workspace)
+    photo = get_object_or_404(ItemPhoto, id=photo_id, item=item, workspace=request.workspace)
+    degrees = payload.degrees if payload is not None else 90
+    if degrees % 360 not in (90, 180, 270):
+        raise HttpError(400, "degrees must be 90, 180, 270, or -90")
+
+    with photo.image.open("rb") as fh:
+        raw_bytes = fh.read()
+
+    processed_bytes, width, height, ext = rotate_item_image(raw_bytes, degrees=degrees)
+    old_name = photo.image.name
+    photo.image.save(f"rotated-{photo.label.lower()}.{ext}", ContentFile(processed_bytes), save=False)
+    photo.width = width
+    photo.height = height
+    photo.save(update_fields=["image", "width", "height"])
+    if old_name and old_name != photo.image.name:
+        photo.image.storage.delete(old_name)
 
     return _photo_to_out(photo)
 

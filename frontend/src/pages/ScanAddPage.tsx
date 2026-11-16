@@ -185,7 +185,7 @@ export function ScanAddPage() {
         metal_type: c.metal_type || f.metal_type,
         weight_value: c.weight_value ? String(c.weight_value) : f.weight_value,
         weight_unit: c.weight_unit || f.weight_unit,
-        purity: c.purity ? String(c.purity) : f.purity,
+        purity: c.purity ? String(Number(Number(c.purity).toFixed(4))) : f.purity,
         grading_service: c.grading_service || f.grading_service,
         cert_number: c.cert_number || f.cert_number,
         grade: c.grade || f.grade,
@@ -424,8 +424,10 @@ export function ScanAddPage() {
       <form onSubmit={handleSave} className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="sm:col-span-2">
-            <label className="block text-xs text-slate-400 mb-1">Title *</label>
+            <label htmlFor="scan-title" className="block text-xs text-slate-400 mb-1">Title *</label>
             <input
+              id="scan-title"
+              name="title"
               required
               value={form.title}
               onChange={(e) => setForm({ ...form, title: e.target.value })}
@@ -435,8 +437,10 @@ export function ScanAddPage() {
           </div>
 
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Category</label>
+            <label htmlFor="scan-category" className="block text-xs text-slate-400 mb-1">Category</label>
             <select
+              id="scan-category"
+              name="category"
               value={form.category}
               onChange={(e) => setForm({ ...form, category: e.target.value })}
               className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
@@ -450,8 +454,10 @@ export function ScanAddPage() {
           </div>
 
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Container / Location</label>
+            <label htmlFor="scan-container" className="block text-xs text-slate-400 mb-1">Container / Location</label>
             <select
+              id="scan-container"
+              name="container_id"
               value={form.container_id}
               onChange={(e) => setForm({ ...form, container_id: e.target.value })}
               className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
@@ -466,8 +472,10 @@ export function ScanAddPage() {
           </div>
 
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Year / Series Date</label>
+            <label htmlFor="scan-year" className="block text-xs text-slate-400 mb-1">Year / Series Date</label>
             <input
+              id="scan-year"
+              name="year"
               value={form.year}
               onChange={(e) => setForm({ ...form, year: e.target.value })}
               placeholder="e.g. 2017A, 1921"
@@ -476,8 +484,10 @@ export function ScanAddPage() {
           </div>
 
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Country</label>
+            <label htmlFor="scan-country" className="block text-xs text-slate-400 mb-1">Country</label>
             <input
+              id="scan-country"
+              name="country"
               value={form.country}
               onChange={(e) => setForm({ ...form, country: e.target.value })}
               placeholder="e.g. United States"
@@ -486,8 +496,10 @@ export function ScanAddPage() {
           </div>
 
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Denomination</label>
+            <label htmlFor="scan-denomination" className="block text-xs text-slate-400 mb-1">Denomination</label>
             <input
+              id="scan-denomination"
+              name="denomination"
               value={form.denomination}
               onChange={(e) => setForm({ ...form, denomination: e.target.value })}
               placeholder="e.g. $100, $1"
@@ -496,8 +508,10 @@ export function ScanAddPage() {
           </div>
 
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Series</label>
+            <label htmlFor="scan-series" className="block text-xs text-slate-400 mb-1">Series</label>
             <input
+              id="scan-series"
+              name="series"
               value={form.series}
               onChange={(e) => setForm({ ...form, series: e.target.value })}
               placeholder="e.g. Federal Reserve Note, Morgan Dollar"
@@ -506,8 +520,10 @@ export function ScanAddPage() {
           </div>
 
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Mint / Refiner</label>
+            <label htmlFor="scan-mint" className="block text-xs text-slate-400 mb-1">Mint / Refiner</label>
             <input
+              id="scan-mint"
+              name="mint_or_refiner"
               value={form.mint_or_refiner}
               onChange={(e) => setForm({ ...form, mint_or_refiner: e.target.value })}
               placeholder="e.g. U.S. Mint, BEP, Geiger"
@@ -516,8 +532,10 @@ export function ScanAddPage() {
           </div>
 
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Purchase Date</label>
+            <label htmlFor="scan-purchase-date" className="block text-xs text-slate-400 mb-1">Purchase Date</label>
             <input
+              id="scan-purchase-date"
+              name="purchase_date"
               type="date"
               value={form.purchase_date}
               onChange={(e) => setForm({ ...form, purchase_date: e.target.value })}
@@ -526,8 +544,10 @@ export function ScanAddPage() {
           </div>
 
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Quantity</label>
+            <label htmlFor="scan-quantity" className="block text-xs text-slate-400 mb-1">Quantity</label>
             <input
+              id="scan-quantity"
+              name="quantity"
               type="number"
               min={1}
               value={form.quantity}
@@ -537,8 +557,10 @@ export function ScanAddPage() {
           </div>
 
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Metal Type</label>
+            <label htmlFor="scan-metal-type" className="block text-xs text-slate-400 mb-1">Metal Type</label>
             <select
+              id="scan-metal-type"
+              name="metal_type"
               value={form.metal_type}
               onChange={(e) => setForm({ ...form, metal_type: e.target.value })}
               className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
@@ -552,9 +574,11 @@ export function ScanAddPage() {
           </div>
 
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Weight (per unit)</label>
+            <label htmlFor="scan-weight-value" className="block text-xs text-slate-400 mb-1">Weight (per unit)</label>
             <div className="flex gap-2">
               <input
+                id="scan-weight-value"
+                name="weight_value"
                 type="number"
                 step="0.0001"
                 value={form.weight_value}
@@ -562,6 +586,9 @@ export function ScanAddPage() {
                 className="flex-1 px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
               />
               <select
+                id="scan-weight-unit"
+                name="weight_unit"
+                aria-label="Weight unit"
                 value={form.weight_unit}
                 onChange={(e) => setForm({ ...form, weight_unit: e.target.value })}
                 className="px-2.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
@@ -575,8 +602,10 @@ export function ScanAddPage() {
           </div>
 
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Purity (e.g. 0.999)</label>
+            <label htmlFor="scan-purity" className="block text-xs text-slate-400 mb-1">Purity (e.g. 0.999)</label>
             <input
+              id="scan-purity"
+              name="purity"
               type="number"
               step="0.000001"
               value={form.purity}
@@ -621,8 +650,10 @@ export function ScanAddPage() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Grading Service</label>
+                <label htmlFor="scan-grading-service" className="block text-xs text-slate-400 mb-1">Grading Service</label>
                 <select
+                  id="scan-grading-service"
+                  name="grading_service"
                   value={form.grading_service}
                   onChange={(e) => {
                     const svc = e.target.value;
@@ -649,8 +680,10 @@ export function ScanAddPage() {
               {form.grading_service !== "NONE" ? (
                 <>
                   <div>
-                    <label className="block text-xs text-slate-400 mb-1">Certified Grade</label>
+                    <label htmlFor="scan-grade" className="block text-xs text-slate-400 mb-1">Certified Grade</label>
                     <input
+                      id="scan-grade"
+                      name="grade"
                       value={form.grade}
                       onChange={(e) => setForm({ ...form, grade: e.target.value })}
                       placeholder="e.g. MS65, PF70 UC, Gem Unc 66 EPQ"
@@ -658,8 +691,10 @@ export function ScanAddPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-slate-400 mb-1">Slab Cert / Registry #</label>
+                    <label htmlFor="scan-cert-number" className="block text-xs text-slate-400 mb-1">Slab Cert / Registry #</label>
                     <input
+                      id="scan-cert-number"
+                      name="cert_number"
                       value={form.cert_number}
                       onChange={(e) => setForm({ ...form, cert_number: e.target.value })}
                       placeholder="e.g. 48291045"
@@ -667,10 +702,12 @@ export function ScanAddPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-slate-400 mb-1">
+                    <label htmlFor="scan-slab-designation" className="block text-xs text-slate-400 mb-1">
                       Slab Designation / Label
                     </label>
                     <input
+                      id="scan-slab-designation"
+                      name="slab_designation"
                       value={form.slab_designation}
                       onChange={(e) => setForm({ ...form, slab_designation: e.target.value })}
                       placeholder="e.g. First Strike, Early Releases, DCAM, EPQ"
@@ -680,10 +717,12 @@ export function ScanAddPage() {
                 </>
               ) : (
                 <div>
-                  <label className="block text-xs text-slate-400 mb-1">
+                  <label htmlFor="scan-estimated-grade" className="block text-xs text-slate-400 mb-1">
                     Estimated Grade (Raw)
                   </label>
                   <input
+                    id="scan-estimated-grade"
+                    name="estimated_grade"
                     value={form.estimated_grade}
                     onChange={(e) => setForm({ ...form, estimated_grade: e.target.value })}
                     placeholder="e.g. XF45, AU58, BU"
@@ -693,10 +732,12 @@ export function ScanAddPage() {
               )}
 
               <div className={form.grading_service !== "NONE" ? "sm:col-span-2" : ""}>
-                <label className="block text-xs text-slate-400 mb-1">
+                <label htmlFor="scan-serial-number" className="block text-xs text-slate-400 mb-1">
                   Item / Banknote / Bar Serial #
                 </label>
                 <input
+                  id="scan-serial-number"
+                  name="serial_number"
                   value={form.serial_number}
                   onChange={(e) => setForm({ ...form, serial_number: e.target.value })}
                   placeholder="Note serial # or serialized bar #"
@@ -707,8 +748,10 @@ export function ScanAddPage() {
           </div>
 
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Total Cost Basis ($)</label>
+            <label htmlFor="scan-purchase-price" className="block text-xs text-slate-400 mb-1">Total Cost Basis ($)</label>
             <input
+              id="scan-purchase-price"
+              name="purchase_price"
               type="number"
               step="0.01"
               value={form.purchase_price}
@@ -719,8 +762,10 @@ export function ScanAddPage() {
           </div>
 
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Market Value / Unit ($)</label>
+            <label htmlFor="scan-market-value" className="block text-xs text-slate-400 mb-1">Market Value / Unit ($)</label>
             <input
+              id="scan-market-value"
+              name="market_value_unit"
               type="number"
               step="0.01"
               value={form.market_value_unit}

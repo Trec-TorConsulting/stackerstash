@@ -166,19 +166,25 @@ export function SettingsPage() {
                   key={cred.provider}
                   className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3"
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 shrink-0">
                       <KeyRound className="h-4 w-4 text-amber-400" />
-                      <span className="font-medium text-sm text-slate-100">{cred.label}</span>
+                      <label htmlFor={`cred-${cred.provider}`} className="font-medium text-sm text-slate-100">
+                        {cred.label}
+                      </label>
                     </div>
                     {cred.is_configured ? (
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span
+                          title={`Configured (${cred.masked_hint})`}
+                          className="text-xs font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 max-w-[240px] truncate"
+                        >
                           Configured ({cred.masked_hint})
                         </span>
                         <button
+                          type="button"
                           onClick={() => deleteMut.mutate(cred.provider)}
-                          className="text-slate-500 hover:text-rose-400"
+                          className="text-slate-500 hover:text-rose-400 shrink-0"
                           aria-label={`Remove ${cred.label}`}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -189,28 +195,36 @@ export function SettingsPage() {
                     )}
                   </div>
 
-                  <div className="flex gap-2">
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (drafts[cred.provider]?.trim() && !saveMut.isPending) {
+                        saveMut.mutate({
+                          provider: cred.provider,
+                          value: drafts[cred.provider],
+                        });
+                      }
+                    }}
+                    className="flex gap-2"
+                  >
                     <input
+                      id={`cred-${cred.provider}`}
+                      name={`cred_${cred.provider}`}
                       type={cred.provider.startsWith("OLLAMA") ? "text" : "password"}
+                      autoComplete="off"
                       value={drafts[cred.provider] || ""}
                       onChange={(e) => setDrafts({ ...drafts, [cred.provider]: e.target.value })}
                       placeholder={PROVIDER_HINTS[cred.provider] || "Enter API key or token"}
                       className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
                     />
                     <button
-                      type="button"
+                      type="submit"
                       disabled={!drafts[cred.provider]?.trim() || saveMut.isPending}
-                      onClick={() =>
-                        saveMut.mutate({
-                          provider: cred.provider,
-                          value: drafts[cred.provider],
-                        })
-                      }
                       className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-sm disabled:opacity-40"
                     >
                       Save
                     </button>
-                  </div>
+                  </form>
                 </div>
               ))}
             </section>

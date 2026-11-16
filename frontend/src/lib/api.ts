@@ -411,6 +411,11 @@ export const api = {
     apiFetch<ItemPhoto>(`/catalog/items/${itemId}/photos/${photoId}/remove-background`, {
       method: "POST",
     }),
+  rotatePhoto: (itemId: string, photoId: string, degrees: number = 90) =>
+    apiFetch<ItemPhoto>(`/catalog/items/${itemId}/photos/${photoId}/rotate`, {
+      method: "POST",
+      body: JSON.stringify({ degrees }),
+    }),
   setPrimaryPhoto: (itemId: string, photoId: string) =>
     apiFetch<ItemPhoto>(`/catalog/items/${itemId}/photos/${photoId}/primary`, { method: "PATCH" }),
   deletePhoto: (itemId: string, photoId: string) =>

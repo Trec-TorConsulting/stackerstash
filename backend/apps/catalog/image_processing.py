@@ -168,15 +168,31 @@ def _salient_foreground_mask(
     cnts, _ = cv2.findContours(salient, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filled = np.zeros_like(salient)
     if cnts:
-        # Prefer the largest contour that overlaps the central region
-        cx0, cx1 = w * 0.20, w * 0.80
-        cy0, cy1 = h * 0.20, h * 0.80
+        img_cx, img_cy = w / 2.0, h / 2.0
 
         def _score_cnt(c: np.ndarray) -> float:
             x, y, cw, ch = cv2.boundingRect(c)
             area = float(cv2.contourArea(c))
-            in_center = not (x + cw < cx0 or x > cx1 or y + ch < cy0 or y > cy1)
-            return area * (2.0 if in_center else 0.25)
+            if area <= 0.0:
+                return 0.0
+            m = cv2.moments(c)
+            if m["m00"] > 0:
+                mcx = m["m10"] / m["m00"]
+                mcy = m["m01"] / m["m00"]
+            else:
+                mcx = x + cw / 2.0
+                mcy = y + ch / 2.0
+            dx = (mcx - img_cx) / max(1.0, w * 0.35)
+            dy = (mcy - img_cy) / max(1.0, h * 0.35)
+            center_weight = float(np.exp(-(dx * dx + dy * dy)))
+            border_touches = (
+                int(x <= bx + 1)
+                + int(y <= by + 1)
+                + int(x + cw >= w - bx - 1)
+                + int(y + ch >= h - by - 1)
+            )
+            border_penalty = 0.25 if border_touches >= 2 else (0.6 if border_touches == 1 else 1.0)
+            return area * (0.2 + 1.8 * center_weight) * border_penalty
 
         best_cnt = max(cnts, key=_score_cnt)
         cv2.drawContours(filled, [best_cnt], -1, 255, thickness=cv2.FILLED)
@@ -245,10 +261,11 @@ def _remove_background_grabcut(img: Image.Image) -> Image.Image:
         if num_labels > 1:
             largest_lbl = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
             main_comp = labels == largest_lbl
-            kernel = np.ones((5, 5), np.uint8)
-            eroded = cv2.erode(main_comp.astype(np.uint8), kernel, iterations=2)
+            kernel = np.ones((7, 7), np.uint8)
+            eroded = cv2.erode(main_comp.astype(np.uint8), kernel, iterations=3)
             gc_mask[main_comp] = cv2.GC_PR_FGD
-            gc_mask[eroded > 0] = cv2.GC_FGD
+            if (eroded > 0).sum() >= 16:
+                gc_mask[eroded > 0] = cv2.GC_FGD
             gc_mask[~main_comp] = cv2.GC_BGD
     else:
         salient = _salient_foreground_mask(lab, border_lab, bx, by)
@@ -291,6 +308,35 @@ def _remove_background_grabcut(img: Image.Image) -> Image.Image:
     if num_labels > 1:
         largest_lbl = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
         fg_mask = np.where(labels == largest_lbl, 255, 0).astype(np.uint8)
+
+    # Guard against inverted masks (e.g. outer mat/flip kept while center subject was cut out)
+    if not has_alpha:
+        cy1, cy2 = int(work_h * 0.35), int(work_h * 0.65)
+        cx1, cx2 = int(work_w * 0.35), int(work_w * 0.65)
+        center_fg = float((fg_mask[cy1:cy2, cx1:cx2] > 0).mean())
+        if center_fg < 0.15:
+            retry_mask = np.full((work_h, work_w), cv2.GC_PR_BGD, dtype=np.uint8)
+            rbx = max(2, int(work_w * 0.04))
+            rby = max(2, int(work_h * 0.04))
+            retry_mask[:rby, :] = cv2.GC_BGD
+            retry_mask[-rby:, :] = cv2.GC_BGD
+            retry_mask[:, :rbx] = cv2.GC_BGD
+            retry_mask[:, -rbx:] = cv2.GC_BGD
+            retry_mask[(lab_dist > 18) & (retry_mask != cv2.GC_BGD)] = cv2.GC_PR_FGD
+            retry_mask[cy1:cy2, cx1:cx2] = cv2.GC_FGD
+            bgd_model2 = np.zeros((1, 65), np.float64)
+            fgd_model2 = np.zeros((1, 65), np.float64)
+            cv2.grabCut(work_bgr, retry_mask, None, bgd_model2, fgd_model2, 5, cv2.GC_INIT_WITH_MASK)
+            retry_fg = np.where(
+                (retry_mask == cv2.GC_FGD) | (retry_mask == cv2.GC_PR_FGD), 255, 0
+            ).astype(np.uint8)
+            retry_ratio = float((retry_fg > 0).mean())
+            if 0.02 <= retry_ratio <= 0.96 and float((retry_fg[cy1:cy2, cx1:cx2] > 0).mean()) > center_fg:
+                fg_mask = retry_fg
+                num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(fg_mask, connectivity=8)
+                if num_labels > 1:
+                    largest_lbl = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+                    fg_mask = np.where(labels == largest_lbl, 255, 0).astype(np.uint8)
 
     # Fill interior holes so white slab inserts/labels are preserved
     contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -336,21 +382,33 @@ def detect_coin_in_slab(rgba: Image.Image) -> tuple[int, int, int] | None:
     sw = max(32, int(round(slab_w * scale)))
     sh = max(32, int(round(slab_h * scale)))
     small = cv2.resize(crop, (sw, sh), interpolation=cv2.INTER_AREA)
-    blurred = cv2.GaussianBlur(small, (5, 5), 1.2)
-    edges = cv2.Canny(blurred, 50, 140)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(small)
+    blurred = cv2.GaussianBlur(clahe, (5, 5), 1.2)
+    edges = cv2.Canny(blurred, 45, 135)
 
-    min_r = max(8, int(sw * 0.25))
-    max_r = max(min_r + 4, int(sw * 0.42))
+    min_r = max(8, int(sw * 0.13))
+    max_r = max(min_r + 4, int(sw * 0.43))
     circles = cv2.HoughCircles(
         blurred,
         cv2.HOUGH_GRADIENT,
         dp=1.2,
-        minDist=sw * 0.15,
+        minDist=sw * 0.12,
         param1=90,
         param2=24,
         minRadius=min_r,
         maxRadius=max_r,
     )
+    if circles is None:
+        circles = cv2.HoughCircles(
+            blurred,
+            cv2.HOUGH_GRADIENT,
+            dp=1.2,
+            minDist=sw * 0.12,
+            param1=80,
+            param2=18,
+            minRadius=min_r,
+            maxRadius=max_r,
+        )
     if circles is None:
         return None
 
@@ -365,9 +423,9 @@ def detect_coin_in_slab(rgba: Image.Image) -> tuple[int, int, int] | None:
         horiz_err = abs(cx_s - 0.5 * sw) / sw
         if horiz_err > 0.15:
             continue
-        if cy_s < 0.50 * sh or cy_s > 0.82 * sh:
+        if cy_s < 0.48 * sh or cy_s > 0.85 * sh:
             continue
-        if cy_s - r_s < 0.28 * sh or cy_s + r_s > 0.97 * sh:
+        if cy_s - r_s < 0.25 * sh or cy_s + r_s > 0.97 * sh:
             continue
         if cx_s - r_s < 0.03 * sw or cx_s + r_s > 0.97 * sw:
             continue
@@ -388,6 +446,119 @@ def detect_coin_in_slab(rgba: Image.Image) -> tuple[int, int, int] | None:
 
     cx = int(round(x0 + best[0] / scale))
     cy = int(round(y0 + best[1] / scale))
+    r = int(round(best[2] / scale))
+    return cx, cy, r
+
+
+def detect_circular_coin(img: Image.Image) -> tuple[int, int, int] | None:
+    """
+    Detect a circular coin or round (cx, cy, r) directly from an original image.
+    Uses CLAHE + HoughCircles + angular edge coverage + radial LAB contrast so
+    dark proof mirror fields and underexposed photos still detect the full coin rim.
+    """
+    orig_w, orig_h = img.size
+    if orig_w < 48 or orig_h < 48:
+        return None
+
+    work_max = 480.0
+    scale = min(1.0, work_max / max(orig_w, orig_h))
+    sw = max(32, int(round(orig_w * scale)))
+    sh = max(32, int(round(orig_h * scale)))
+
+    rgb = np.array(img.convert("RGB").resize((sw, sh), Image.Resampling.BILINEAR))
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+    blurred = cv2.GaussianBlur(clahe, (5, 5), 1.2)
+    edges = cv2.Canny(blurred, 40, 120)
+
+    min_dim = min(sw, sh)
+    min_r = max(14, int(min_dim * 0.14))
+    max_r = max(min_r + 6, int(min_dim * 0.49))
+
+    circles = cv2.HoughCircles(
+        blurred,
+        cv2.HOUGH_GRADIENT,
+        dp=1.2,
+        minDist=min_dim * 0.18,
+        param1=90,
+        param2=28,
+        minRadius=min_r,
+        maxRadius=max_r,
+    )
+    if circles is None:
+        circles = cv2.HoughCircles(
+            blurred,
+            cv2.HOUGH_GRADIENT,
+            dp=1.2,
+            minDist=min_dim * 0.18,
+            param1=80,
+            param2=20,
+            minRadius=min_r,
+            maxRadius=max_r,
+        )
+    if circles is None:
+        return None
+
+    angles = np.linspace(0, 2 * np.pi, 72, endpoint=False)
+    cos_a = np.cos(angles)
+    sin_a = np.sin(angles)
+    yy, xx = np.ogrid[:sh, :sw]
+
+    best: tuple[float, float, float] | None = None
+    best_score = -1e9
+    for c in circles[0]:
+        cx_s, cy_s, r_s = float(c[0]), float(c[1]), float(c[2])
+        if cx_s < 0.15 * sw or cx_s > 0.85 * sw or cy_s < 0.15 * sh or cy_s > 0.85 * sh:
+            continue
+        if (
+            cx_s - r_s < -0.04 * sw
+            or cx_s + r_s > 1.04 * sw
+            or cy_s - r_s < -0.04 * sh
+            or cy_s + r_s > 1.04 * sh
+        ):
+            continue
+
+        covered = np.zeros(72, dtype=bool)
+        for dr in (-2.0, -1.0, 0.0, 1.0, 2.0):
+            rr = r_s + dr
+            px = np.clip(np.round(cx_s + rr * cos_a).astype(int), 0, sw - 1)
+            py = np.clip(np.round(cy_s + rr * sin_a).astype(int), 0, sh - 1)
+            covered |= edges[py, px] > 0
+        angular_cov = int(covered.sum())
+        if angular_cov < 40:
+            continue
+
+        dist = np.sqrt((xx - cx_s) ** 2 + (yy - cy_s) ** 2)
+        inner_mask = (dist >= 0.65 * r_s) & (dist <= 0.92 * r_s)
+        outer_mask = (dist >= 1.06 * r_s) & (dist <= 1.25 * r_s)
+        lab_diff = 0.0
+        if inner_mask.any() and outer_mask.any():
+            lab_diff = float(np.linalg.norm(lab[inner_mask].mean(axis=0) - lab[outer_mask].mean(axis=0)))
+
+        interior_mask = dist <= 0.88 * r_s
+        interior_std = float(gray[interior_mask].std()) if interior_mask.any() else 0.0
+        center_err = float(
+            np.hypot((cx_s - 0.5 * sw) / sw, (cy_s - 0.5 * sh) / sh)
+        )
+
+        score = (
+            angular_cov * 1.6
+            + min(30.0, lab_diff * 0.6)
+            + min(15.0, interior_std * 0.25)
+            - center_err * 35.0
+        )
+        if score > best_score:
+            best_score = score
+            best = (cx_s, cy_s, r_s)
+
+    if best is None:
+        return None
+
+    cx = int(round(best[0] / scale))
+    cy = int(round(best[1] / scale))
     r = int(round(best[2] / scale))
     return cx, cy, r
 
@@ -490,36 +661,47 @@ def detect_rectangular_subject(
     if fg_area < w * h * 0.03:
         return None
 
-    # If the foreground mask is irregular or has leftover mat (extent < 0.92), refine via LAB-distance Otsu
+    # If the foreground mask is irregular (extent < 0.92) or encloses a dark-backed sleeve/mat rim,
+    # refine via LAB-distance Otsu separation before fitting the tight oriented rectangle.
     extent = _contour_extent(fg_mask)
-    if extent < 0.92:
-        bgr = cv2.cvtColor(arr[:, :, :3], cv2.COLOR_RGB2BGR)
-        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
-        L = lab[:, :, 0]
-        opaque = alpha > 128
-        if int(opaque.sum()) >= 64:
-            dark_thresh = float(np.percentile(L[opaque], 20))
-            dark_mask = opaque & (L <= dark_thresh)
-            bg_lab = np.median(lab[dark_mask], axis=0) if dark_mask.any() else np.median(lab[opaque], axis=0)
-            ldist = np.linalg.norm(lab - bg_lab, axis=2)
-            ldist_u8 = np.clip(ldist, 0, 255).astype(np.uint8)
-            otsu_t, _ = cv2.threshold(ldist_u8[opaque], 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            if extent < 0.85 or otsu_t >= 35.0:
-                cand = np.where((ldist_u8 > otsu_t) & opaque, 255, 0).astype(np.uint8)
-                k = max(5, int(min(h, w) * 0.02) | 1)
-                cand = cv2.morphologyEx(cand, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
-                cnts, _ = cv2.findContours(cand, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                if cnts:
-                    largest = max(cnts, key=cv2.contourArea)
-                    filled = np.zeros_like(cand)
-                    cv2.drawContours(filled, [largest], -1, 255, thickness=cv2.FILLED)
-                    cand_area = int((filled > 0).sum())
-                    cand_extent = _contour_extent(filled)
-                    area_ratio = cand_area / max(1, fg_area)
-                    if 0.15 <= area_ratio <= 0.88 and (
-                        cand_extent > extent or (otsu_t >= 55.0 and cand_extent >= 0.50)
-                    ):
-                        fg_mask = filled
+    bgr = cv2.cvtColor(arr[:, :, :3], cv2.COLOR_RGB2BGR)
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    L = lab[:, :, 0]
+    opaque = alpha > 128
+    if int(opaque.sum()) >= 64:
+        rim_k = max(7, int(min(h, w) * 0.08) | 1)
+        eroded_opaque = cv2.erode(opaque.astype(np.uint8), np.ones((rim_k, rim_k), np.uint8)) > 0
+        rim_mask = opaque & ~eroded_opaque
+        has_dark_rim = (
+            eroded_opaque.any()
+            and rim_mask.any()
+            and float(np.median(L[rim_mask])) < float(np.median(L[eroded_opaque])) - 8.0
+        )
+        dark_thresh = float(np.percentile(L[opaque], 20))
+        dark_mask = opaque & (L <= dark_thresh)
+        bg_lab = np.median(lab[dark_mask], axis=0) if dark_mask.any() else np.median(lab[opaque], axis=0)
+        ldist = np.linalg.norm(lab - bg_lab, axis=2)
+        ldist_u8 = np.clip(ldist, 0, 255).astype(np.uint8)
+        otsu_t, _ = cv2.threshold(ldist_u8[opaque], 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        if extent < 0.85 or (extent < 0.92 and otsu_t >= 32.0) or has_dark_rim or otsu_t >= 45.0:
+            cand = np.where((ldist_u8 > otsu_t) & opaque, 255, 0).astype(np.uint8)
+            open_k = max(7, int(min(h, w) * 0.02) | 1)
+            cand = cv2.morphologyEx(cand, cv2.MORPH_OPEN, np.ones((open_k, open_k), np.uint8))
+            k = max(5, int(min(h, w) * 0.02) | 1)
+            cand = cv2.morphologyEx(cand, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+            cnts, _ = cv2.findContours(cand, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if cnts:
+                largest = max(cnts, key=cv2.contourArea)
+                filled = np.zeros_like(cand)
+                cv2.drawContours(filled, [largest], -1, 255, thickness=cv2.FILLED)
+                cand_area = int((filled > 0).sum())
+                cand_extent = _contour_extent(filled)
+                area_ratio = cand_area / max(1, fg_area)
+                if 0.15 <= area_ratio <= 0.94 and (
+                    cand_extent > extent
+                    or ((otsu_t >= 45.0 or has_dark_rim) and cand_extent >= 0.78 and area_ratio <= 0.88)
+                ):
+                    fg_mask = filled
 
     rect = _fit_tight_rect_from_mask(fg_mask)
     if rect is None:
@@ -658,17 +840,24 @@ def process_item_image(
             img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
 
         if remove_background:
-            rgba = _remove_background_grabcut(img)
-            if shape_hint in _RECT_CORNER_RATIOS:
-                rect = detect_rectangular_subject(rgba)
-                if rect is not None:
-                    img = extract_rectangular_cutout(
-                        rgba, rect, corner_ratio=_RECT_CORNER_RATIOS[shape_hint]
-                    )
+            if shape_hint == "coin":
+                circle = detect_circular_coin(img)
+                if circle is not None:
+                    img = extract_coin_cutout(img.convert("RGBA"), *circle)
+                else:
+                    img = _crop_to_subject(_remove_background_grabcut(img))
+            else:
+                rgba = _remove_background_grabcut(img)
+                if shape_hint in _RECT_CORNER_RATIOS:
+                    rect = detect_rectangular_subject(rgba)
+                    if rect is not None:
+                        img = extract_rectangular_cutout(
+                            rgba, rect, corner_ratio=_RECT_CORNER_RATIOS[shape_hint]
+                        )
+                    else:
+                        img = _crop_to_subject(rgba)
                 else:
                     img = _crop_to_subject(rgba)
-            else:
-                img = _crop_to_subject(rgba)
 
         if enhance:
             img = _enhance_detail(img)
@@ -685,7 +874,8 @@ def extract_coin_and_slab_images(
     """
     Remove background cleanly and check if the image is a coin inside a rectangular grading slab.
     If a slabbed coin is detected, returns ((coin_bytes, cw, ch, 'png'), (slab_bytes, sw, sh, 'png')).
-    Otherwise returns ((cleaned_bytes, w, h, 'png'), None).
+    Otherwise, falls back to direct circular coin detection on the original image (for raw coins/rounds
+    with mirror fields or underexposure) before returning ((cleaned_bytes, w, h, 'png'), None).
     """
     with Image.open(io.BytesIO(raw_bytes)) as opened:
         img = ImageOps.exif_transpose(opened)
@@ -695,16 +885,42 @@ def extract_coin_and_slab_images(
         slab_rgba = _crop_to_subject(_remove_background_grabcut(img))
         circle = detect_coin_in_slab(slab_rgba)
 
+        if circle:
+            slab_final = _enhance_detail(slab_rgba) if enhance else slab_rgba
+            slab_encoded = _encode_processed_image(slab_final, force_png=True)
+            coin_rgba = extract_coin_cutout(slab_rgba, *circle)
+            coin_final = _enhance_detail(coin_rgba) if enhance else coin_rgba
+            coin_encoded = _encode_processed_image(coin_final, force_png=True)
+            return coin_encoded, slab_encoded
+
+        raw_circle = detect_circular_coin(img)
+        if raw_circle:
+            coin_rgba = extract_coin_cutout(img.convert("RGBA"), *raw_circle)
+            coin_final = _enhance_detail(coin_rgba) if enhance else coin_rgba
+            return _encode_processed_image(coin_final, force_png=True), None
+
         slab_final = _enhance_detail(slab_rgba) if enhance else slab_rgba
-        slab_encoded = _encode_processed_image(slab_final, force_png=True)
+        return _encode_processed_image(slab_final, force_png=True), None
 
-        if not circle:
-            return slab_encoded, None
 
-        coin_rgba = extract_coin_cutout(slab_rgba, *circle)
-        coin_final = _enhance_detail(coin_rgba) if enhance else coin_rgba
-        coin_encoded = _encode_processed_image(coin_final, force_png=True)
-        return coin_encoded, slab_encoded
+def rotate_item_image(raw_bytes: bytes, *, degrees: int = 90) -> tuple[bytes, int, int, str]:
+    """Rotate an item image clockwise by 90, 180, or 270 degrees, preserving alpha transparency."""
+    norm = degrees % 360
+    if norm not in (90, 180, 270):
+        raise ValueError("Rotation degrees must be a multiple of 90 (90, 180, 270, or -90).")
+
+    with Image.open(io.BytesIO(raw_bytes)) as opened:
+        img = ImageOps.exif_transpose(opened)
+        orig_format = (opened.format or "PNG").upper()
+        if norm == 90:
+            rotated = img.transpose(Image.Transpose.ROTATE_270)
+        elif norm == 180:
+            rotated = img.transpose(Image.Transpose.ROTATE_180)
+        else:
+            rotated = img.transpose(Image.Transpose.ROTATE_90)
+        return _encode_processed_image(
+            rotated, orig_format=orig_format, force_png=(rotated.mode == "RGBA")
+        )
 
 
 _SUSPICIOUS_SOFTWARE_MARKERS = (
