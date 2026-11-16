@@ -53,6 +53,77 @@ describe("GuidedCameraModal", () => {
     expect(screen.queryByRole("button", { name: /Auto-Zoom/i })).not.toBeInTheDocument();
   });
 
+  it("defaults Auto-Capture On in auto mode and renders live-subject-box when an item is detected", async () => {
+    const mockTrack = {
+      stop: vi.fn(),
+      getCapabilities: vi.fn(() => ({})),
+      applyConstraints: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const mockStream = {
+      getTracks: () => [mockTrack],
+      getVideoTracks: () => [mockTrack],
+    } as unknown as MediaStream;
+
+    const origMediaDevices = navigator.mediaDevices;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue(mockStream) },
+    });
+
+    const origGetContext = HTMLCanvasElement.prototype.getContext;
+    const origVideoWidth = Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, "videoWidth");
+    const origVideoHeight = Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, "videoHeight");
+    const origReadyState = Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, "readyState");
+
+    Object.defineProperty(HTMLVideoElement.prototype, "videoWidth", { configurable: true, get: () => 160 });
+    Object.defineProperty(HTMLVideoElement.prototype, "videoHeight", { configurable: true, get: () => 120 });
+    Object.defineProperty(HTMLVideoElement.prototype, "readyState", { configurable: true, get: () => 4 });
+
+    const sampleRgba = new Uint8ClampedArray(160 * 120 * 4);
+    for (let r = 0; r < 120; r++) {
+      for (let c = 0; c < 160; c++) {
+        const idx = (r * 160 + c) * 4;
+        const isCoin = Math.hypot(c - 80, r - 60) <= 28;
+        const val = isCoin ? ((r + c) % 2 === 0 ? 210 : 45) : 90;
+        sampleRgba[idx] = val;
+        sampleRgba[idx + 1] = val;
+        sampleRgba[idx + 2] = val;
+        sampleRgba[idx + 3] = 255;
+      }
+    }
+
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
+      drawImage: vi.fn(),
+      getImageData: vi.fn(() => ({ data: sampleRgba })),
+      imageSmoothingEnabled: true,
+      imageSmoothingQuality: "high",
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+
+    try {
+      render(
+        <GuidedCameraModal
+          open={true}
+          onClose={vi.fn()}
+          onComplete={vi.fn()}
+          requireBack={false}
+          initialShape="auto"
+        />
+      );
+
+      expect(screen.getByRole("button", { name: /Auto-Capture On/i })).toHaveAttribute("aria-pressed", "true");
+
+      await waitFor(() => {
+        expect(screen.getByTestId("live-subject-box")).toBeInTheDocument();
+      });
+    } finally {
+      Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: origMediaDevices });
+      HTMLCanvasElement.prototype.getContext = origGetContext;
+      if (origVideoWidth) Object.defineProperty(HTMLVideoElement.prototype, "videoWidth", origVideoWidth);
+      if (origVideoHeight) Object.defineProperty(HTMLVideoElement.prototype, "videoHeight", origVideoHeight);
+      if (origReadyState) Object.defineProperty(HTMLVideoElement.prototype, "readyState", origReadyState);
+    }
+  });
+
   it("evaluates frame stability, sharpness, and auto-zoom recommendation", () => {
     const w = 40;
     const h = 30;
@@ -330,8 +401,8 @@ describe("GuidedCameraModal", () => {
         expect(screen.getByRole("button", { name: /Capture Front/i })).toBeEnabled();
       });
 
-      // Enable Auto-Capture explicitly (manual shutter is default)
-      fireEvent.click(screen.getByRole("button", { name: /Auto-Capture Off/i }));
+      // Auto-Capture is enabled by default in Auto-Detect mode
+      expect(screen.getByRole("button", { name: /Auto-Capture On/i })).toHaveAttribute("aria-pressed", "true");
 
       const video = container.querySelector("video") as HTMLVideoElement;
       Object.defineProperty(video, "readyState", { configurable: true, value: 4 });

@@ -48,7 +48,7 @@ export interface FrameMetricsResult {
 }
 
 const GLARE_LUMA_THRESHOLD = 245;
-const GLARE_RATIO_THRESHOLD = 0.12;
+const GLARE_RATIO_THRESHOLD = 0.18;
 const DEFAULT_VIEWFINDER_ASPECT = 4 / 3;
 
 function sortedPercentile(values: number[], q: number): number {
@@ -112,8 +112,8 @@ export function detectSubjectBox(
 
   const bgLuma = sortedPercentile(borderLumas, 0.5);
   const lumaDevs = borderLumas.map((v) => Math.abs(v - bgLuma));
-  const bgLumaSpread = sortedPercentile(lumaDevs, 0.75);
-  const lumaThreshold = Math.max(14, bgLumaSpread * 2.2 + 8);
+  const bgLumaSpread = sortedPercentile(lumaDevs, 0.5);
+  const lumaThreshold = Math.min(48, Math.max(12, bgLumaSpread * 2.2 + 8));
 
   let bgR = bgLuma;
   let bgG = bgLuma;
@@ -126,12 +126,12 @@ export function detectSubjectBox(
     const colorDevs = borderRs.map(
       (r, i) => Math.abs(r - bgR) + Math.abs(borderGs[i] - bgG) + Math.abs(borderBs[i] - bgB),
     );
-    const bgColorSpread = sortedPercentile(colorDevs, 0.75);
-    colorThreshold = Math.max(38, bgColorSpread * 2.2 + 16);
+    const bgColorSpread = sortedPercentile(colorDevs, 0.5);
+    colorThreshold = Math.min(110, Math.max(34, bgColorSpread * 2.2 + 16));
   }
 
   const bgEdgeMean = borderEdgeCount > 0 ? borderEdgeSum / borderEdgeCount : 0;
-  const edgeThreshold = Math.max(18, bgEdgeMean * 2.4 + 10);
+  const edgeThreshold = Math.min(40, Math.max(16, bgEdgeMean * 2.4 + 10));
 
   const rawSalient = new Uint8Array(width * height);
   for (let row = 1; row < height - 1; row++) {
@@ -204,23 +204,38 @@ export function detectSubjectBox(
   const colCut = Math.max(1, Math.floor(maxColCount * 0.15));
   const rowCut = Math.max(1, Math.floor(maxRowCount * 0.15));
 
-  let minCol = width - 1;
-  let maxCol = 0;
-  for (let c = 1; c < width - 1; c++) {
-    if (colCounts[c] >= colCut) {
-      if (c < minCol) minCol = c;
-      if (c > maxCol) maxCol = c;
-    }
-  }
+  const pickBestSpan = (counts: Int32Array, limit: number, cut: number): [number, number] => {
+    let bestStart = limit - 1;
+    let bestEnd = 0;
+    let bestScore = -1;
 
-  let minRow = height - 1;
-  let maxRow = 0;
-  for (let r = 1; r < height - 1; r++) {
-    if (rowCounts[r] >= rowCut) {
-      if (r < minRow) minRow = r;
-      if (r > maxRow) maxRow = r;
+    let i = 1;
+    while (i < limit - 1) {
+      if (counts[i] < cut) {
+        i++;
+        continue;
+      }
+      const start = i;
+      let mass = 0;
+      while (i < limit - 1 && counts[i] >= cut) {
+        mass += counts[i];
+        i++;
+      }
+      const end = i - 1;
+      const midNorm = (start + end) / (2 * limit);
+      const centerWeight = 1 - 0.35 * Math.abs(midNorm - 0.5);
+      const score = mass * centerWeight;
+      if (score > bestScore) {
+        bestScore = score;
+        bestStart = start;
+        bestEnd = end;
+      }
     }
-  }
+    return [bestStart, bestEnd];
+  };
+
+  const [minCol, maxCol] = pickBestSpan(colCounts, width, colCut);
+  const [minRow, maxRow] = pickBestSpan(rowCounts, height, rowCut);
 
   if (maxCol <= minCol || maxRow <= minRow) {
     return null;
@@ -333,10 +348,10 @@ export function smoothSubjectBox(
 export function evaluateFramingState(subjectBox: SubjectBox | null): FramingState {
   if (!subjectBox) return 'none';
   const touchesEdge =
-    subjectBox.x <= 0.01 ||
-    subjectBox.y <= 0.01 ||
-    subjectBox.x + subjectBox.width >= 0.99 ||
-    subjectBox.y + subjectBox.height >= 0.99;
+    subjectBox.x <= 0.015 ||
+    subjectBox.y <= 0.015 ||
+    subjectBox.x + subjectBox.width >= 0.985 ||
+    subjectBox.y + subjectBox.height >= 0.985;
   if (touchesEdge) return 'edge_clipped';
   if (subjectBox.areaRatio < 0.04 || (subjectBox.width < 0.16 && subjectBox.height < 0.16)) {
     return 'too_small';
@@ -480,7 +495,7 @@ export function evaluateFrameMetrics(
           subjectBox.centerY - prevSubjectBox.centerY,
         ) > 0.06
       : false;
-  const isSteady = prevLuma !== null && meanFrameDiff < 14 && !boxMoved;
+  const isSteady = prevLuma !== null && meanFrameDiff < 18 && !boxMoved;
 
   // Weight sharpness toward the subject inside the reticle
   const effectiveEdge = Math.max(meanEdge, innerEdge * 0.75);

@@ -19,6 +19,7 @@ import {
   type DetectedShape,
   type FrameQuality,
   type FramingState,
+  type SubjectBox,
 } from '../lib/cameraMetrics';
 import {
   computeCoverCropRect,
@@ -32,7 +33,7 @@ const MAX_CAPTURE_DIM = 2048;
 const VIEWFINDER_ASPECT = 4 / 3;
 const BURST_FRAMES = 5;
 const BURST_INTERVAL_MS = 50;
-const AUTO_CAPTURE_TICKS = 5;
+const AUTO_CAPTURE_TICKS = 4;
 
 export type ReticleMode = 'auto' | 'coin' | 'slab' | 'note';
 
@@ -230,19 +231,23 @@ export function GuidedCameraModal({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const prevLumaRef = useRef<Float32Array | null>(null);
+  const prevSubjectBoxRef = useRef<SubjectBox | null>(null);
   const hardwareZoomSupportedRef = useRef(false);
   const steadyTicksRef = useRef(0);
 
   const [reticleMode, setReticleMode] = useState<ReticleMode>(() => resolveInitialMode(initialShape));
   const [detectedShape, setDetectedShape] = useState<DetectedShape>('coin');
   const [hasSubject, setHasSubject] = useState(false);
+  const [subjectBox, setSubjectBox] = useState<SubjectBox | null>(null);
   const [framingState, setFramingState] = useState<FramingState>('none');
   const [lockProgress, setLockProgress] = useState<number>(0);
   const [shutterFlash, setShutterFlash] = useState(false);
   const [zoom, setZoom] = useState<number>(1);
   const [torchSupported, setTorchSupported] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
-  const [autoCapture, setAutoCapture] = useState(false);
+  const [autoCapture, setAutoCapture] = useState<boolean>(
+    () => resolveInitialMode(initialShape) === 'auto',
+  );
   const [step, setStep] = useState<'front' | 'back'>('front');
 
   const [pendingReviewFile, setPendingReviewFile] = useState<File | null>(null);
@@ -497,6 +502,8 @@ export function GuidedCameraModal({
   useEffect(() => {
     if (!open || !cameraReady || pendingReviewFile) {
       steadyTicksRef.current = 0;
+      prevSubjectBoxRef.current = null;
+      setSubjectBox(null);
       setLockProgress(0);
       return;
     }
@@ -534,10 +541,12 @@ export function GuidedCameraModal({
         sampleH,
         zoom,
         data,
-        null,
+        prevSubjectBoxRef.current,
       );
       prevLumaRef.current = luma;
+      prevSubjectBoxRef.current = metrics.subjectBox;
       setHasSubject(metrics.hasSubject);
+      setSubjectBox(metrics.subjectBox);
       setFramingState(metrics.framingState);
       if (metrics.subjectBox) {
         setDetectedShape(metrics.detectedShape);
@@ -566,8 +575,12 @@ export function GuidedCameraModal({
           void captureCurrentFrame();
         }
       } else {
-        steadyTicksRef.current = 0;
-        setLockProgress(0);
+        steadyTicksRef.current = Math.max(0, steadyTicksRef.current - 1);
+        setLockProgress(
+          steadyTicksRef.current > 0
+            ? Math.min(100, Math.round((steadyTicksRef.current / AUTO_CAPTURE_TICKS) * 100))
+            : 0,
+        );
       }
     }, 200);
 
@@ -813,6 +826,25 @@ export function GuidedCameraModal({
                   <div
                     data-testid="shutter-flash"
                     className="pointer-events-none absolute inset-0 z-20 bg-white/75 transition-opacity duration-150"
+                  />
+                )}
+
+                {subjectBox && (
+                  <div
+                    data-testid="live-subject-box"
+                    className={`pointer-events-none absolute z-10 border-2 transition-all duration-150 ${
+                      subjectBox.shape === 'coin' ? 'rounded-full' : 'rounded-xl'
+                    } ${
+                      framingState === 'locked'
+                        ? 'border-emerald-400 shadow-[0_0_16px_rgba(52,211,153,0.45)]'
+                        : 'border-dashed border-sky-400/90'
+                    }`}
+                    style={{
+                      left: `${(subjectBox.x * 100).toFixed(2)}%`,
+                      top: `${(subjectBox.y * 100).toFixed(2)}%`,
+                      width: `${(subjectBox.width * 100).toFixed(2)}%`,
+                      height: `${(subjectBox.height * 100).toFixed(2)}%`,
+                    }}
                   />
                 )}
 
