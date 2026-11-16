@@ -900,6 +900,36 @@ def _item_shape_hint(item: CollectionItem, label: str) -> str | None:
     return None
 
 
+def _sync_reverse_orientation_with_obverse(
+    item: CollectionItem,
+    label: str,
+    processed_bytes: bytes,
+    width: int | None,
+    height: int | None,
+    ext: str,
+) -> tuple[bytes, int | None, int | None, str]:
+    """
+    When a REVERSE photo of a rectangular item (PAPER/BAR/SLAB) has an aspect orientation
+    (portrait vs. landscape) opposite to the item's OBVERSE photo, rotate it 270° clockwise
+    (90° counter-clockwise) so Front and Back match upright orientation.
+    """
+    if label != ItemPhoto.Label.REVERSE or not width or not height:
+        return processed_bytes, width, height, ext
+    obv = item.photos.filter(label=ItemPhoto.Label.OBVERSE).first()
+    if not obv or not obv.width or not obv.height:
+        return processed_bytes, width, height, ext
+    obv_portrait = obv.height > obv.width * 1.15
+    obv_landscape = obv.width > obv.height * 1.15
+    rev_portrait = height > width * 1.15
+    rev_landscape = width > height * 1.15
+    if (obv_portrait and rev_landscape) or (obv_landscape and rev_portrait):
+        try:
+            return rotate_item_image(processed_bytes, degrees=270)
+        except Exception:
+            return processed_bytes, width, height, ext
+    return processed_bytes, width, height, ext
+
+
 @catalog_router.post("/items/{item_id}/photos", response={201: PhotoOut})
 @transaction.atomic
 def upload_item_photo(
@@ -933,6 +963,10 @@ def upload_item_photo(
                 enhance=True,
                 shape_hint=_item_shape_hint(item, label),
             )
+            if should_remove_bg:
+                processed_bytes, width, height, ext = _sync_reverse_orientation_with_obverse(
+                    item, label, processed_bytes, width, height, ext
+                )
         upload_content = ContentFile(processed_bytes, name=f"photo-{label.lower()}.{ext}")
     except Exception:
         try:
@@ -998,6 +1032,9 @@ def remove_photo_background(request, item_id: UUID, photo_id: UUID):
             remove_background=True,
             enhance=True,
             shape_hint=_item_shape_hint(item, photo.label),
+        )
+        processed_bytes, width, height, ext = _sync_reverse_orientation_with_obverse(
+            item, photo.label, processed_bytes, width, height, ext
         )
 
     old_name = photo.image.name
