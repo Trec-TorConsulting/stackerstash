@@ -868,8 +868,8 @@ def delete_item(request, item_id: UUID):
 
 
 def _should_extract_coin_from_slab(item: CollectionItem, label: str) -> bool:
-    """Return True when an OBVERSE/REVERSE upload may contain a circular coin inside a grading slab."""
-    if label not in (ItemPhoto.Label.OBVERSE, ItemPhoto.Label.REVERSE):
+    """Return True when an OBVERSE/REVERSE/OTHER upload may contain a circular coin inside a grading slab."""
+    if label in (ItemPhoto.Label.RECEIPT, ItemPhoto.Label.SLAB_LABEL, ItemPhoto.Label.ASSAY):
         return False
     if item.category in (CollectionItem.Category.PAPER, CollectionItem.Category.BAR):
         return False
