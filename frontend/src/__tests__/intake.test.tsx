@@ -44,7 +44,10 @@ describe("GuidedCameraModal", () => {
     expect(screen.getByRole("button", { name: "Note / Bar (Rect)" })).toBeInTheDocument();
     expect(screen.getByLabelText("Camera zoom")).toBeInTheDocument();
     expect(screen.getByText(/Capture Front Photo/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Auto-Capture/i })).not.toBeInTheDocument();
+    const autoBtn = screen.getByRole("button", { name: /Auto-Capture Off/i });
+    expect(autoBtn).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(autoBtn);
+    expect(screen.getByRole("button", { name: /Auto-Capture On/i })).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByRole("button", { name: /Auto-Zoom/i })).not.toBeInTheDocument();
   });
 
@@ -136,6 +139,12 @@ describe("GuidedCameraModal", () => {
 
       await waitFor(() => {
         expect(takePhoto).toHaveBeenCalledTimes(1);
+        expect(screen.getByText(/Review Front \(Obverse\)/i)).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /Use Front Photo/i }));
+
+      await waitFor(() => {
         expect(onComplete).toHaveBeenCalledTimes(1);
       });
       expect(onComplete.mock.calls[0][0].frontFile.name).toBe("capture-front.jpg");
@@ -216,6 +225,11 @@ describe("GuidedCameraModal", () => {
       fireEvent.click(screen.getByRole("button", { name: /Capture Front/i }));
 
       await waitFor(() => {
+        expect(screen.getByText(/Review Front \(Obverse\)/i)).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole("button", { name: /Confirm Front/i }));
+
+      await waitFor(() => {
         expect(screen.getByText(/Step 2: Back \(Reverse\)/i)).toBeInTheDocument();
       });
 
@@ -225,7 +239,14 @@ describe("GuidedCameraModal", () => {
       const backFile = new File(["back-native"], "back-native.jpg", { type: "image/jpeg" });
       fireEvent.change(nativeBackInput, { target: { files: [backFile] } });
 
-      expect(onComplete).toHaveBeenCalledTimes(1);
+      await waitFor(() => {
+        expect(screen.getByText(/Review Back \(Reverse\)/i)).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole("button", { name: /Confirm Back/i }));
+
+      await waitFor(() => {
+        expect(onComplete).toHaveBeenCalledTimes(1);
+      });
       expect(onComplete.mock.calls[0][0].frontFile.name).toBe("capture-front.jpg");
       expect(onComplete.mock.calls[0][0].backFile).toBe(backFile);
     } finally {
