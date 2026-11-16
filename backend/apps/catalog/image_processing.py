@@ -941,19 +941,215 @@ def _crop_to_subject(rgba: Image.Image) -> Image.Image:
 
 
 def _enhance_detail(img: Image.Image) -> Image.Image:
-    """Apply subtle sharpening and contrast clarity without clipping highlights."""
-    if img.mode == "RGBA":
-        r, g, b, a = img.split()
-        rgb = Image.merge("RGB", (r, g, b))
-        rgb = rgb.filter(ImageFilter.UnsharpMask(radius=1.0, percent=35, threshold=3))
-        rgb = ImageEnhance.Contrast(rgb).enhance(1.04)
-        er, eg, eb = rgb.split()
-        return Image.merge("RGBA", (er, eg, eb, a))
+    """
+    Apply studio-style numismatic lighting enhancement:
+    1. Subject-scoped highlight-safe shadow/midtone gamma lift in CIE LAB space
+       (measuring only opaque subject pixels so underexposed coins/Goldbacks/notes pop).
+    2. Subtle chroma recovery when lifting deep shadows so gold/copper/ink tones stay rich.
+    3. Local relief & engraving contrast via CLAHE on the L channel.
+    4. Crisp edge sharpening via UnsharpMask while preserving alpha transparency.
+    """
+    has_alpha = img.mode == "RGBA"
+    rgba = img.convert("RGBA")
+    arr = np.array(rgba)
+    rgb = arr[:, :, :3]
+    alpha = arr[:, :, 3]
+    fg = alpha > 32
+    if not int(fg.sum()):
+        fg = np.ones_like(alpha, dtype=bool)
 
-    rgb = img.convert("RGB")
-    rgb = rgb.filter(ImageFilter.UnsharpMask(radius=1.0, percent=35, threshold=3))
-    rgb = ImageEnhance.Contrast(rgb).enhance(1.04)
-    return rgb
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    L = lab[:, :, 0]
+    a = lab[:, :, 1]
+    b = lab[:, :, 2]
+
+    med_l = float(np.median(L[fg]))
+    p30_l = float(np.percentile(L[fg], 30))
+    ref_l = min(med_l, p30_l * 1.12)
+    if ref_l < 152.0:
+        gamma = max(
+            0.56,
+            min(0.92, float(np.log(148.0 / 255.0) / np.log(max(25.0, ref_l) / 255.0))),
+        )
+        l_norm = np.clip(L / 255.0, 0.0, 1.0)
+        l_gamma = (l_norm**gamma) * 255.0
+        highlight_guard = np.clip((248.0 - L) / 55.0, 0.20, 1.0)
+        L = L + (l_gamma - L) * highlight_guard
+
+        chroma_boost = 1.0 + (1.0 - gamma) * 0.40
+        a = 128.0 + (a - 128.0) * chroma_boost
+        b = 128.0 + (b - 128.0) * chroma_boost
+
+    clahe = cv2.createCLAHE(clipLimit=1.9, tileGridSize=(8, 8))
+    l_clahe = clahe.apply(np.clip(L, 0, 255).astype(np.uint8)).astype(np.float32)
+    L = np.clip(0.65 * L + 0.35 * np.maximum(L, l_clahe), 0, 255)
+
+    lab_out = np.stack([L, np.clip(a, 0, 255), np.clip(b, 0, 255)], axis=2).astype(np.uint8)
+    rgb_out = cv2.cvtColor(cv2.cvtColor(lab_out, cv2.COLOR_LAB2BGR), cv2.COLOR_BGR2RGB)
+    pil_rgb = Image.fromarray(rgb_out, mode="RGB")
+    pil_rgb = pil_rgb.filter(ImageFilter.UnsharpMask(radius=1.1, percent=42, threshold=3))
+    pil_rgb = ImageEnhance.Contrast(pil_rgb).enhance(1.04)
+
+    if has_alpha:
+        er, eg, eb = pil_rgb.split()
+        return Image.merge("RGBA", (er, eg, eb, Image.fromarray(alpha, mode="L")))
+    return pil_rgb
+
+
+_UPRIGHT_HEADER_KEYWORDS = (
+    "GOLDBACK",
+    "NEGOTIABLE",
+    "INSTRUMENT",
+    "UTAH",
+    "NEVADA",
+    "WYOMING",
+    "HAMPSHIRE",
+    "DAKOTA",
+    "FLORIDA",
+    "UNITED",
+    "STATES",
+    "AMERICA",
+    "FEDERAL",
+    "RESERVE",
+    "CERTIFICATE",
+    "LIBERTY",
+    "PCGS",
+    "NGC",
+    "PMG",
+    "ANACS",
+    "CACG",
+)
+
+_UPRIGHT_FOOTER_KEYWORDS = (
+    "CONTAINS",
+    "TROY",
+    "OUNCE",
+    "24K",
+    "FOURTH",
+    "HALF",
+    "GOLDBACK.COM",
+)
+
+
+def _score_ocr_upright(entries: list[Any], width: int, height: int) -> float:
+    """Score OCR detections for horizontal readability and upright header/footer placement."""
+    score = 0.0
+    for entry in entries or []:
+        if not isinstance(entry, (list, tuple)) or len(entry) < 3:
+            continue
+        box, raw_text, raw_conf = entry[0], str(entry[1] or "").strip(), float(entry[2] or 0.0)
+        if raw_conf < 0.50 or not isinstance(box, (list, tuple)) or len(box) < 4:
+            continue
+        alnum = "".join(ch for ch in raw_text if ch.isalnum())
+        if len(alnum) < 2:
+            continue
+        xs = [ float(pt[0]) for pt in box ]
+        ys = [ float(pt[1]) for pt in box ]
+        bw = max(xs) - min(xs)
+        bh = max(ys) - min(ys)
+        cy = sum(ys) / 4.0
+
+        # Multi-character words in an upright image should be wider than tall
+        if len(alnum) >= 3 and bh > bw * 1.25:
+            score -= len(alnum) * raw_conf * 0.8
+            continue
+
+        word_score = len(alnum) * raw_conf
+        upper = raw_text.upper()
+        if any(kw in upper for kw in _UPRIGHT_HEADER_KEYWORDS):
+            word_score *= 1.5
+            if cy < height * 0.48:
+                word_score += 8.0
+            elif cy > height * 0.58:
+                word_score -= 6.0
+        if any(kw in upper for kw in _UPRIGHT_FOOTER_KEYWORDS):
+            word_score *= 1.3
+            if cy > height * 0.52:
+                word_score += 6.0
+            elif cy < height * 0.42:
+                word_score -= 5.0
+        score += word_score
+    return score
+
+
+def auto_orient_upright(img: Image.Image) -> Image.Image:
+    """
+    Detect if a cropped collectible image has sideways (90°/270°) or upside-down (180°)
+    text using local RapidOCR bounding-box geometry and rotate it upright.
+    """
+    w, h = img.size
+    if w < 64 or h < 64:
+        return img
+
+    # Skip flat synthetic test images that have no text texture
+    gray_small = np.array(img.convert("L").resize((64, 64), Image.Resampling.BILINEAR), dtype=np.float32)
+    if float(gray_small.std()) < 12.0:
+        return img
+
+    try:
+        from apps.vision.ocr import _get_ocr_engine
+
+        engine = _get_ocr_engine()
+        if engine is None:
+            return img
+
+        work = img.convert("RGB")
+        if max(work.size) > 540:
+            work = work.copy()
+            work.thumbnail((540, 540), Image.Resampling.BILINEAR)
+
+        res0, _ = engine(np.array(work))
+        if not res0:
+            return img
+
+        # Check if multi-character words at 0° are oriented vertically (bh > bw * 1.35)
+        vert_chars = 0
+        horiz_chars = 0
+        for entry in res0:
+            if not isinstance(entry, (list, tuple)) or len(entry) < 3:
+                continue
+            box, raw_text, conf = entry[0], str(entry[1] or ""), float(entry[2] or 0.0)
+            alnum = "".join(ch for ch in raw_text if ch.isalnum())
+            if len(alnum) < 3 or conf < 0.55:
+                continue
+            xs = [float(pt[0]) for pt in box]
+            ys = [float(pt[1]) for pt in box]
+            if (max(ys) - min(ys)) > (max(xs) - min(xs)) * 1.35:
+                vert_chars += len(alnum)
+            else:
+                horiz_chars += len(alnum)
+
+        score0 = _score_ocr_upright(res0, work.width, work.height)
+        candidates: list[tuple[float, int]] = [(score0, 0)]
+
+        if vert_chars > horiz_chars:
+            for deg, transpose_op in (
+                (90, Image.Transpose.ROTATE_270),
+                (270, Image.Transpose.ROTATE_90),
+            ):
+                rot_work = work.transpose(transpose_op)
+                res_rot, _ = engine(np.array(rot_work))
+                sc = _score_ocr_upright(res_rot or [], rot_work.width, rot_work.height)
+                candidates.append((sc, deg))
+        elif score0 < 6.0:
+            rot180 = work.transpose(Image.Transpose.ROTATE_180)
+            res180, _ = engine(np.array(rot180))
+            sc180 = _score_ocr_upright(res180 or [], rot180.width, rot180.height)
+            candidates.append((sc180, 180))
+
+        best_score, best_deg = max(candidates, key=lambda item: item[0])
+        if best_deg == 0 or best_score <= score0 + 2.5:
+            return img
+        if best_deg == 90:
+            return img.transpose(Image.Transpose.ROTATE_270)
+        if best_deg == 180:
+            return img.transpose(Image.Transpose.ROTATE_180)
+        if best_deg == 270:
+            return img.transpose(Image.Transpose.ROTATE_90)
+    except Exception:
+        return img
+    return img
 
 
 def _encode_processed_image(
@@ -1027,6 +1223,9 @@ def process_item_image(
 
         if enhance:
             img = _enhance_detail(img)
+
+        if remove_background and shape_hint in ("note", "bar", "rect", None):
+            img = auto_orient_upright(img)
 
         return _encode_processed_image(img, orig_format=orig_format, force_png=remove_background)
 

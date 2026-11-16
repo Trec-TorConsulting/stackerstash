@@ -649,6 +649,13 @@ def test_goldback_on_shadowed_white_paper_sheet_background_removal():
     assert 225 <= out_w <= 270
     assert 130 <= out_h <= 165
 
+    # Verify studio shadow-lift brightened the dark shadow region inside the Goldback
+    out_img = Image.open(io.BytesIO(out_bytes)).convert("RGBA")
+    center_r, center_g, center_b, center_a = out_img.getpixel((out_w // 2, out_h // 2))
+    assert center_a > 200
+    assert center_r > 70 and center_g > 55
+
+
 
 
 
