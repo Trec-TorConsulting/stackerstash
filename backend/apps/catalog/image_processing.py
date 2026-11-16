@@ -997,158 +997,48 @@ def _enhance_detail(img: Image.Image) -> Image.Image:
     return pil_rgb
 
 
-_UPRIGHT_HEADER_KEYWORDS = (
-    "GOLDBACK",
-    "NEGOTIABLE",
-    "INSTRUMENT",
-    "UTAH",
-    "NEVADA",
-    "WYOMING",
-    "HAMPSHIRE",
-    "DAKOTA",
-    "FLORIDA",
-    "UNITED",
-    "STATES",
-    "AMERICA",
-    "FEDERAL",
-    "RESERVE",
-    "CERTIFICATE",
-    "LIBERTY",
-    "PCGS",
-    "NGC",
-    "PMG",
-    "ANACS",
-    "CACG",
-)
-
-_UPRIGHT_FOOTER_KEYWORDS = (
-    "CONTAINS",
-    "TROY",
-    "OUNCE",
-    "24K",
-    "FOURTH",
-    "HALF",
-    "GOLDBACK.COM",
-)
-
-
-def _score_ocr_upright(entries: list[Any], width: int, height: int) -> float:
-    """Score OCR detections for horizontal readability and upright header/footer placement."""
-    score = 0.0
-    for entry in entries or []:
-        if not isinstance(entry, (list, tuple)) or len(entry) < 3:
-            continue
-        box, raw_text, raw_conf = entry[0], str(entry[1] or "").strip(), float(entry[2] or 0.0)
-        if raw_conf < 0.50 or not isinstance(box, (list, tuple)) or len(box) < 4:
-            continue
-        alnum = "".join(ch for ch in raw_text if ch.isalnum())
-        if len(alnum) < 2:
-            continue
-        xs = [ float(pt[0]) for pt in box ]
-        ys = [ float(pt[1]) for pt in box ]
-        bw = max(xs) - min(xs)
-        bh = max(ys) - min(ys)
-        cy = sum(ys) / 4.0
-
-        # Multi-character words in an upright image should be wider than tall
-        if len(alnum) >= 3 and bh > bw * 1.25:
-            score -= len(alnum) * raw_conf * 0.8
-            continue
-
-        word_score = len(alnum) * raw_conf
-        upper = raw_text.upper()
-        if any(kw in upper for kw in _UPRIGHT_HEADER_KEYWORDS):
-            word_score *= 1.5
-            if cy < height * 0.48:
-                word_score += 8.0
-            elif cy > height * 0.58:
-                word_score -= 6.0
-        if any(kw in upper for kw in _UPRIGHT_FOOTER_KEYWORDS):
-            word_score *= 1.3
-            if cy > height * 0.52:
-                word_score += 6.0
-            elif cy < height * 0.42:
-                word_score -= 5.0
-        score += word_score
-    return score
-
-
 def auto_orient_upright(img: Image.Image) -> Image.Image:
     """
-    Detect if a cropped collectible image has sideways (90°/270°) or upside-down (180°)
-    text using local RapidOCR bounding-box geometry and rotate it upright.
+    Fast (< 25ms) pure-OpenCV upright orientation detector using Sobel typography stroke
+    anisotropy. Avoids loading ONNX/RapidOCR inside image processing workers.
+    In upright Latin/numeric text, vertical character stems (|dx|) dominate horizontal
+    bars (|dy|); when a vertical note/Goldback/slab is lying on its side (w > h * 1.15),
+    rotated character stems cause |dy| to strongly dominate |dx|.
     """
     w, h = img.size
     if w < 64 or h < 64:
         return img
 
-    # Skip flat synthetic test images that have no text texture
-    gray_small = np.array(img.convert("L").resize((64, 64), Image.Resampling.BILINEAR), dtype=np.float32)
-    if float(gray_small.std()) < 12.0:
+    work = img.convert("L")
+    if max(work.size) > 420:
+        work = work.copy()
+        work.thumbnail((420, 420), Image.Resampling.BILINEAR)
+
+    g = np.array(work, dtype=np.float32)
+    wh, ww = g.shape
+    if float(g.std()) < 12.0:
         return img
 
-    try:
-        from apps.vision.ocr import _get_ocr_engine
+    bx = max(4, int(ww * 0.10))
+    by = max(4, int(wh * 0.10))
+    roi = g[by : wh - by, bx : ww - bx]
+    if roi.size < 256:
+        return img
 
-        engine = _get_ocr_engine()
-        if engine is None:
-            return img
+    gx = np.abs(cv2.Sobel(roi, cv2.CV_32F, 1, 0, ksize=3))
+    gy = np.abs(cv2.Sobel(roi, cv2.CV_32F, 0, 1, ksize=3))
+    h_grad = np.clip(gx - 0.65 * gy, 0.0, None)
+    v_grad = np.clip(gy - 0.65 * gx, 0.0, None)
+    h_mean = float(h_grad.mean())
+    v_mean = float(v_grad.mean())
 
-        work = img.convert("RGB")
-        if max(work.size) > 540:
-            work = work.copy()
-            work.thumbnail((540, 540), Image.Resampling.BILINEAR)
-
-        res0, _ = engine(np.array(work))
-        if not res0:
-            return img
-
-        # Check if multi-character words at 0° are oriented vertically (bh > bw * 1.35)
-        vert_chars = 0
-        horiz_chars = 0
-        for entry in res0:
-            if not isinstance(entry, (list, tuple)) or len(entry) < 3:
-                continue
-            box, raw_text, conf = entry[0], str(entry[1] or ""), float(entry[2] or 0.0)
-            alnum = "".join(ch for ch in raw_text if ch.isalnum())
-            if len(alnum) < 3 or conf < 0.55:
-                continue
-            xs = [float(pt[0]) for pt in box]
-            ys = [float(pt[1]) for pt in box]
-            if (max(ys) - min(ys)) > (max(xs) - min(xs)) * 1.35:
-                vert_chars += len(alnum)
-            else:
-                horiz_chars += len(alnum)
-
-        score0 = _score_ocr_upright(res0, work.width, work.height)
-        candidates: list[tuple[float, int]] = [(score0, 0)]
-
-        if vert_chars > horiz_chars:
-            for deg, transpose_op in (
-                (90, Image.Transpose.ROTATE_270),
-                (270, Image.Transpose.ROTATE_90),
-            ):
-                rot_work = work.transpose(transpose_op)
-                res_rot, _ = engine(np.array(rot_work))
-                sc = _score_ocr_upright(res_rot or [], rot_work.width, rot_work.height)
-                candidates.append((sc, deg))
-        elif score0 < 6.0:
-            rot180 = work.transpose(Image.Transpose.ROTATE_180)
-            res180, _ = engine(np.array(rot180))
-            sc180 = _score_ocr_upright(res180 or [], rot180.width, rot180.height)
-            candidates.append((sc180, 180))
-
-        best_score, best_deg = max(candidates, key=lambda item: item[0])
-        if best_deg == 0 or best_score <= score0 + 2.5:
-            return img
-        if best_deg == 90:
+    if w > h * 1.15 and v_mean > max(12.0, h_mean * 1.32):
+        rw = roi.shape[1]
+        left_v = float(v_grad[:, : max(1, int(rw * 0.38))].mean())
+        right_v = float(v_grad[:, min(rw - 1, int(rw * 0.62)) :].mean())
+        if right_v > left_v * 1.35:
             return img.transpose(Image.Transpose.ROTATE_270)
-        if best_deg == 180:
-            return img.transpose(Image.Transpose.ROTATE_180)
-        if best_deg == 270:
-            return img.transpose(Image.Transpose.ROTATE_90)
-    except Exception:
-        return img
+        return img.transpose(Image.Transpose.ROTATE_90)
     return img
 
 
