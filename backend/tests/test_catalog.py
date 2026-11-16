@@ -616,6 +616,41 @@ def test_concentric_inner_coin_and_already_cutout_guard():
     assert detect_circular_coin(cutout) is None
 
 
+def test_goldback_on_shadowed_white_paper_sheet_background_removal():
+    from PIL import ImageDraw
+
+    from apps.catalog.image_processing import process_item_image
+
+    # Simulate an 894x771 white paper sheet with a directional shadow gradient (155 on left -> 230 on right)
+    # and a thin transparent top border sliver (as produced when the paper edge touches the top of the frame).
+    w, h = 440, 380
+    sheet = Image.new("RGBA", (w, h), color=(0, 0, 0, 0))
+    px = sheet.load()
+    for y in range(10, h):
+        for x in range(w):
+            v = int(155 + (230 - 155) * (x / w))
+            px[x, y] = (v, v, max(0, v - 3), 255)
+
+    draw = ImageDraw.Draw(sheet)
+    # Goldback note in center (~55% width, ~38% height -> ~21% area) with dark & bright foil reflections
+    gx0, gy0, gx1, gy1 = 98, 118, 342, 262
+    draw.rectangle((gx0, gy0, gx1, gy1), fill=(155, 122, 68, 255), outline=(182, 148, 86, 255), width=3)
+    draw.rectangle((gx0 + 30, gy0 + 40, gx1 - 40, gy1 - 10), fill=(52, 40, 28, 255))
+    draw.ellipse((gx0 + 45, gy0 + 2, gx0 + 95, gy0 + 18), fill=(235, 215, 165, 255))
+
+    buf = io.BytesIO()
+    sheet.save(buf, format="PNG")
+
+    out_bytes, out_w, out_h, out_ext = process_item_image(
+        buf.getvalue(), remove_background=True, enhance=True, shape_hint="note"
+    )
+    assert out_ext == "png"
+    # Must strip the 440x380 white paper sheet and crop tightly to the ~244x144 Goldback note
+    assert 225 <= out_w <= 270
+    assert 130 <= out_h <= 165
+
+
+
 
 
 

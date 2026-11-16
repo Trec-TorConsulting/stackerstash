@@ -144,21 +144,21 @@ def _border_palette_distance(
     lab: np.ndarray,
     bx: int,
     by: int,
+    border_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, float]:
     """
     Compute minimum chroma-weighted LAB distance to a 4-quartile border color palette.
-    Handles two-color printed/patterned backgrounds (e.g. white text printed across a
-    colored sheet) where a single median border color would misclassify the printed text
-    as foreground.
+    Handles two-color printed/patterned backgrounds and shadowed white paper sheets.
     """
     h, w = lab.shape[:2]
-    bw = max(bx, int(w * 0.05))
-    bh = max(by, int(h * 0.05))
-    border_mask = np.zeros((h, w), dtype=bool)
-    border_mask[:bh, :] = True
-    border_mask[-bh:, :] = True
-    border_mask[:, :bw] = True
-    border_mask[:, -bw:] = True
+    if border_mask is None or not border_mask.any():
+        bw = max(bx, int(w * 0.05))
+        bh = max(by, int(h * 0.05))
+        border_mask = np.zeros((h, w), dtype=bool)
+        border_mask[:bh, :] = True
+        border_mask[-bh:, :] = True
+        border_mask[:, :bw] = True
+        border_mask[:, -bw:] = True
     bp = lab[border_mask]
     if len(bp) < 16:
         bg = np.median(lab, axis=(0, 1))
@@ -778,49 +778,79 @@ def detect_rectangular_subject(
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
     L = lab[:, :, 0]
 
-    # If the foreground mask still covers almost the entire image (>80%) or has a patterned border,
-    # test 4-quartile chroma-weighted border palette separation first.
+    # If the foreground mask still covers almost the entire image (>=75%, e.g. white paper sheet or
+    # patterned sheet) or has an irregular border, test 4-quartile chroma-weighted border palette first.
+    opaque = alpha > 128
+    is_full_sheet = fg_area >= w * h * 0.75
+    rim_k = max(7, int(min(h, w) * 0.08) | 1)
+    eroded_opaque = cv2.erode(opaque.astype(np.uint8), np.ones((rim_k, rim_k), np.uint8)) > 0
+    rim_mask = opaque & ~eroded_opaque
+    thin_eroded = cv2.erode(opaque.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+
     bx = max(4, int(w * 0.05))
     by = max(4, int(h * 0.05))
-    min_d, p92 = _border_palette_distance(lab, bx, by)
-    palette_raw = (min_d > max(14.0, p92 * 1.35)).astype(np.uint8) * 255
+    palette_border = rim_mask if (is_full_sheet and int(rim_mask.sum()) >= 32) else None
+    min_d, p92 = _border_palette_distance(lab, bx, by, border_mask=palette_border)
+    palette_raw = ((min_d > max(13.0, p92 * 1.32)) & (thin_eroded if is_full_sheet else np.ones_like(opaque))).astype(
+        np.uint8
+    ) * 255
     palette_raw[:by, :] = 0
     palette_raw[-by:, :] = 0
     palette_raw[:, :bx] = 0
     palette_raw[:, -bx:] = 0
-    palette_fg = cv2.morphologyEx(palette_raw, cv2.MORPH_OPEN, np.ones((7, 7), np.uint8))
-    palette_fg = cv2.morphologyEx(palette_fg, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
+    palette_opened = cv2.morphologyEx(palette_raw, cv2.MORPH_OPEN, np.ones((7, 7), np.uint8))
+    palette_fg = cv2.morphologyEx(palette_opened, cv2.MORPH_CLOSE, np.ones((17, 17), np.uint8))
     p_cnts, _ = cv2.findContours(palette_fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if p_cnts and (fg_area > w * h * 0.80 or extent < 0.88):
+    palette_matched = False
+    if p_cnts and (is_full_sheet or extent < 0.88):
         p_best = max(p_cnts, key=cv2.contourArea)
         p_filled = np.zeros_like(palette_fg)
         cv2.drawContours(p_filled, [p_best], -1, 255, thickness=cv2.FILLED)
         p_area = int((p_filled > 0).sum())
         p_extent = _contour_extent(p_filled)
-        if 0.12 * w * h <= p_area <= 0.88 * w * h and p_extent >= 0.82:
-            # Use raw unclosed palette mask for tight edge trimming so border text bridges are removed
-            fg_mask = np.where((p_filled > 0) & (palette_raw > 0), 255, 0).astype(np.uint8)
+        min_extent = 0.76 if is_full_sheet else 0.82
+        if 0.08 * w * h <= p_area <= 0.88 * w * h and p_extent >= min_extent:
+            trimmed = np.where((p_filled > 0) & (palette_raw > 0), 255, 0).astype(np.uint8)
+            if not is_full_sheet or int((trimmed > 0).sum()) >= p_area * 0.88:
+                fg_mask = trimmed
+            else:
+                fg_mask = p_filled
             extent = p_extent
             fg_area = p_area
+            palette_matched = True
 
-    opaque = alpha > 128
-    if int(opaque.sum()) >= 64:
-        rim_k = max(7, int(min(h, w) * 0.08) | 1)
-        eroded_opaque = cv2.erode(opaque.astype(np.uint8), np.ones((rim_k, rim_k), np.uint8)) > 0
-        rim_mask = opaque & ~eroded_opaque
-        has_dark_rim = (
-            eroded_opaque.any()
-            and rim_mask.any()
-            and float(np.median(L[rim_mask])) < float(np.median(L[eroded_opaque])) - 8.0
+    if not palette_matched and int(opaque.sum()) >= 64 and eroded_opaque.any() and rim_mask.any():
+        core_k = max(15, int(min(h, w) * 0.22) | 1)
+        core_opaque = cv2.erode(opaque.astype(np.uint8), np.ones((core_k, core_k), np.uint8)) > 0
+        if not core_opaque.any():
+            core_opaque = eroded_opaque
+        rim_med_l = float(np.median(L[rim_mask]))
+        eroded_med_l = float(np.median(L[eroded_opaque]))
+        core_med_l = float(np.median(L[core_opaque]))
+        rim_med_lab = np.median(lab[rim_mask], axis=0)
+        core_med_lab = np.median(lab[core_opaque], axis=0)
+        rim_core_lab_dist = float(np.linalg.norm(rim_med_lab - core_med_lab))
+
+        has_dark_rim = rim_med_l < eroded_med_l - 8.0
+        has_light_sheet_rim = is_full_sheet and (
+            (rim_med_l > core_med_l + 8.0) or (rim_core_lab_dist >= 14.0)
         )
-        dark_thresh = float(np.percentile(L[opaque], 20))
-        dark_mask = opaque & (L <= dark_thresh)
-        bg_lab = np.median(lab[dark_mask], axis=0) if dark_mask.any() else np.median(lab[opaque], axis=0)
+        has_distinct_rim = has_dark_rim or has_light_sheet_rim
+
+        if has_light_sheet_rim and not has_dark_rim:
+            bg_lab = rim_med_lab
+        else:
+            dark_thresh = float(np.percentile(L[opaque], 20))
+            dark_mask = opaque & (L <= dark_thresh)
+            bg_lab = np.median(lab[dark_mask], axis=0) if dark_mask.any() else np.median(lab[opaque], axis=0)
+
         ldist = np.linalg.norm(lab - bg_lab, axis=2)
         ldist_u8 = np.clip(ldist, 0, 255).astype(np.uint8)
         otsu_t, _ = cv2.threshold(ldist_u8[opaque], 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        if extent < 0.85 or (extent < 0.92 and otsu_t >= 32.0) or has_dark_rim or otsu_t >= 45.0:
-            cand = np.where((ldist_u8 > otsu_t) & opaque, 255, 0).astype(np.uint8)
+        if extent < 0.85 or (extent < 0.92 and otsu_t >= 32.0) or has_distinct_rim or otsu_t >= 45.0:
+            cand = np.where((ldist_u8 > otsu_t) & (thin_eroded if is_full_sheet else opaque), 255, 0).astype(
+                np.uint8
+            )
             open_k = max(7, int(min(h, w) * 0.02) | 1)
             cand = cv2.morphologyEx(cand, cv2.MORPH_OPEN, np.ones((open_k, open_k), np.uint8))
             k = max(5, int(min(h, w) * 0.02) | 1)
@@ -833,9 +863,9 @@ def detect_rectangular_subject(
                 cand_area = int((filled > 0).sum())
                 cand_extent = _contour_extent(filled)
                 area_ratio = cand_area / max(1, fg_area)
-                if 0.15 <= area_ratio <= 0.94 and (
+                if 0.12 <= area_ratio <= 0.94 and (
                     cand_extent > extent
-                    or ((otsu_t >= 45.0 or has_dark_rim) and cand_extent >= 0.78 and area_ratio <= 0.88)
+                    or ((otsu_t >= 45.0 or has_distinct_rim) and cand_extent >= 0.78 and area_ratio <= 0.88)
                 ):
                     fg_mask = filled
 
