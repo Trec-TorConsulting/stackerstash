@@ -12,6 +12,14 @@ export interface SourceCropRect {
   sh: number;
 }
 
+export interface NormalizedSubjectBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  shape?: "coin" | "slab" | "note";
+}
+
 /**
  * Decode a Blob or File into an ImageBitmap with EXIF orientation baked upright.
  */
@@ -50,6 +58,47 @@ export function computeCoverCropRect(
   const sh = Math.max(1, Math.min(safeH, Math.round(visH / safeZoom)));
   const sx = Math.max(0, Math.round((safeW - sw) / 2));
   const sy = Math.max(0, Math.round((safeH - sh) / 2));
+  return { sx, sy, sw, sh };
+}
+
+/**
+ * Map a normalized viewfinder subject bounding box (0..1) onto the visible
+ * sensor crop rectangle, adding protective margin and enforcing 1:1 square
+ * framing for round coins so rims and edges are never clipped.
+ */
+export function computeSubjectCropRect(
+  srcW: number,
+  srcH: number,
+  viewfinderAspect: number,
+  zoom: number,
+  subjectBox: NormalizedSubjectBounds,
+  paddingFactor = 1.28,
+): SourceCropRect {
+  const vp = computeCoverCropRect(srcW, srcH, viewfinderAspect, zoom);
+  const cx = vp.sx + (subjectBox.x + subjectBox.width / 2) * vp.sw;
+  const cy = vp.sy + (subjectBox.y + subjectBox.height / 2) * vp.sh;
+
+  let targetW = Math.max(vp.sw * 0.35, subjectBox.width * vp.sw * paddingFactor);
+  let targetH = Math.max(vp.sh * 0.35, subjectBox.height * vp.sh * paddingFactor);
+
+  if (subjectBox.shape === "coin") {
+    const side = Math.min(Math.min(vp.sw, vp.sh), Math.max(targetW, targetH));
+    targetW = side;
+    targetH = side;
+  } else {
+    targetW = Math.min(vp.sw, targetW);
+    targetH = Math.min(vp.sh, targetH);
+  }
+
+  const sw = Math.max(1, Math.round(targetW));
+  const sh = Math.max(1, Math.round(targetH));
+  const minX = vp.sx;
+  const maxX = vp.sx + vp.sw - sw;
+  const minY = vp.sy;
+  const maxY = vp.sy + vp.sh - sh;
+
+  const sx = Math.max(minX, Math.min(maxX, Math.round(cx - sw / 2)));
+  const sy = Math.max(minY, Math.min(maxY, Math.round(cy - sh / 2)));
   return { sx, sy, sw, sh };
 }
 
