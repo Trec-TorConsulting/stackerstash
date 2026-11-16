@@ -584,6 +584,39 @@ def test_small_slab_coin_extraction_rotate_and_gross_weight_fallback(api_client,
     assert rot_data["height"] == 120
 
 
+def test_concentric_inner_coin_and_already_cutout_guard():
+    from PIL import ImageDraw
+
+    from apps.catalog.image_processing import detect_circular_coin
+
+    # 1. Small coin (r=56) centered in a 480x480 dark assay card with off-center white text blocks
+    card = Image.new("RGB", (480, 480), color=(15, 22, 48))
+    draw = ImageDraw.Draw(card)
+    # Distractor text-like bars on the right side
+    for y in range(180, 310, 14):
+        draw.rectangle((300, y, 440, y + 6), fill=(210, 218, 235))
+    # Centered small coin with high-contrast rim and interior relief
+    cx, cy, r = 240, 240, 56
+    draw.ellipse((cx - r - 4, cy - r - 4, cx + r + 4, cy + r + 4), fill=(8, 10, 20), outline=(215, 220, 230), width=3)
+    draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(185, 190, 198), outline=(245, 245, 250), width=3)
+    for k in range(-32, 36, 8):
+        draw.line((cx - 28, cy + k, cx + 28, cy - k), fill=(65, 70, 80), width=2)
+
+    detected = detect_circular_coin(card)
+    assert detected is not None
+    dcx, dcy, dr = detected
+    assert abs(dcx - cx) <= 16
+    assert abs(dcy - cy) <= 16
+    assert abs(dr - r) <= 16
+
+    # 2. Already-cutout RGBA circular coin must not be sub-cropped to an inner detail circle
+    cutout = Image.new("RGBA", (400, 400), color=(0, 0, 0, 0))
+    cdraw = ImageDraw.Draw(cutout)
+    cdraw.ellipse((4, 4, 396, 396), fill=(190, 195, 200, 255), outline=(90, 95, 100, 255), width=4)
+    assert detect_circular_coin(cutout) is None
+
+
+
 
 
 

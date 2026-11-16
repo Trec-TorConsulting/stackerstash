@@ -17,8 +17,9 @@ import {
 } from '../lib/imageUtils';
 import { PhotoCropRotateView } from './PhotoCropRotateView';
 
-const MAX_CAPTURE_DIM = 1600;
+const MAX_CAPTURE_DIM = 2048;
 const VIEWFINDER_ASPECT = 4 / 3;
+const CIRCLE_RETICLE_ZOOM_BOOST = 1.35;
 const BURST_FRAMES = 5;
 const BURST_INTERVAL_MS = 50;
 const AUTO_CAPTURE_TICKS = 3;
@@ -55,10 +56,15 @@ function drawNormalizedSource(
   srcH: number,
   zoom: number,
   applySoftwareZoom: boolean,
+  reticleShape: 'circle' | 'rect',
   targetCanvas: HTMLCanvasElement,
 ): boolean {
-  const effectiveZoom = applySoftwareZoom && zoom > 1 ? zoom : 1;
-  const { sx, sy, sw, sh } = computeCoverCropRect(srcW, srcH, VIEWFINDER_ASPECT, effectiveZoom);
+  const baseZoom = applySoftwareZoom && zoom > 1 ? zoom : 1;
+  // When capturing in Coin (Circle) mode, crop tightly to a 1:1 square around the center circle reticle
+  const targetAspect = reticleShape === 'circle' ? 1 : VIEWFINDER_ASPECT;
+  const effectiveZoom =
+    reticleShape === 'circle' ? baseZoom * CIRCLE_RETICLE_ZOOM_BOOST : baseZoom;
+  const { sx, sy, sw, sh } = computeCoverCropRect(srcW, srcH, targetAspect, effectiveZoom);
 
   const scale = Math.min(1, MAX_CAPTURE_DIM / Math.max(sw, sh));
   const outW = Math.max(1, Math.round(sw * scale));
@@ -78,13 +84,22 @@ async function normalizePhotoBlob(
   blob: Blob,
   zoom: number,
   applySoftwareZoom: boolean,
+  reticleShape: 'circle' | 'rect',
   filename: string,
 ): Promise<File | null> {
   const canvas = document.createElement('canvas');
   if (typeof createImageBitmap === 'function') {
     const bitmap = await decodeImageBitmapUpright(blob);
     try {
-      const ok = drawNormalizedSource(bitmap, bitmap.width, bitmap.height, zoom, applySoftwareZoom, canvas);
+      const ok = drawNormalizedSource(
+        bitmap,
+        bitmap.width,
+        bitmap.height,
+        zoom,
+        applySoftwareZoom,
+        reticleShape,
+        canvas,
+      );
       return ok ? await canvasToJpegFile(canvas, filename) : null;
     } finally {
       bitmap.close();
@@ -99,7 +114,15 @@ async function normalizePhotoBlob(
       el.onerror = () => reject(new Error('Failed to decode photo blob'));
       el.src = url;
     });
-    const ok = drawNormalizedSource(img, img.naturalWidth, img.naturalHeight, zoom, applySoftwareZoom, canvas);
+    const ok = drawNormalizedSource(
+      img,
+      img.naturalWidth,
+      img.naturalHeight,
+      zoom,
+      applySoftwareZoom,
+      reticleShape,
+      canvas,
+    );
     return ok ? await canvasToJpegFile(canvas, filename) : null;
   } finally {
     URL.revokeObjectURL(url);
@@ -110,6 +133,7 @@ async function captureBestBurstFrame(
   video: HTMLVideoElement,
   zoom: number,
   applySoftwareZoom: boolean,
+  reticleShape: 'circle' | 'rect',
   filename: string,
 ): Promise<File | null> {
   const sampleW = 160;
@@ -143,6 +167,7 @@ async function captureBestBurstFrame(
         video.videoHeight,
         zoom,
         applySoftwareZoom,
+        reticleShape,
         bestCanvas,
       );
     }
@@ -330,7 +355,13 @@ export function GuidedCameraModal({
         try {
           const imageCapture = new ImageCaptureCtor(videoTrack);
           const photoBlob = await imageCapture.takePhoto();
-          const file = await normalizePhotoBlob(photoBlob, zoom, applySoftwareZoom, filename);
+          const file = await normalizePhotoBlob(
+            photoBlob,
+            zoom,
+            applySoftwareZoom,
+            reticleShape,
+            filename,
+          );
           if (file) {
             setPendingReviewFile(file);
             return;
@@ -341,14 +372,20 @@ export function GuidedCameraModal({
       }
 
       if (video.videoWidth === 0) return;
-      const file = await captureBestBurstFrame(video, zoom, applySoftwareZoom, filename);
+      const file = await captureBestBurstFrame(
+        video,
+        zoom,
+        applySoftwareZoom,
+        reticleShape,
+        filename,
+      );
       if (file) {
         setPendingReviewFile(file);
       }
     } finally {
       setCapturing(false);
     }
-  }, [capturing, step, zoom]);
+  }, [capturing, reticleShape, step, zoom]);
 
   // Live sharpness, exposure, glare, and stability guidance every 220ms
   useEffect(() => {
@@ -541,6 +578,24 @@ export function GuidedCameraModal({
                       <Sparkles className="h-3.5 w-3.5" />
                       {quality.label}
                     </span>
+                  </div>
+
+                  {/* Quick Macro Zoom Pills (CoinSnap style: hold 5-6" away at 1.5x-2x for tack-sharp focus) */}
+                  <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full bg-slate-950/85 p-1 ring-1 ring-slate-700/80 backdrop-blur-md">
+                    {[1, 1.5, 2, 3].map((presetZoom) => (
+                      <button
+                        key={presetZoom}
+                        type="button"
+                        onClick={() => setZoom(presetZoom)}
+                        className={`rounded-full px-2.5 py-0.5 text-xs font-semibold transition ${
+                          Math.abs(zoom - presetZoom) < 0.08
+                            ? 'bg-amber-400 text-slate-950'
+                            : 'text-slate-200 hover:bg-slate-800'
+                        }`}
+                      >
+                        {presetZoom}x
+                      </button>
+                    ))}
                   </div>
 
                   {/* Recommended Zoom Prompt */}
