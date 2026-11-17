@@ -385,6 +385,7 @@ export const api = {
     clear_container?: boolean;
     metal_type?: string;
     grading_service?: string;
+    clear_slab?: boolean;
     add_tags?: string[];
     remove_tags?: string[];
   }) =>

@@ -58,6 +58,7 @@ export function ItemDetailPage() {
   const [editForm, setEditForm] = useState({
     title: "",
     category: "COIN",
+    quantity: 1,
     year: "",
     country: "",
     denomination: "",
@@ -211,6 +212,7 @@ export function ItemDetailPage() {
     setEditForm({
       title: item.title,
       category: item.category,
+      quantity: item.quantity || 1,
       year: item.year || "",
       country: item.country || "",
       denomination: item.denomination || "",
@@ -235,11 +237,30 @@ export function ItemDetailPage() {
     setIsEditing(true);
   }
 
+  function rawCategoryForClearedSlab(currentCategory: string, prevService: string) {
+    if (currentCategory !== "SLAB") return currentCategory;
+    return prevService === "PMG" || prevService === "PCGS_BANKNOTE" ? "PAPER" : "COIN";
+  }
+
+  function handleRemoveSlab() {
+    if (!item) return;
+    const nextAttrs = { ...(item.attributes || {}) };
+    delete nextAttrs.slab_designation;
+    updateMut.mutate({
+      category: rawCategoryForClearedSlab(item.category, item.grading_service),
+      grading_service: "NONE",
+      grade: "",
+      cert_number: "",
+      attributes: nextAttrs,
+    });
+  }
+
   function handleSaveEdit(e: React.FormEvent) {
     e.preventDefault();
     if (!item) return;
+    const isRaw = editForm.grading_service === "NONE";
     const nextAttrs = { ...(item.attributes || {}) };
-    if (editForm.slab_designation.trim()) {
+    if (!isRaw && editForm.slab_designation.trim()) {
       nextAttrs.slab_designation = editForm.slab_designation.trim();
     } else {
       delete nextAttrs.slab_designation;
@@ -247,6 +268,7 @@ export function ItemDetailPage() {
     const payload: Record<string, unknown> = {
       title: editForm.title,
       category: editForm.category,
+      quantity: Math.max(1, Math.floor(Number(editForm.quantity) || 1)),
       year: editForm.year.trim(),
       country: editForm.country.trim(),
       denomination: editForm.denomination.trim(),
@@ -255,8 +277,8 @@ export function ItemDetailPage() {
       status: editForm.status,
       container_id: editForm.container_id || null,
       grading_service: editForm.grading_service,
-      grade: editForm.grade,
-      cert_number: editForm.cert_number,
+      grade: isRaw ? "" : editForm.grade,
+      cert_number: isRaw ? "" : editForm.cert_number,
       estimated_grade: editForm.estimated_grade,
       serial_number: editForm.serial_number,
       purchase_price: editForm.purchase_price || null,
@@ -512,9 +534,29 @@ export function ItemDetailPage() {
                 <span>{item.mint_or_refiner}</span>
               </div>
             )}
-            <div className="flex justify-between">
+            <div className="flex justify-between items-center">
               <span className="text-slate-400">Quantity</span>
-              <span className="font-mono">{item.quantity}</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  aria-label="Decrease quantity"
+                  disabled={item.quantity <= 1 || updateMut.isPending}
+                  onClick={() => updateMut.mutate({ quantity: Math.max(1, item.quantity - 1) })}
+                  className="h-6 w-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-xs flex items-center justify-center disabled:opacity-40"
+                >
+                  -
+                </button>
+                <span className="font-mono min-w-[1.5rem] text-center">{item.quantity}</span>
+                <button
+                  type="button"
+                  aria-label="Increase quantity"
+                  disabled={updateMut.isPending}
+                  onClick={() => updateMut.mutate({ quantity: item.quantity + 1 })}
+                  className="h-6 w-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-xs flex items-center justify-center disabled:opacity-40"
+                >
+                  +
+                </button>
+              </div>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-400">Metal &amp; Fine Weight</span>
@@ -542,13 +584,29 @@ export function ItemDetailPage() {
               <span className="text-slate-400">Unrealized P&amp;L</span>
               <span className="font-mono">{formatUsd(item.unrealized_gain_loss)}</span>
             </div>
-            {item.grading_service !== "NONE" && (
+            {(item.grading_service !== "NONE" ||
+              item.category === "SLAB" ||
+              Boolean(slabDesignation) ||
+              Boolean(item.grade) ||
+              Boolean(item.cert_number)) && (
               <div className="pt-2 border-t border-slate-800 space-y-2">
-                <div className="flex justify-between items-center">
+                <div className="flex justify-between items-center gap-2">
                   <span className="text-slate-400">Slabbed / Graded</span>
-                  <span className="font-semibold text-amber-300">
-                    {item.grading_service} {item.grade}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-amber-300">
+                      {item.grading_service !== "NONE"
+                        ? `${item.grading_service} ${item.grade}`.trim()
+                        : "Slabbed"}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={updateMut.isPending}
+                      onClick={handleRemoveSlab}
+                      className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 hover:text-rose-200 border border-slate-700 text-[11px] font-medium text-slate-300 disabled:opacity-40"
+                    >
+                      Remove Slab
+                    </button>
+                  </div>
                 </div>
                 {slabDesignation && (
                   <div className="flex justify-between items-center">
@@ -628,6 +686,21 @@ export function ItemDetailPage() {
                   </select>
                 </div>
                 <div>
+                  <label htmlFor="edit-quantity" className="block text-xs text-slate-400 mb-1">Quantity</label>
+                  <input
+                    id="edit-quantity"
+                    type="number"
+                    min={1}
+                    step={1}
+                    required
+                    value={editForm.quantity}
+                    onChange={(e) =>
+                      setEditForm({ ...editForm, quantity: Math.max(1, Number(e.target.value) || 1) })
+                    }
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm font-mono"
+                  />
+                </div>
+                <div>
                   <label className="block text-xs text-slate-400 mb-1">Status</label>
                   <select
                     value={editForm.status}
@@ -701,10 +774,53 @@ export function ItemDetailPage() {
                   </div>
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-400 mb-1">Grading Service</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label htmlFor="edit-grading-service" className="block text-xs text-slate-400">
+                      Grading Service
+                    </label>
+                    {(editForm.grading_service !== "NONE" || editForm.category === "SLAB") && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditForm({
+                            ...editForm,
+                            category: rawCategoryForClearedSlab(
+                              editForm.category,
+                              editForm.grading_service
+                            ),
+                            grading_service: "NONE",
+                            grade: "",
+                            cert_number: "",
+                            slab_designation: "",
+                          })
+                        }
+                        className="text-[11px] text-rose-300 hover:text-rose-200"
+                      >
+                        Remove Slab / Mark Raw
+                      </button>
+                    )}
+                  </div>
                   <select
+                    id="edit-grading-service"
                     value={editForm.grading_service}
-                    onChange={(e) => setEditForm({ ...editForm, grading_service: e.target.value })}
+                    onChange={(e) => {
+                      const nextSvc = e.target.value;
+                      if (nextSvc === "NONE") {
+                        setEditForm({
+                          ...editForm,
+                          category: rawCategoryForClearedSlab(
+                            editForm.category,
+                            editForm.grading_service
+                          ),
+                          grading_service: "NONE",
+                          grade: "",
+                          cert_number: "",
+                          slab_designation: "",
+                        });
+                      } else {
+                        setEditForm({ ...editForm, grading_service: nextSvc });
+                      }
+                    }}
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
                   >
                     <option value="NONE">Raw / Ungraded</option>

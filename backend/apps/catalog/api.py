@@ -288,6 +288,7 @@ class BulkUpdateIn(Schema):
     clear_container: bool = False
     metal_type: str | None = None
     grading_service: str | None = None
+    clear_slab: bool = False
     add_tags: list[str] | None = None
     remove_tags: list[str] | None = None
 
@@ -760,6 +761,29 @@ def bulk_update_items(request, payload: BulkUpdateIn):
             item.metal_type = payload.metal_type
         if payload.grading_service is not None:
             item.grading_service = payload.grading_service
+        if payload.clear_slab:
+            prev_service = item.grading_service
+            item.grading_service = CollectionItem.GradingService.NONE
+            item.grade = ""
+            item.cert_number = ""
+            if item.category == CollectionItem.Category.SLAB:
+                item.category = (
+                    CollectionItem.Category.PAPER
+                    if prev_service in (
+                        CollectionItem.GradingService.PMG,
+                        CollectionItem.GradingService.PCGS_BANKNOTE,
+                    )
+                    else CollectionItem.Category.COIN
+                )
+            if isinstance(item.attributes, dict) and "slab_designation" in item.attributes:
+                attrs = dict(item.attributes)
+                attrs.pop("slab_designation", None)
+                item.attributes = attrs
+            if isinstance(item.specs_provenance, dict):
+                prov = dict(item.specs_provenance)
+                for key in ("grading_service", "grade", "cert_number"):
+                    prov.pop(key, None)
+                item.specs_provenance = prov
         if add_tags or remove_tags_set:
             existing = list(item.tags or [])
             if remove_tags_set:
@@ -824,6 +848,8 @@ def update_item(request, item_id: UUID, payload: ItemPatch):
         workspace=request.workspace,
     )
     data = payload.dict(exclude_unset=True)
+    if "quantity" in data and (data["quantity"] is None or data["quantity"] < 1):
+        raise HttpError(400, "quantity must be at least 1")
     if "container_id" in data:
         item.container = _validate_container(request.workspace, data.pop("container_id"))
     provenance = dict(item.specs_provenance or {})

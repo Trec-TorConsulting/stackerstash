@@ -662,6 +662,16 @@ export function CollectionPage() {
             </button>
           </div>
 
+          {/* Bulk Remove Slab / Mark Raw */}
+          <button
+            type="button"
+            disabled={bulkUpdateMut.isPending}
+            onClick={() => bulkUpdateMut.mutate({ item_ids: selectedList, clear_slab: true })}
+            className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 disabled:opacity-40"
+          >
+            Mark Raw (Remove Slab)
+          </button>
+
           {/* Bulk Delete */}
           <div className="ml-auto flex items-center gap-1.5">
             {confirmBulkDelete ? (

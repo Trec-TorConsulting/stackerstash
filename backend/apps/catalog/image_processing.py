@@ -1247,6 +1247,158 @@ def _rotated_rect_bounds(
     return float(pts[:, 0].min()), float(pts[:, 1].min()), float(pts[:, 0].max()), float(pts[:, 1].max())
 
 
+def _detect_salient_subject_bounds(img: Image.Image) -> tuple[float, float, float, float] | None:
+    """
+    Fallback subject bounding-box detector using border RGB palette k-means
+    and adaptive Sobel luma saliency. Handles textured/woven mats (e.g. carbon
+    fiber) where Canny edge contours merge with the background pattern.
+    Returns (left, top, right, bottom) in original image pixels, or None.
+    """
+    orig_w, orig_h = img.size
+    if orig_w < 64 or orig_h < 64:
+        return None
+
+    work_max = 256.0
+    scale = min(1.0, work_max / max(orig_w, orig_h))
+    sw = max(16, int(round(orig_w * scale)))
+    sh = max(16, int(round(orig_h * scale)))
+
+    rgb = np.array(img.convert("RGB").resize((sw, sh), Image.Resampling.BILINEAR), dtype=np.float32)
+
+    band = max(2, int(round(min(sw, sh) * 0.06)))
+    border_mask = np.zeros((sh, sw), dtype=bool)
+    border_mask[:band, :] = True
+    border_mask[-band:, :] = True
+    border_mask[:, :band] = True
+    border_mask[:, -band:] = True
+
+    border_pts = rgb[border_mask]
+    if len(border_pts) < 16:
+        return None
+
+    k = min(3, len(border_pts))
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+    _, labels, centers = cv2.kmeans(
+        border_pts, k, None, criteria, 3, cv2.KMEANS_PP_CENTERS
+    )
+    labels_flat = labels.ravel()
+
+    kept_centers: list[np.ndarray] = []
+    kept_thresholds: list[float] = []
+    for c_idx in range(k):
+        pts_c = border_pts[labels_flat == c_idx]
+        if len(pts_c) < len(border_pts) * 0.08:
+            continue
+        dists_c = np.abs(pts_c - centers[c_idx]).sum(axis=1)
+        thresh = float(min(120.0, max(30.0, np.percentile(dists_c, 90) * 1.6 + 14.0)))
+        kept_centers.append(centers[c_idx])
+        kept_thresholds.append(thresh)
+
+    if not kept_centers:
+        largest = int(np.bincount(labels_flat).argmax())
+        pts_c = border_pts[labels_flat == largest]
+        dists_c = np.abs(pts_c - centers[largest]).sum(axis=1)
+        kept_centers = [centers[largest]]
+        kept_thresholds = [float(min(120.0, max(30.0, np.percentile(dists_c, 90) * 1.6 + 14.0)))]
+
+    is_bg = np.zeros((sh, sw), dtype=bool)
+    for center, thresh in zip(kept_centers, kept_thresholds):
+        dist_map = np.abs(rgb - center.reshape(1, 1, 3)).sum(axis=2)
+        is_bg |= dist_map <= thresh
+
+    luma = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
+    gx = cv2.Sobel(luma, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(luma, cv2.CV_32F, 0, 1, ksize=3)
+    grad = (np.abs(gx) + np.abs(gy)) / 4.0
+    grad_thresh = float(min(60.0, max(14.0, np.percentile(grad[border_mask], 95) * 1.5 + 6.0)))
+
+    mask = ((~is_bg) | (grad >= grad_thresh)).astype(np.uint8) * 255
+    r = max(1, int(round(min(sw, sh) / 128.0)))
+    k_open = np.ones((2 * r + 1, 2 * r + 1), np.uint8)
+    k_close = np.ones((4 * r + 1, 4 * r + 1), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k_open)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k_close)
+
+    # Fill enclosed holes from the border.
+    padded = cv2.copyMakeBorder(mask, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+    ff = padded.copy()
+    cv2.floodFill(ff, None, (0, 0), 255)
+    holes = cv2.bitwise_not(ff)[1:-1, 1:-1]
+    mask = cv2.bitwise_or(mask, holes)
+
+    fg = (mask > 0).astype(np.uint8)
+    num_labels, _, stats, centroids = cv2.connectedComponentsWithStats(fg, connectivity=8)
+    if num_labels <= 1:
+        return None
+
+    min_comp_area = sw * sh * 0.002
+    best_idx = -1
+    best_score = -1.0
+    for idx in range(1, num_labels):
+        area = float(stats[idx, cv2.CC_STAT_AREA])
+        if area < min_comp_area:
+            continue
+        x0 = int(stats[idx, cv2.CC_STAT_LEFT])
+        y0 = int(stats[idx, cv2.CC_STAT_TOP])
+        bw = int(stats[idx, cv2.CC_STAT_WIDTH])
+        bh = int(stats[idx, cv2.CC_STAT_HEIGHT])
+        cx, cy = float(centroids[idx][0]) / sw, float(centroids[idx][1]) / sh
+        centre = 1.0 - min(0.8, float(np.hypot(cx - 0.5, cy - 0.5)) * 1.1)
+        touches = int(x0 <= 0) + int(y0 <= 0) + int(x0 + bw >= sw) + int(y0 + bh >= sh)
+        score = area * centre * (0.25 if touches >= 2 else 0.7 if touches == 1 else 1.0)
+        if score > best_score:
+            best_score = score
+            best_idx = idx
+
+    if best_idx < 0:
+        return None
+
+    min_x = int(stats[best_idx, cv2.CC_STAT_LEFT])
+    min_y = int(stats[best_idx, cv2.CC_STAT_TOP])
+    max_x = min_x + int(stats[best_idx, cv2.CC_STAT_WIDTH]) - 1
+    max_y = min_y + int(stats[best_idx, cv2.CC_STAT_HEIGHT]) - 1
+    total_area = float(stats[best_idx, cv2.CC_STAT_AREA])
+
+    changed = True
+    while changed:
+        changed = False
+        pad_x = (max_x - min_x + 1) * 0.08
+        pad_y = (max_y - min_y + 1) * 0.08
+        for idx in range(1, num_labels):
+            if idx == best_idx:
+                continue
+            c_area = float(stats[idx, cv2.CC_STAT_AREA])
+            if c_area < total_area * 0.02:
+                continue
+            cx0 = int(stats[idx, cv2.CC_STAT_LEFT])
+            cy0 = int(stats[idx, cv2.CC_STAT_TOP])
+            cx1 = cx0 + int(stats[idx, cv2.CC_STAT_WIDTH]) - 1
+            cy1 = cy0 + int(stats[idx, cv2.CC_STAT_HEIGHT]) - 1
+            if cx0 >= min_x and cx1 <= max_x and cy0 >= min_y and cy1 <= max_y:
+                continue
+            if cx1 >= min_x - pad_x and cx0 <= max_x + pad_x and cy1 >= min_y - pad_y and cy0 <= max_y + pad_y:
+                min_x = min(min_x, cx0)
+                min_y = min(min_y, cy0)
+                max_x = max(max_x, cx1)
+                max_y = max(max_y, cy1)
+                total_area += c_area
+                changed = True
+
+    bw = max_x - min_x + 1
+    bh = max_y - min_y + 1
+    fill_ratio = min(1.0, total_area / max(1.0, float(bw * bh)))
+    edges_touched = int(min_x <= 1) + int(min_y <= 1) + int(max_x >= sw - 2) + int(max_y >= sh - 2)
+    if edges_touched >= 2 or fill_ratio < 0.45:
+        return None
+
+    return (
+        min_x / scale,
+        min_y / scale,
+        (max_x + 1) / scale,
+        (max_y + 1) / scale,
+    )
+
+
 def detect_subject_crop_box(
     img: Image.Image,
     *,
@@ -1282,6 +1434,13 @@ def detect_subject_crop_box(
         cx, cy, r = circle
         bounds = (cx - r, cy - r, cx + r, cy + r)
         is_coin = True
+    else:
+        bounds = _detect_salient_subject_bounds(img)
+        if bounds is not None and shape_hint == "coin":
+            bw_s = bounds[2] - bounds[0]
+            bh_s = bounds[3] - bounds[1]
+            if 0.85 <= (bw_s / max(1.0, bh_s)) <= 1.18:
+                is_coin = True
 
     if bounds is None:
         return None

@@ -733,3 +733,85 @@ def test_receipt_upload_crops_to_sheet_not_printed_coin(api_client, user_a):
     data = resp.json()
     assert data["width"] >= 400 and data["height"] >= 640
     assert data["width"] < 600 and data["height"] < 800
+
+
+@pytest.mark.django_db
+def test_clear_slab_bulk_update_and_quantity_patch(api_client, user_a):
+    _, _, token_a = user_a
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token_a}"}
+
+    item = api_client.post(
+        "/api/v1/catalog/items",
+        data=json.dumps({
+            "title": "2024 Silver Eagle",
+            "category": "SLAB",
+            "grading_service": "PCGS",
+            "grade": "MS70",
+            "cert_number": "12345678",
+            "attributes": {"slab_designation": "First Strike"},
+            "quantity": 1,
+        }),
+        content_type="application/json",
+        **headers,
+    ).json()
+
+    # Quantity update works and rejects < 1
+    bad_qty = api_client.patch(
+        f"/api/v1/catalog/items/{item['id']}",
+        data=json.dumps({"quantity": 0}),
+        content_type="application/json",
+        **headers,
+    )
+    assert bad_qty.status_code == 400
+
+    ok_qty = api_client.patch(
+        f"/api/v1/catalog/items/{item['id']}",
+        data=json.dumps({"quantity": 4}),
+        content_type="application/json",
+        **headers,
+    )
+    assert ok_qty.status_code == 200
+    assert ok_qty.json()["quantity"] == 4
+
+    # Bulk clear_slab removes all slabbed/graded info and resets SLAB category to COIN
+    bulk = api_client.post(
+        "/api/v1/catalog/items/bulk-update",
+        data=json.dumps({"item_ids": [item["id"]], "clear_slab": True}),
+        content_type="application/json",
+        **headers,
+    )
+    assert bulk.status_code == 200
+    assert bulk.json()["updated_count"] == 1
+
+    refreshed = api_client.get(f"/api/v1/catalog/items/{item['id']}", **headers).json()
+    assert refreshed["category"] == "COIN"
+    assert refreshed["grading_service"] == "NONE"
+    assert refreshed["grade"] == ""
+    assert refreshed["cert_number"] == ""
+    assert "slab_designation" not in (refreshed["attributes"] or {})
+
+
+def test_detect_subject_crop_box_goldback_on_textured_weave_with_glare():
+    from PIL import ImageDraw
+
+    from apps.catalog.image_processing import detect_subject_crop_box
+
+    # Simulate a Goldback on a carbon-fiber weave mat with diagonal glare
+    w, h = 480, 640
+    img = Image.new("RGB", (w, h), color=(48, 52, 56))
+    draw = ImageDraw.Draw(img)
+    for y in range(0, h, 8):
+        for x in range(0, w, 8):
+            glare = 90 if (x + y) > (w + h) * 0.6 else 0
+            if ((x // 8) + (y // 8)) % 2 == 0:
+                draw.rectangle((x, y, x + 5, y + 5), fill=(72 + glare, 76 + glare, 80 + glare))
+
+    # Goldback rectangle (120..360, 140..500)
+    draw.rectangle((120, 140, 360, 500), fill=(225, 190, 95), outline=(180, 140, 60), width=4)
+    draw.rectangle((150, 180, 330, 460), fill=(205, 165, 80))
+
+    box = detect_subject_crop_box(img, shape_hint="note")
+    assert box is not None
+    left, top, right, bottom = box
+    assert left <= 120 and top <= 140 and right >= 360 and bottom >= 500
+    assert (right - left) < 300 and (bottom - top) < 420
