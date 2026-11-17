@@ -1192,7 +1192,7 @@ def _remove_background_grabcut_guarded(img: Image.Image) -> tuple[Image.Image, b
     comp_cnts, _ = cv2.findContours(comp_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     hull_area = float(cv2.contourArea(cv2.convexHull(comp_cnts[0]))) if comp_cnts else float(largest_area)
     solidity = largest_area / max(1.0, hull_area)
-    if largest_area < fg_area * 0.70 or bbox_fill < 0.55 or solidity < 0.84:
+    if largest_area < fg_area * 0.70 or bbox_fill < 0.55 or solidity < 0.90:
         return img.convert("RGBA"), False
 
     return rgba, True
@@ -1263,7 +1263,7 @@ def process_item_image(
                     rgba, used_gc = _remove_background_grabcut_guarded(img)
                     img = _crop_to_subject(rgba) if used_gc else rgba
             else:
-                if shape_hint is None and card_rect is not None:
+                if shape_hint in (None, "rect") and card_rect is not None:
                     img = extract_rectangular_cutout(img.convert("RGBA"), card_rect, corner_ratio=0.03)
                 else:
                     rgba, used_gc = _remove_background_grabcut_guarded(img)
