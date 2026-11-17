@@ -100,3 +100,26 @@ def test_identify_images_returns_verification_status_and_pic_of_pic_flag(mock_cl
     assert any("screen/print" in w for w in res["verification_warnings"])
     assert any("Monitor bezel" in w for w in res["verification_warnings"])
 
+
+def test_analyze_image_allows_dark_desk_with_readable_subject_highlights():
+    # Dark carbon-fiber desk (luma ~18) with a bright silver coin/card highlights in center (mean < 35, p90 > 60)
+    img = Image.new("RGB", (600, 600), (18, 18, 20))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((200, 200, 400, 400), fill=(195, 198, 205), outline=(120, 125, 130), width=4)
+    for r in range(230, 370, 20):
+        draw.line((r, 240, r, 360), fill=(90, 95, 100), width=3)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=95)
+
+    res = analyze_image_quality_and_forensics(buf.getvalue(), mode="camera")
+    assert not any("too dark" in w.lower() for w in res["warnings"])
+    assert res["status"] == "VERIFIED"
+
+    # Genuinely pitch-dark image must still flag underexposure
+    dark = Image.new("RGB", (600, 600), (20, 20, 20))
+    dark_buf = io.BytesIO()
+    dark.save(dark_buf, format="JPEG", quality=95)
+    dark_res = analyze_image_quality_and_forensics(dark_buf.getvalue(), mode="camera")
+    assert any("too dark" in w.lower() for w in dark_res["warnings"])
+
+
