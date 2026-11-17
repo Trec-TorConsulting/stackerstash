@@ -955,27 +955,18 @@ def upload_item_photo(
 
     file.seek(0)
     raw_bytes = file.read()
-    should_remove_bg = remove_background and label != ItemPhoto.Label.RECEIPT
+    del remove_background
 
     width: int | None = None
     height: int | None = None
     upload_content: ContentFile | UploadedFile = file
-    slab_result: tuple[bytes, int, int, str] | None = None
     try:
-        if should_remove_bg and _should_extract_coin_from_slab(item, label):
-            primary_result, slab_result = extract_coin_and_slab_images(raw_bytes, enhance=True)
-            processed_bytes, width, height, ext = primary_result
-        else:
-            processed_bytes, width, height, ext = process_item_image(
-                raw_bytes,
-                remove_background=should_remove_bg,
-                enhance=True,
-                shape_hint=_item_shape_hint(item, label),
-            )
-            if should_remove_bg:
-                processed_bytes, width, height, ext = _sync_reverse_orientation_with_obverse(
-                    item, label, processed_bytes, width, height, ext
-                )
+        processed_bytes, width, height, ext = process_item_image(
+            raw_bytes,
+            remove_background=False,
+            enhance=True,
+            shape_hint=_item_shape_hint(item, label),
+        )
         upload_content = ContentFile(processed_bytes, name=f"photo-{label.lower()}.{ext}")
     except Exception:
         try:
@@ -1003,23 +994,6 @@ def upload_item_photo(
         height=height,
     )
 
-    if (
-        slab_result is not None
-        and label == ItemPhoto.Label.OBVERSE
-        and not item.photos.filter(label=ItemPhoto.Label.SLAB_LABEL).exists()
-    ):
-        slab_bytes, slab_w, slab_h, slab_ext = slab_result
-        ItemPhoto.objects.create(
-            workspace=request.workspace,
-            item=item,
-            image=ContentFile(slab_bytes, name=f"photo-slab_label.{slab_ext}"),
-            label=ItemPhoto.Label.SLAB_LABEL,
-            is_primary=False,
-            sort_order=next_order + 1,
-            width=slab_w,
-            height=slab_h,
-        )
-
     return 201, _photo_to_out(photo)
 
 
@@ -1031,20 +1005,12 @@ def remove_photo_background(request, item_id: UUID, photo_id: UUID):
     with photo.image.open("rb") as fh:
         raw_bytes = fh.read()
 
-    slab_result: tuple[bytes, int, int, str] | None = None
-    if _should_extract_coin_from_slab(item, photo.label):
-        primary_result, slab_result = extract_coin_and_slab_images(raw_bytes, enhance=True)
-        processed_bytes, width, height, ext = primary_result
-    else:
-        processed_bytes, width, height, ext = process_item_image(
-            raw_bytes,
-            remove_background=False,
-            enhance=True,
-            shape_hint=_item_shape_hint(item, photo.label),
-        )
-        processed_bytes, width, height, ext = _sync_reverse_orientation_with_obverse(
-            item, photo.label, processed_bytes, width, height, ext
-        )
+    processed_bytes, width, height, ext = process_item_image(
+        raw_bytes,
+        remove_background=False,
+        enhance=True,
+        shape_hint=_item_shape_hint(item, photo.label),
+    )
 
     old_name = photo.image.name
     photo.image.save(f"clean-{photo.label.lower()}.{ext}", ContentFile(processed_bytes), save=False)
@@ -1053,23 +1019,6 @@ def remove_photo_background(request, item_id: UUID, photo_id: UUID):
     photo.save(update_fields=["image", "width", "height"])
     if old_name and old_name != photo.image.name:
         photo.image.storage.delete(old_name)
-
-    if (
-        slab_result is not None
-        and photo.label == ItemPhoto.Label.OBVERSE
-        and not item.photos.filter(label=ItemPhoto.Label.SLAB_LABEL).exists()
-    ):
-        slab_bytes, slab_w, slab_h, slab_ext = slab_result
-        ItemPhoto.objects.create(
-            workspace=request.workspace,
-            item=item,
-            image=ContentFile(slab_bytes, name=f"photo-slab_label.{slab_ext}"),
-            label=ItemPhoto.Label.SLAB_LABEL,
-            is_primary=False,
-            sort_order=item.photos.count() + 1,
-            width=slab_w,
-            height=slab_h,
-        )
 
     return _photo_to_out(photo)
 

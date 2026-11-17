@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Edit3, ExternalLink, RotateCw, Sparkles, Star, Trash2, Upload, WifiOff, X } from "lucide-react";
+import { AlertTriangle, Camera, Check, Edit3, ExternalLink, RotateCw, Sparkles, Star, Trash2, Upload, WifiOff, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type AppraisalJob, type CollectionItem, type ContainerNode, type ValuationHistoryEntry } from "../lib/api";
@@ -394,26 +394,6 @@ export function ItemDetailPage() {
                   <button
                     type="button"
                     disabled={isRotating}
-                    title="Auto-crop & remove background"
-                    onClick={async () => {
-                      setIsRotating(true);
-                      try {
-                        const updated = await api.removePhotoBackground(item.id, activePhoto.id);
-                        setActivePhotoUrl(updated.url);
-                        qc.invalidateQueries({ queryKey: ["item", id] });
-                        qc.invalidateQueries({ queryKey: ["items"] });
-                      } finally {
-                        setIsRotating(false);
-                      }
-                    }}
-                    className="inline-flex items-center gap-1 rounded-lg bg-slate-950/85 hover:bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-amber-300 transition disabled:opacity-50"
-                  >
-                    <Sparkles className="h-3.5 w-3.5" />
-                    Clean BG
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isRotating}
                     title="Rotate 90° clockwise"
                     onClick={async () => {
                       setIsRotating(true);
@@ -465,9 +445,14 @@ export function ItemDetailPage() {
                 </button>
               </div>
             ))}
+            <label className="h-16 w-16 rounded-xl border border-dashed border-amber-500/60 hover:border-amber-400 bg-amber-500/10 flex flex-col items-center justify-center text-amber-300 cursor-pointer text-[10px]">
+              <Camera className="h-4 w-4 mb-0.5" />
+              Camera
+              <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleAddPhoto} />
+            </label>
             <label className="h-16 w-16 rounded-xl border border-dashed border-slate-700 hover:border-amber-500/50 flex flex-col items-center justify-center text-slate-400 cursor-pointer text-[10px]">
               <Upload className="h-4 w-4 mb-0.5" />
-              Add
+              Upload
               <input type="file" accept="image/*" className="hidden" onChange={handleAddPhoto} />
             </label>
           </div>

@@ -1,7 +1,21 @@
+import fs from "node:fs";
+import path from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
+
+function resolveHttpsConfig() {
+  const certPath = process.env.VITE_HTTPS_CERT || path.resolve(__dirname, ".certs/cert.pem");
+  const keyPath = process.env.VITE_HTTPS_KEY || path.resolve(__dirname, ".certs/key.pem");
+  if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+    return {
+      cert: fs.readFileSync(certPath),
+      key: fs.readFileSync(keyPath),
+    };
+  }
+  return undefined;
+}
 
 export default defineConfig({
   plugins: [
@@ -94,6 +108,9 @@ export default defineConfig({
     }),
   ],
   server: {
+    host: true,
+    allowedHosts: true,
+    https: resolveHttpsConfig(),
     proxy: {
       "/api": "http://127.0.0.1:8000",
       "/media": "http://127.0.0.1:8000",

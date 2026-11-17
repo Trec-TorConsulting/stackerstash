@@ -265,8 +265,9 @@ def test_image_background_removal_and_tight_crop(api_client, user_a):
     )
     assert p_resp.status_code == 201
     photo_data = p_resp.json()
-    assert photo_data["width"] < 140
-    assert photo_data["url"].endswith(".png")
+    assert photo_data["width"] == 200
+    assert photo_data["height"] == 200
+    assert photo_data["url"].endswith(".jpg")
 
     bg_resp = api_client.post(
         f"/api/v1/catalog/items/{item['id']}/photos/{photo_data['id']}/remove-background",
@@ -340,7 +341,7 @@ def test_patterned_background_removal_and_slab_coin_extraction(api_client, user_
     assert (cw, ch) == img.size
     assert cleaned_img.size == img.size
 
-    # 2. Uploading OBVERSE & REVERSE on a SLAB item extracts coin-only front/back + auto-saves SLAB_LABEL
+    # 2. Uploading OBVERSE & REVERSE on a SLAB item preserves the full slab photos without coin-only cropping
     _, _, token_a = user_a
     headers_a = {"HTTP_AUTHORIZATION": f"Bearer {token_a}"}
     item = api_client.post(
@@ -363,9 +364,7 @@ def test_patterned_background_removal_and_slab_coin_extraction(api_client, user_
     )
     assert obv_resp.status_code == 201
     obv_data = obv_resp.json()
-    # Coin-only cutout should be roughly square (~190x190 + padding), much shorter than the full slab
-    assert abs(obv_data["width"] - obv_data["height"]) < 25
-    assert obv_data["height"] < 260
+    assert (obv_data["width"], obv_data["height"]) == img.size
 
     rev_upload = SimpleUploadedFile("slab_back.jpg", buf.getvalue(), content_type="image/jpeg")
     rev_resp = api_client.post(
@@ -375,18 +374,12 @@ def test_patterned_background_removal_and_slab_coin_extraction(api_client, user_
     )
     assert rev_resp.status_code == 201
     rev_data = rev_resp.json()
-    assert abs(rev_data["width"] - rev_data["height"]) < 25
-    assert rev_data["height"] < 260
+    assert (rev_data["width"], rev_data["height"]) == img.size
 
-    # Item should now have 3 photos: OBVERSE (coin), REVERSE (coin), and SLAB_LABEL (full slab view)
+    # Item should have the 2 uploaded photos (OBVERSE & REVERSE) without auto-extracted SLAB_LABEL
     detail = api_client.get(f"/api/v1/catalog/items/{item['id']}", **headers_a).json()
     labels = [p["label"] for p in detail["photos"]]
-    assert "OBVERSE" in labels
-    assert "REVERSE" in labels
-    assert "SLAB_LABEL" in labels
-    slab_photo = next(p for p in detail["photos"] if p["label"] == "SLAB_LABEL")
-    assert slab_photo["height"] > slab_photo["width"] * 1.2
-    assert slab_photo["is_primary"] is False
+    assert labels == ["OBVERSE", "REVERSE"]
 
 
 @pytest.mark.django_db
