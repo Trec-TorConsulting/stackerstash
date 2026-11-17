@@ -1233,15 +1233,17 @@ def _is_embedded_coin_in_card(img: Image.Image, circle: tuple[int, int, int]) ->
 def process_item_image(
     raw_bytes: bytes,
     *,
-    remove_background: bool = True,
+    remove_background: bool = False,
     enhance: bool = True,
     max_dimension: int = MAX_IMAGE_DIMENSION,
     shape_hint: str | None = None,
 ) -> tuple[bytes, int, int, str]:
     """
-    Normalize orientation, preserve high resolution, optionally remove background & crop tightly,
-    and enhance coin/slab/bar/note detail. Returns (processed_bytes, width, height, extension).
+    Normalize EXIF orientation, preserve high resolution (capped at max_dimension),
+    and optionally enhance coin/slab/bar/note detail without altering or cropping the subject.
+    Returns (processed_bytes, width, height, extension).
     """
+    del remove_background, shape_hint
     with Image.open(io.BytesIO(raw_bytes)) as opened:
         img = ImageOps.exif_transpose(opened)
         orig_format = (opened.format or "PNG").upper()
@@ -1249,44 +1251,10 @@ def process_item_image(
         if max(img.size) > max_dimension:
             img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
 
-        if remove_background:
-            card_rect = detect_card_rectangle(img)
-            if shape_hint == "coin":
-                circle = detect_circular_coin(img)
-                if card_rect is not None and (
-                    circle is None or (np.pi * (circle[2] ** 2)) < 0.25 * (card_rect[2] * card_rect[3])
-                ):
-                    img = extract_rectangular_cutout(img.convert("RGBA"), card_rect, corner_ratio=0.03)
-                elif circle is not None and not _is_embedded_coin_in_card(img, circle):
-                    img = extract_coin_cutout(img.convert("RGBA"), *circle)
-                else:
-                    rgba, used_gc = _remove_background_grabcut_guarded(img)
-                    img = _crop_to_subject(rgba) if used_gc else rgba
-            else:
-                if shape_hint in (None, "rect") and card_rect is not None:
-                    img = extract_rectangular_cutout(img.convert("RGBA"), card_rect, corner_ratio=0.03)
-                else:
-                    rgba, used_gc = _remove_background_grabcut_guarded(img)
-                    if used_gc and shape_hint in _RECT_CORNER_RATIOS:
-                        rect = detect_rectangular_subject(rgba)
-                        if rect is not None:
-                            img = extract_rectangular_cutout(
-                                rgba, rect, corner_ratio=_RECT_CORNER_RATIOS[shape_hint]
-                            )
-                        else:
-                            img = _crop_to_subject(rgba)
-                    elif used_gc:
-                        img = _crop_to_subject(rgba)
-                    else:
-                        img = rgba
-
         if enhance:
             img = _enhance_detail(img)
 
-        if remove_background and shape_hint in ("note", "rect", None):
-            img = auto_orient_upright(img)
-
-        return _encode_processed_image(img, orig_format=orig_format, force_png=remove_background)
+        return _encode_processed_image(img, orig_format=orig_format, force_png=False)
 
 
 def extract_coin_and_slab_images(

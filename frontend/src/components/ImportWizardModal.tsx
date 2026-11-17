@@ -52,7 +52,7 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
   const [preview, setPreview] = useState<CsvImportPreview | null>(null);
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [importPhotos, setImportPhotos] = useState(false);
-  const [removeBackground, setRemoveBackground] = useState(true);
+  const [removeBackground, setRemoveBackground] = useState(false);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
