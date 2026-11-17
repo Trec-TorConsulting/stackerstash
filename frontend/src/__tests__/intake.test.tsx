@@ -409,20 +409,14 @@ describe("GuidedCameraModal", () => {
       Object.defineProperty(video, "videoWidth", { configurable: true, value: 1920 });
       Object.defineProperty(video, "videoHeight", { configurable: true, value: 1440 });
 
-      // Wait for consecutive evaluation ticks (~180ms each) to lock onto the note and auto-snap
+      // Wait for consecutive evaluation ticks (~200ms each) to lock onto the note and auto-snap hands-free
       await waitFor(
         () => {
           expect(takePhoto).toHaveBeenCalledTimes(1);
-          expect(screen.getByText(/Review Front \(Obverse\)/i)).toBeInTheDocument();
+          expect(onComplete).toHaveBeenCalledTimes(1);
         },
         { timeout: 2500 }
       );
-
-      fireEvent.click(screen.getByRole("button", { name: /Use Front Photo/i }));
-
-      await waitFor(() => {
-        expect(onComplete).toHaveBeenCalledTimes(1);
-      });
       expect(onComplete.mock.calls[0][0].detectedShape).toBe("note");
     } finally {
       Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: origMediaDevices });
@@ -536,6 +530,62 @@ describe("ScanAddPage Unified Intake", () => {
           auto_appraise: true,
         })
       );
+    });
+  });
+
+  it("activates Batch Auto-Pair when 4 even-count photos are uploaded and catalogs all items", async () => {
+    vi.spyOn(api, "getContainers").mockResolvedValue([]);
+    const identifySpy = vi.spyOn(api, "identifyImages").mockResolvedValue({
+      job_id: "job-batch",
+      provider_used: "mock",
+      warning: null,
+      verification_status: "VERIFIED",
+      verification_warnings: [],
+      candidate: {
+        category: "COIN",
+        title: "American Silver Eagle",
+        country: "USA",
+        year: "2024",
+        mint_or_refiner: "US Mint",
+        denomination: "$1",
+        series: "Eagle",
+        metal_type: "SILVER",
+        weight_value: 1,
+        weight_unit: "OZ_T",
+        purity: 0.999,
+        grading_service: "NONE",
+        cert_number: "",
+        grade: "",
+        estimated_grade: "MS65",
+        serial_number: "",
+        estimated_value_usd: 35,
+        ai_confidence: 0.91,
+        notes: "",
+      },
+    });
+    const createSpy = vi.spyOn(api, "createItem").mockResolvedValue({
+      id: "batch-item",
+      appraisal_job_id: null,
+    } as never);
+    const uploadSpy = vi.spyOn(api, "uploadPhoto").mockResolvedValue({} as never);
+
+    const { container } = renderScanAdd();
+    const uploadInput = container.querySelector('input[type="file"][multiple]') as HTMLInputElement;
+    const files = [
+      new File(["f1"], "c1-front.jpg", { type: "image/jpeg" }),
+      new File(["b1"], "c1-back.jpg", { type: "image/jpeg" }),
+      new File(["f2"], "c2-front.jpg", { type: "image/jpeg" }),
+      new File(["b2"], "c2-back.jpg", { type: "image/jpeg" }),
+    ];
+    fireEvent.change(uploadInput, { target: { files } });
+
+    expect(await screen.findByText(/Batch Auto-Pair: 2 items/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Catalog All 2 Items/i }));
+
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalledTimes(2);
+      expect(identifySpy).toHaveBeenCalledTimes(2);
+      expect(uploadSpy).toHaveBeenCalledTimes(4);
     });
   });
 });

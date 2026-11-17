@@ -23,6 +23,7 @@ import {
 } from '../lib/cameraMetrics';
 import {
   computeCoverCropRect,
+  computeSubjectCropRect,
   decodeImageBitmapUpright,
   normalizeImageFileForUpload,
   rotateImageFile90,
@@ -33,7 +34,8 @@ const MAX_CAPTURE_DIM = 2048;
 const VIEWFINDER_ASPECT = 4 / 3;
 const BURST_FRAMES = 5;
 const BURST_INTERVAL_MS = 50;
-const AUTO_CAPTURE_TICKS = 4;
+const AUTO_CAPTURE_TICKS = 3;
+const FLIP_COOLDOWN_MS = 1400;
 
 export type ReticleMode = 'auto' | 'coin' | 'slab' | 'note';
 
@@ -86,11 +88,19 @@ function drawNormalizedSource(
   applySoftwareZoom: boolean,
   reticleMode: ReticleMode,
   targetCanvas: HTMLCanvasElement,
+  subjectBox?: SubjectBox | null,
 ): boolean {
   const baseZoom = applySoftwareZoom && zoom > 1 ? zoom : 1;
-  // True WYSIWYG: match the exact centered viewfinder (1:1 square when Coin reticle is explicitly selected, 4:3 otherwise)
+  // True WYSIWYG: match the exact centered viewfinder, or auto-crop tightly to a confident detected subject
   const targetAspect = reticleMode === 'coin' ? 1 : VIEWFINDER_ASPECT;
-  const { sx, sy, sw, sh } = computeCoverCropRect(srcW, srcH, targetAspect, baseZoom);
+  const useSubjectCrop =
+    Boolean(subjectBox) &&
+    subjectBox!.confidence >= 0.4 &&
+    subjectBox!.areaRatio >= 0.05 &&
+    subjectBox!.areaRatio <= 0.78;
+  const { sx, sy, sw, sh } = useSubjectCrop
+    ? computeSubjectCropRect(srcW, srcH, VIEWFINDER_ASPECT, baseZoom, subjectBox!, 1.25)
+    : computeCoverCropRect(srcW, srcH, targetAspect, baseZoom);
 
   const scale = Math.min(1, MAX_CAPTURE_DIM / Math.max(sw, sh));
   const outW = Math.max(1, Math.round(sw * scale));
@@ -112,6 +122,7 @@ async function normalizePhotoBlob(
   applySoftwareZoom: boolean,
   reticleMode: ReticleMode,
   filename: string,
+  subjectBox?: SubjectBox | null,
 ): Promise<File | null> {
   const canvas = document.createElement('canvas');
   if (typeof createImageBitmap === 'function') {
@@ -125,6 +136,7 @@ async function normalizePhotoBlob(
         applySoftwareZoom,
         reticleMode,
         canvas,
+        subjectBox,
       );
       return ok ? await canvasToJpegFile(canvas, filename) : null;
     } finally {
@@ -148,6 +160,7 @@ async function normalizePhotoBlob(
       applySoftwareZoom,
       reticleMode,
       canvas,
+      subjectBox,
     );
     return ok ? await canvasToJpegFile(canvas, filename) : null;
   } finally {
@@ -161,6 +174,7 @@ async function captureBestBurstFrame(
   applySoftwareZoom: boolean,
   reticleMode: ReticleMode,
   filename: string,
+  subjectBox?: SubjectBox | null,
 ): Promise<File | null> {
   const sampleW = 160;
   const sampleH = 120;
@@ -195,6 +209,7 @@ async function captureBestBurstFrame(
         applySoftwareZoom,
         reticleMode,
         bestCanvas,
+        subjectBox,
       );
     }
 
@@ -234,6 +249,7 @@ export function GuidedCameraModal({
   const prevSubjectBoxRef = useRef<SubjectBox | null>(null);
   const hardwareZoomSupportedRef = useRef(false);
   const steadyTicksRef = useRef(0);
+  const flipCooldownUntilRef = useRef(0);
 
   const [reticleMode, setReticleMode] = useState<ReticleMode>(() => resolveInitialMode(initialShape));
   const [detectedShape, setDetectedShape] = useState<DetectedShape>('coin');
@@ -248,6 +264,8 @@ export function GuidedCameraModal({
   const [autoCapture, setAutoCapture] = useState<boolean>(
     () => resolveInitialMode(initialShape) === 'auto',
   );
+  const [expressMode, setExpressMode] = useState<boolean>(true);
+  const [flipNotice, setFlipNotice] = useState<string | null>(null);
   const [step, setStep] = useState<'front' | 'back'>('front');
 
   const [pendingReviewFile, setPendingReviewFile] = useState<File | null>(null);
@@ -296,6 +314,8 @@ export function GuidedCameraModal({
     setShutterFlash(false);
     setZoom(1);
     setTorchOn(false);
+    setFlipNotice(null);
+    flipCooldownUntilRef.current = 0;
     steadyTicksRef.current = 0;
     prevLumaRef.current = null;
     setCameraError(null);
@@ -431,12 +451,43 @@ export function GuidedCameraModal({
     }
   }, []);
 
-  const captureCurrentFrame = useCallback(async () => {
+  const handleCapturedFile = useCallback(
+    (file: File, isAutoSnap: boolean) => {
+      if (isAutoSnap && expressMode) {
+        steadyTicksRef.current = 0;
+        setLockProgress(0);
+        if (step === 'front') {
+          setFrontFile(file);
+          setFrontPreview(URL.createObjectURL(file));
+          if (requireBack) {
+            flipCooldownUntilRef.current = Date.now() + FLIP_COOLDOWN_MS;
+            setFlipNotice('Front saved! Flip item for Back');
+            setStep('back');
+          } else {
+            stopStream();
+            onComplete({ frontFile: file, backFile: null, detectedShape: activeShape });
+          }
+          return;
+        }
+        if (frontFile) {
+          stopStream();
+          onComplete({ frontFile, backFile: file, detectedShape: activeShape });
+          return;
+        }
+      }
+      setShowCropper(false);
+      setPendingReviewFile(file);
+    },
+    [activeShape, expressMode, frontFile, onComplete, requireBack, step, stopStream],
+  );
+
+  const captureCurrentFrame = useCallback(async (isAutoSnap = false) => {
     const video = videoRef.current;
     if (!video || capturing) return;
 
     const filename = step === 'front' ? 'capture-front.jpg' : 'capture-back.jpg';
     const applySoftwareZoom = !hardwareZoomSupportedRef.current;
+    const detectedSubject = prevSubjectBoxRef.current;
     setCapturing(true);
     setShutterFlash(true);
     window.setTimeout(() => setShutterFlash(false), 160);
@@ -457,10 +508,10 @@ export function GuidedCameraModal({
             applySoftwareZoom,
             reticleMode,
             filename,
+            detectedSubject,
           );
           if (file) {
-            setShowCropper(false);
-            setPendingReviewFile(file);
+            handleCapturedFile(file, isAutoSnap);
             return;
           }
         } catch {
@@ -475,15 +526,15 @@ export function GuidedCameraModal({
         applySoftwareZoom,
         reticleMode,
         filename,
+        detectedSubject,
       );
       if (file) {
-        setShowCropper(false);
-        setPendingReviewFile(file);
+        handleCapturedFile(file, isAutoSnap);
       }
     } finally {
       setCapturing(false);
     }
-  }, [capturing, reticleMode, step, zoom]);
+  }, [capturing, handleCapturedFile, reticleMode, step, zoom]);
 
   // Spacebar shortcut on desktop when viewfinder is active
   useEffect(() => {
@@ -553,8 +604,14 @@ export function GuidedCameraModal({
       }
       setQuality(metrics.quality);
 
+      const inFlipCooldown = Date.now() < flipCooldownUntilRef.current;
+      if (!inFlipCooldown) {
+        setFlipNotice((prev) => (prev ? null : prev));
+      }
+
       if (
         autoCapture &&
+        !inFlipCooldown &&
         metrics.quality.isGood &&
         metrics.framingState === 'locked' &&
         !metrics.hasGlare &&
@@ -572,7 +629,7 @@ export function GuidedCameraModal({
           } catch {
             // Ignore vibration errors on unsupported browsers
           }
-          void captureCurrentFrame();
+          void captureCurrentFrame(true);
         }
       } else {
         steadyTicksRef.current = Math.max(0, steadyTicksRef.current - 1);
@@ -667,6 +724,21 @@ export function GuidedCameraModal({
           </div>
 
           <div className="flex items-center gap-1.5">
+            {!pendingReviewFile && autoCapture && (
+              <button
+                type="button"
+                aria-pressed={expressMode}
+                onClick={() => setExpressMode((v) => !v)}
+                title={expressMode ? 'Hands-free: auto-advances without review' : 'Pause to review each photo'}
+                className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs font-medium transition ${
+                  expressMode
+                    ? 'border-amber-500/60 bg-amber-500/15 text-amber-300'
+                    : 'border-slate-700 text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                <span>{expressMode ? 'Hands-Free' : 'Review Each'}</span>
+              </button>
+            )}
             {!pendingReviewFile && (
               <button
                 type="button"
@@ -880,16 +952,20 @@ export function GuidedCameraModal({
                 <div className="pointer-events-none absolute top-3 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
                   <span
                     className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium backdrop-blur-md ${
-                      quality.tone === 'good'
-                        ? 'bg-emerald-950/85 text-emerald-300 ring-1 ring-emerald-500/40'
-                        : 'bg-slate-950/80 text-slate-200 ring-1 ring-slate-700/80'
+                      flipNotice
+                        ? 'bg-amber-500/90 text-slate-950 font-semibold ring-1 ring-amber-300'
+                        : quality.tone === 'good'
+                          ? 'bg-emerald-950/85 text-emerald-300 ring-1 ring-emerald-500/40'
+                          : 'bg-slate-950/80 text-slate-200 ring-1 ring-slate-700/80'
                     }`}
                   >
-                    {autoCapture && lockProgress > 0
-                      ? `Holding steady… Auto-snapping (${lockProgress}%)`
-                      : quality.isGood
-                        ? 'Ready — tap shutter'
-                        : quality.label}
+                    {flipNotice
+                      ? flipNotice
+                      : autoCapture && lockProgress > 0
+                        ? `Holding steady… Auto-snapping (${lockProgress}%)`
+                        : quality.isGood
+                          ? 'Ready — tap shutter'
+                          : quality.label}
                   </span>
                   {autoCapture && framingState === 'locked' && (
                     <div className="h-1 w-32 overflow-hidden rounded-full bg-slate-900/90 ring-1 ring-slate-700">
@@ -1032,6 +1108,11 @@ export function GuidedCameraModal({
                       onClick={() => {
                         setStep('front');
                         setFrontFile(null);
+                        setFrontPreview(null);
+                        setFlipNotice(null);
+                        flipCooldownUntilRef.current = 0;
+                        steadyTicksRef.current = 0;
+                        setLockProgress(0);
                       }}
                       className="inline-flex items-center gap-1 rounded-xl border border-slate-700 px-2.5 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800"
                       title="Retake Front"
