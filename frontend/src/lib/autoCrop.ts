@@ -94,7 +94,7 @@ export const ANALYSIS_MAX_DIM = 256;
 const MIN_SOURCE_DIM = 64;
 const MIN_SUBJECT_AREA = 0.03;
 const MAX_SUBJECT_AREA = 0.95;
-const MIN_FILL_RATIO = 0.45;
+const MIN_FILL_RATIO = 0.58;
 const KMEANS_K = 3;
 const KMEANS_ITERS = 6;
 
@@ -174,8 +174,8 @@ function buildBackgroundPalette(
     );
   }
 
-  // Drop clusters that hold < 8% of the border (likely a finger or the subject
-  // itself poking into the border) so they are not learned as background.
+  // Drop clusters that hold < 18% of the border (likely a finger or a wide
+  // subject grazing the outer margin) so they are not learned as background.
   const counts = new Array(centers.length).fill(0);
   const devs: number[][] = centers.map(() => []);
   for (let s = 0; s < samples.length; s++) {
@@ -185,13 +185,13 @@ function buildBackgroundPalette(
   }
   const keep: number[] = [];
   for (let c = 0; c < centers.length; c++) {
-    if (counts[c] >= samples.length * 0.08) keep.push(c);
+    if (counts[c] >= samples.length * 0.18) keep.push(c);
   }
   if (keep.length === 0) keep.push(counts.indexOf(Math.max(...counts)));
 
   return {
     centers: keep.map((c) => centers[c]),
-    thresholds: keep.map((c) => Math.min(120, Math.max(30, percentile(devs[c], 0.9) * 1.6 + 14))),
+    thresholds: keep.map((c) => Math.min(95, Math.max(28, percentile(devs[c], 0.9) * 1.5 + 12))),
   };
 }
 
@@ -321,7 +321,7 @@ export function detectSubjectInRgba(
 ): AutoCropDetection | null {
   if (w < 16 || h < 16 || rgba.length < w * h * 4) return null;
 
-  const band = Math.max(2, Math.round(Math.min(w, h) * 0.06));
+  const band = Math.max(2, Math.round(Math.min(w, h) * 0.03));
   const { centers, thresholds } = buildBackgroundPalette(rgba, w, h, band);
 
   // Luma + gradient; gradient threshold adapts to border texture.
@@ -363,9 +363,9 @@ export function detectSubjectInRgba(
   }
 
   // Morphological open (remove specks) then close (bridge rim gaps), then fill holes.
-  const r = Math.max(1, Math.round(Math.min(w, h) / 128));
+  const r = Math.max(1, Math.round(Math.min(w, h) / 160));
   mask = dilate(erode(mask, w, h, r), w, h, r);
-  mask = erode(dilate(mask, w, h, r * 2), w, h, r * 2);
+  mask = erode(dilate(mask, w, h, r), w, h, r);
   mask = fillHoles(mask, w, h);
 
   const comps = labelComponents(mask, w, h).filter((c) => c.area >= w * h * 0.002);

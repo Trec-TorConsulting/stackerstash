@@ -151,6 +151,21 @@ describe("detectSubjectInRgba", () => {
     expect(evaluateDetection(det)).toBe("subject_clipped");
   });
 
+  it("rejects partial glare-eaten detections with low fillRatio so the server can handle them", () => {
+    const det: AutoCropDetection = {
+      x: 0.05,
+      y: 0.09,
+      width: 0.54,
+      height: 0.45,
+      areaRatio: 0.24,
+      fillRatio: 0.49,
+      edgesTouched: 0,
+      shape: "rect",
+      confidence: 0.65,
+    };
+    expect(evaluateDetection(det)).toBe("low_confidence");
+  });
+
   it("rejects degenerate inputs", () => {
     expect(detectSubjectInRgba(new Uint8ClampedArray(10), 4, 4)).toBeNull();
   });
