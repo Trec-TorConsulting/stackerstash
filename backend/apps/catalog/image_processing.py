@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import io
+import logging
 from collections import deque
 from typing import Any
 
 import cv2
 import numpy as np
 from PIL import ExifTags, Image, ImageEnhance, ImageFilter, ImageOps, ImageStat
+
+logger = logging.getLogger(__name__)
 
 MAX_IMAGE_DIMENSION = 2400
 CROP_PADDING_RATIO = 0.015
@@ -1230,6 +1233,106 @@ def _is_embedded_coin_in_card(img: Image.Image, circle: tuple[int, int, int]) ->
     return lab_std >= 15.0 or luma_spread >= 65.0
 
 
+AUTO_CROP_PADDING_RATIO = 0.04
+AUTO_CROP_MAX_KEEP_RATIO = 0.90
+AUTO_CROP_MIN_SUBJECT_RATIO = 0.03
+
+
+def _rotated_rect_bounds(
+    rect: tuple[float, float, float, float, float],
+) -> tuple[float, float, float, float]:
+    """Axis-aligned (left, top, right, bottom) bounds of an oriented rectangle."""
+    cx, cy, rw, rh, angle = rect
+    pts = cv2.boxPoints(((float(cx), float(cy)), (float(rw), float(rh)), float(angle)))
+    return float(pts[:, 0].min()), float(pts[:, 1].min()), float(pts[:, 0].max()), float(pts[:, 1].max())
+
+
+def detect_subject_crop_box(
+    img: Image.Image,
+    *,
+    shape_hint: str | None = None,
+    padding_ratio: float = AUTO_CROP_PADDING_RATIO,
+    max_keep_ratio: float = AUTO_CROP_MAX_KEEP_RATIO,
+) -> tuple[int, int, int, int] | None:
+    """
+    Find the collectible's edges and return a padded, axis-aligned crop box
+    (left, top, right, bottom) in image pixels, or None when no confident subject
+    is found or cropping would not meaningfully tighten the frame.
+
+    Reuses the geometric detectors (card/slab/note rectangle and circular coin)
+    but never removes the background or adds transparency.
+    """
+    w, h = img.size
+    if w < 64 or h < 64:
+        return None
+
+    card_rect = detect_card_rectangle(img)
+    circle = detect_circular_coin(img) if shape_hint in ("coin", None) else None
+    if circle is not None and _is_embedded_coin_in_card(img, circle):
+        circle = None
+
+    bounds: tuple[float, float, float, float] | None = None
+    is_coin = False
+    if card_rect is not None and (
+        circle is None or (np.pi * (circle[2] ** 2)) < 0.25 * (card_rect[2] * card_rect[3])
+    ):
+        # A card/slab/note that contains (or dwarfs) any coin: keep the whole holder.
+        bounds = _rotated_rect_bounds(card_rect)
+    elif circle is not None:
+        cx, cy, r = circle
+        bounds = (cx - r, cy - r, cx + r, cy + r)
+        is_coin = True
+
+    if bounds is None:
+        return None
+
+    left, top, right, bottom = bounds
+    bw = right - left
+    bh = bottom - top
+    if bw <= 0 or bh <= 0 or (bw * bh) < (w * h * AUTO_CROP_MIN_SUBJECT_RATIO):
+        return None
+
+    pad = max(bw, bh) * padding_ratio + 2.0
+    left -= pad
+    top -= pad
+    right += pad
+    bottom += pad
+
+    if is_coin:
+        side = min(max(right - left, bottom - top), float(w), float(h))
+        mx = (left + right) / 2.0
+        my = (top + bottom) / 2.0
+        left, right = mx - side / 2.0, mx + side / 2.0
+        top, bottom = my - side / 2.0, my + side / 2.0
+        # Shift (not shrink) the square back inside the frame.
+        if left < 0:
+            right -= left
+            left = 0.0
+        if top < 0:
+            bottom -= top
+            top = 0.0
+        if right > w:
+            left -= right - w
+            right = float(w)
+        if bottom > h:
+            top -= bottom - h
+            bottom = float(h)
+
+    box = (
+        max(0, int(round(left))),
+        max(0, int(round(top))),
+        min(w, int(round(right))),
+        min(h, int(round(bottom))),
+    )
+    crop_w = box[2] - box[0]
+    crop_h = box[3] - box[1]
+    if crop_w < 32 or crop_h < 32:
+        return None
+    if (crop_w * crop_h) > (w * h * max_keep_ratio):
+        return None
+    return box
+
+
 def process_item_image(
     raw_bytes: bytes,
     *,
@@ -1237,19 +1340,30 @@ def process_item_image(
     enhance: bool = True,
     max_dimension: int = MAX_IMAGE_DIMENSION,
     shape_hint: str | None = None,
+    auto_crop: bool = False,
 ) -> tuple[bytes, int, int, str]:
     """
     Normalize EXIF orientation, preserve high resolution (capped at max_dimension),
-    and optionally enhance coin/slab/bar/note detail without altering or cropping the subject.
+    optionally crop to the detected subject's edges (rectangle crop only, no
+    background removal), and optionally enhance coin/slab/bar/note detail.
     Returns (processed_bytes, width, height, extension).
     """
-    del remove_background, shape_hint
+    del remove_background
     with Image.open(io.BytesIO(raw_bytes)) as opened:
         img = ImageOps.exif_transpose(opened)
         orig_format = (opened.format or "PNG").upper()
 
         if max(img.size) > max_dimension:
             img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+
+        if auto_crop:
+            try:
+                box = detect_subject_crop_box(img, shape_hint=shape_hint)
+            except Exception:  # pragma: no cover - detector failures must never block upload
+                logger.warning("Auto-crop detection failed; keeping original framing", exc_info=True)
+                box = None
+            if box is not None:
+                img = img.crop(box)
 
         if enhance:
             img = _enhance_detail(img)

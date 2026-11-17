@@ -1,11 +1,46 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Camera, CheckCircle2, Crop, Layers, Sparkles, Upload, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Camera,
+  CheckCircle2,
+  Crop,
+  Layers,
+  Loader2,
+  ScanLine,
+  Sparkles,
+  Undo2,
+  Upload,
+  X,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PhotoCropRotateView } from "../components/PhotoCropRotateView";
 import { api, type ContainerNode } from "../lib/api";
+import {
+  autoCropImageFile,
+  isAutoCropSupported,
+  readAutoCropPreference,
+  writeAutoCropPreference,
+} from "../lib/autoCrop";
 import { CATEGORY_LABELS, METAL_LABELS } from "../lib/format";
 import { normalizeImageFileForUpload } from "../lib/imageUtils";
+
+/** A photo staged for identification / upload on the scan page. */
+interface StagedPhoto {
+  file: File;
+  label: string;
+  preview: string;
+  /** Pre-crop original, retained so the user can undo an automatic crop. */
+  originalFile?: File;
+  /** True when `file` is the result of client-side auto-crop. */
+  autoCropped?: boolean;
+  /**
+   * Whether the server may apply its own edge-detect crop on upload. Disabled
+   * once the client has cropped or the user has explicitly chosen the framing
+   * (manual edit or undo), so user intent is never overridden.
+   */
+  serverAutoCrop: boolean;
+}
 
 function flattenContainers(nodes: ContainerNode[], depth = 0): Array<{ id: string; label: string }> {
   const out: Array<{ id: string; label: string }> = [];
@@ -27,7 +62,26 @@ export function ScanAddPage() {
     queryFn: api.getContainers,
   });
 
-  const [files, setFiles] = useState<Array<{ file: File; label: string; preview: string }>>([]);
+  const [files, setFilesState] = useState<StagedPhoto[]>([]);
+  // Mirror of `files` that is always current, so async intake (auto-crop) merges
+  // against the latest list rather than a stale render closure.
+  const filesRef = useRef<StagedPhoto[]>([]);
+  const setFiles = (next: StagedPhoto[] | ((prev: StagedPhoto[]) => StagedPhoto[])) => {
+    const resolved = typeof next === "function" ? next(filesRef.current) : next;
+    filesRef.current = resolved;
+    setFilesState(resolved);
+  };
+  const [autoCropEnabled, setAutoCropEnabled] = useState<boolean>(() => readAutoCropPreference());
+  const [autoCropPending, setAutoCropPending] = useState(0);
+  const [autoCropNotice, setAutoCropNotice] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      filesRef.current.forEach((f) => URL.revokeObjectURL(f.preview));
+    };
+  }, []);
   const [editingPhotoIndex, setEditingPhotoIndex] = useState<number | null>(null);
   const [intakeSource, setIntakeSource] = useState<"CAMERA" | "UPLOAD" | "MANUAL">("MANUAL");
   const [verificationStatus, setVerificationStatus] = useState<"NONE" | "VERIFIED" | "FLAGGED" | "OVERRIDDEN">("NONE");
@@ -75,7 +129,7 @@ export function ScanAddPage() {
   });
 
   function canIdentifyFiles(
-    targetFiles: Array<{ file: File; label: string; preview: string }>,
+    targetFiles: StagedPhoto[],
     source: "CAMERA" | "UPLOAD" | "MANUAL"
   ) {
     if (!targetFiles.length) return false;
@@ -96,9 +150,55 @@ export function ScanAddPage() {
     setVerificationWarnings([]);
     setOverrideConfirmed(false);
 
-    let hasObverseSoFar = files.some((f) => f.label === "OBVERSE");
-    let hasReverseSoFar = files.some((f) => f.label === "REVERSE");
-    const nextItems = imageFiles.map((file, idx) => {
+    if (!autoCropEnabled || !isAutoCropSupported()) {
+      commitIngest(
+        imageFiles.map((file) => ({ file, autoCropped: false, serverAutoCrop: autoCropEnabled })),
+        defaultLabel,
+        source
+      );
+      return;
+    }
+
+    // Detect item edges and crop in the browser before staging, so the AI
+    // identification and the thumbnails both use the tightly framed photo.
+    setAutoCropPending((n) => n + imageFiles.length);
+    void Promise.all(imageFiles.map((file) => autoCropImageFile(file)))
+      .then((results) => {
+        if (!mountedRef.current) return;
+        const croppedCount = results.filter((r) => r.applied).length;
+        setAutoCropNotice(
+          croppedCount === 0
+            ? null
+            : croppedCount === results.length
+              ? `Auto-cropped ${croppedCount === 1 ? "photo" : `${croppedCount} photos`} to the item's edges.`
+              : `Auto-cropped ${croppedCount} of ${results.length} photos. Others kept as taken (edges unclear).`
+        );
+        commitIngest(
+          results.map((r, i) => ({
+            file: r.file,
+            originalFile: r.applied ? imageFiles[i] : undefined,
+            autoCropped: r.applied,
+            // Let the server try when the browser couldn't find confident edges.
+            serverAutoCrop: !r.applied,
+          })),
+          defaultLabel,
+          source
+        );
+      })
+      .finally(() => {
+        if (mountedRef.current) setAutoCropPending((n) => Math.max(0, n - imageFiles.length));
+      });
+  }
+
+  function commitIngest(
+    prepared: Array<Pick<StagedPhoto, "file" | "originalFile" | "autoCropped" | "serverAutoCrop">>,
+    defaultLabel: string,
+    source: "CAMERA" | "UPLOAD"
+  ) {
+    const current = filesRef.current;
+    let hasObverseSoFar = current.some((f) => f.label === "OBVERSE");
+    let hasReverseSoFar = current.some((f) => f.label === "REVERSE");
+    const nextItems: StagedPhoto[] = prepared.map((item, idx) => {
       let autoLabel = defaultLabel;
       if (defaultLabel === "OBVERSE") {
         if (!hasObverseSoFar) {
@@ -112,12 +212,12 @@ export function ScanAddPage() {
         }
       }
       return {
-        file,
+        ...item,
         label: autoLabel,
-        preview: URL.createObjectURL(file),
+        preview: URL.createObjectURL(item.file),
       };
     });
-    const nextFiles = [...files, ...nextItems];
+    const nextFiles = [...current, ...nextItems];
     setFiles(nextFiles);
 
     // Auto-enable batch pairing when 4+ even-count photos are dropped/picked
@@ -129,6 +229,34 @@ export function ScanAddPage() {
     if (canIdentifyFiles(nextFiles, source)) {
       void runIdentify(nextFiles, source);
     }
+  }
+
+  function undoAutoCrop(idx: number) {
+    const target = filesRef.current[idx];
+    if (!target?.originalFile) return;
+    URL.revokeObjectURL(target.preview);
+    const original = target.originalFile;
+    setFiles((prev) =>
+      prev.map((item, i) =>
+        i === idx
+          ? {
+              ...item,
+              file: original,
+              preview: URL.createObjectURL(original),
+              originalFile: undefined,
+              autoCropped: false,
+              // User explicitly chose the uncropped framing: don't let the server crop either.
+              serverAutoCrop: false,
+            }
+          : item
+      )
+    );
+    setAutoCropNotice(null);
+  }
+
+  function toggleAutoCrop(enabled: boolean) {
+    setAutoCropEnabled(enabled);
+    writeAutoCropPreference(enabled);
   }
 
   function handleFilePick(e: React.ChangeEvent<HTMLInputElement>, defaultLabel: string) {
@@ -165,7 +293,7 @@ export function ScanAddPage() {
   const missingRequiredSides = needsFrontBack && (!hasObverse || !hasReverse);
 
   async function runIdentify(
-    targetFiles: Array<{ file: File; label: string; preview: string }> = files,
+    targetFiles: StagedPhoto[] = files,
     source: "CAMERA" | "UPLOAD" | "MANUAL" = intakeSource
   ) {
     if (!canIdentifyFiles(targetFiles, source)) return;
@@ -260,7 +388,9 @@ export function ScanAddPage() {
 
       for (let i = 0; i < files.length; i++) {
         const uploadFile = await normalizeImageFileForUpload(files[i].file, 2048, 0.92);
-        await api.uploadPhoto(created.id, uploadFile, files[i].label, i === 0);
+        await api.uploadPhoto(created.id, uploadFile, files[i].label, i === 0, {
+          autoCrop: files[i].serverAutoCrop,
+        });
       }
       qc.invalidateQueries({ queryKey: ["items"] });
       qc.invalidateQueries({ queryKey: ["portfolio-summary"] });
@@ -280,7 +410,7 @@ export function ScanAddPage() {
     if (files.length < 2) return;
     setSaving(true);
     setError(null);
-    const pairs: Array<Array<{ file: File; label: string; preview: string }>> = [];
+    const pairs: StagedPhoto[][] = [];
     for (let i = 0; i < files.length; i += 2) {
       pairs.push(files.slice(i, i + 2));
     }
@@ -332,7 +462,9 @@ export function ScanAddPage() {
 
         for (let i = 0; i < normalized.length; i++) {
           const label = i === 0 ? "OBVERSE" : "REVERSE";
-          await api.uploadPhoto(created.id, normalized[i], label, i === 0);
+          await api.uploadPhoto(created.id, normalized[i], label, i === 0, {
+            autoCrop: pair[i].serverAutoCrop,
+          });
         }
       }
       qc.invalidateQueries({ queryKey: ["items"] });
@@ -407,6 +539,38 @@ export function ScanAddPage() {
           Tip: Drop 2 photos (1 item) or 4+ photos (auto-paired Front + Back batch), or paste with Ctrl/Cmd+V.
         </p>
 
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <label
+            htmlFor="auto-crop-toggle"
+            className="inline-flex cursor-pointer items-center gap-2 text-xs text-slate-300"
+            title="Detect the item's edges and crop away the background automatically. Tap the Auto badge on a photo to undo."
+          >
+            <input
+              id="auto-crop-toggle"
+              name="auto-crop-toggle"
+              type="checkbox"
+              role="switch"
+              checked={autoCropEnabled}
+              onChange={(e) => toggleAutoCrop(e.target.checked)}
+              className="h-3.5 w-3.5 accent-amber-500"
+            />
+            <ScanLine className="h-3.5 w-3.5 text-amber-400" />
+            Auto-crop to item edges
+          </label>
+          {autoCropPending > 0 && (
+            <span role="status" aria-live="polite" className="inline-flex items-center gap-1.5 text-xs text-amber-300">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Detecting edges…
+            </span>
+          )}
+          {autoCropPending === 0 && autoCropNotice && (
+            <span role="status" aria-live="polite" className="inline-flex items-center gap-1.5 text-xs text-emerald-300">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              {autoCropNotice}
+            </span>
+          )}
+        </div>
+
         {files.length > 0 && (
           <div className="space-y-3">
             {files.length >= 4 && files.length % 2 === 0 && (
@@ -474,6 +638,17 @@ export function ScanAddPage() {
                     >
                       <Crop className="h-2.5 w-2.5" /> Edit
                     </button>
+                    {f.autoCropped && f.originalFile && (
+                      <button
+                        type="button"
+                        onClick={() => undoAutoCrop(idx)}
+                        aria-label={`Undo auto-crop for ${f.label} photo`}
+                        title="Auto-cropped to the item's edges. Click to restore the original photo."
+                        className="absolute bottom-1 left-1 inline-flex items-center gap-0.5 rounded-md bg-emerald-950/85 px-1 py-0.5 text-[10px] font-medium text-emerald-300 ring-1 ring-emerald-700/60 hover:bg-emerald-900"
+                      >
+                        <Undo2 className="h-2.5 w-2.5" /> Auto
+                      </button>
+                    )}
                   </div>
                   <select
                     value={f.label}
@@ -619,6 +794,10 @@ export function ScanAddPage() {
                       ...item,
                       file: croppedFile,
                       preview: URL.createObjectURL(croppedFile),
+                      // Manual framing supersedes any automatic crop (client or server).
+                      originalFile: undefined,
+                      autoCropped: false,
+                      serverAutoCrop: false,
                     };
                   })
                 );

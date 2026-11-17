@@ -265,9 +265,20 @@ def test_image_background_removal_and_tight_crop(api_client, user_a):
     )
     assert p_resp.status_code == 201
     photo_data = p_resp.json()
-    assert photo_data["width"] == 200
-    assert photo_data["height"] == 200
+    # Server auto-crop (default on) frames the 100px coin as a padded square.
+    assert photo_data["width"] == photo_data["height"]
+    assert 100 <= photo_data["width"] <= 125
     assert photo_data["url"].endswith(".jpg")
+
+    # Clients that already cropped (or users who kept the original) opt out.
+    upload_raw = SimpleUploadedFile("coin.jpg", buf.getvalue(), content_type="image/jpeg")
+    raw_resp = api_client.post(
+        f"/api/v1/catalog/items/{item['id']}/photos",
+        data={"file": upload_raw, "label": "REVERSE", "auto_crop": "false"},
+        **headers_a,
+    )
+    assert raw_resp.status_code == 201
+    assert (raw_resp.json()["width"], raw_resp.json()["height"]) == (200, 200)
 
 
 @pytest.mark.django_db
@@ -358,7 +369,9 @@ def test_patterned_background_removal_and_slab_coin_extraction(api_client, user_
     )
     assert obv_resp.status_code == 201
     obv_data = obv_resp.json()
-    assert (obv_data["width"], obv_data["height"]) == img.size
+    # Auto-crop keeps the WHOLE slab (280x460 body + padding), never just the coin.
+    assert 280 <= obv_data["width"] < img.size[0]
+    assert 460 <= obv_data["height"] < img.size[1]
 
     rev_upload = SimpleUploadedFile("slab_back.jpg", buf.getvalue(), content_type="image/jpeg")
     rev_resp = api_client.post(
@@ -368,7 +381,7 @@ def test_patterned_background_removal_and_slab_coin_extraction(api_client, user_
     )
     assert rev_resp.status_code == 201
     rev_data = rev_resp.json()
-    assert (rev_data["width"], rev_data["height"]) == img.size
+    assert (rev_data["width"], rev_data["height"]) == (obv_data["width"], obv_data["height"])
 
     # Item should have the 2 uploaded photos (OBVERSE & REVERSE) without auto-extracted SLAB_LABEL
     detail = api_client.get(f"/api/v1/catalog/items/{item['id']}", **headers_a).json()
@@ -429,8 +442,10 @@ def test_bar_and_note_cropping_on_textured_dark_mat(api_client, user_a):
     )
     assert p_resp.status_code == 201
     p_data = p_resp.json()
-    assert p_data["width"] == 500
-    assert p_data["height"] == 650
+    # Note (420x180) is cropped out of the 500x650 mat as a wide rectangle.
+    assert 420 <= p_data["width"] <= 500
+    assert 180 <= p_data["height"] < 300
+    assert p_data["width"] / p_data["height"] > 1.6
 
 
 @pytest.mark.django_db
@@ -653,3 +668,68 @@ def test_assay_card_with_mixed_border_and_small_coin_preserves_full_card():
 
 
 
+
+
+def test_detect_subject_crop_box_is_conservative():
+    from PIL import ImageDraw
+
+    from apps.catalog.image_processing import detect_subject_crop_box, process_item_image
+
+    # Blank surface: nothing to crop.
+    blank = Image.new("RGB", (400, 300), color=(128, 128, 128))
+    assert detect_subject_crop_box(blank) is None
+
+    # Subject already fills the frame (e.g. client-side crop): crop would gain nothing.
+    full = Image.new("RGB", (400, 300), color=(20, 20, 20))
+    ImageDraw.Draw(full).rectangle((6, 6, 394, 294), fill=(220, 210, 190))
+    assert detect_subject_crop_box(full) is None
+
+    # Off-centre loose coin on a dark desk: square crop containing the full rim.
+    coin = Image.new("RGB", (640, 480), color=(35, 33, 30))
+    ImageDraw.Draw(coin).ellipse((360, 140, 560, 340), fill=(200, 200, 206), outline=(90, 90, 95), width=5)
+    box = detect_subject_crop_box(coin, shape_hint="coin")
+    assert box is not None
+    left, top, right, bottom = box
+    assert right - left == bottom - top
+    assert left <= 360 and top <= 140 and right >= 560 and bottom >= 340
+    assert (right - left) <= 240
+
+    # auto_crop=False (default) never changes framing.
+    buf = io.BytesIO()
+    coin.save(buf, format="JPEG", quality=95)
+    _, w, h, _ = process_item_image(buf.getvalue(), enhance=False)
+    assert (w, h) == (640, 480)
+    _, cw, ch, _ = process_item_image(buf.getvalue(), enhance=False, auto_crop=True, shape_hint="coin")
+    assert cw == ch and cw < 480
+
+
+def test_receipt_upload_crops_to_sheet_not_printed_coin(api_client, user_a):
+    from PIL import ImageDraw
+
+    _, _, token_a = user_a
+    headers_a = {"HTTP_AUTHORIZATION": f"Bearer {token_a}"}
+    item = api_client.post(
+        "/api/v1/catalog/items",
+        data=json.dumps({"title": "Silver Eagle", "category": "COIN"}),
+        content_type="application/json",
+        **headers_a,
+    ).json()
+
+    img = Image.new("RGB", (600, 800), color=(40, 38, 36))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((100, 80, 500, 720), fill=(245, 245, 240))
+    draw.ellipse((250, 150, 350, 250), fill=(150, 150, 155))  # printed coin logo
+    for y in range(300, 680, 30):
+        draw.rectangle((140, y, 460, y + 10), fill=(60, 60, 60))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=95)
+
+    resp = api_client.post(
+        f"/api/v1/catalog/items/{item['id']}/photos",
+        data={"file": SimpleUploadedFile("r.jpg", buf.getvalue(), content_type="image/jpeg"), "label": "RECEIPT"},
+        **headers_a,
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["width"] >= 400 and data["height"] >= 640
+    assert data["width"] < 600 and data["height"] < 800

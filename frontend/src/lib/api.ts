@@ -397,12 +397,16 @@ export const api = {
     itemId: string,
     file: File,
     label = "OBVERSE",
-    isPrimary = false
+    isPrimary = false,
+    options: { autoCrop?: boolean } = {}
   ) => {
     const form = new FormData();
     form.append("file", file);
     form.append("label", label);
     form.append("is_primary", String(isPrimary));
+    // Server-side edge-detect crop. Disable when the client already cropped or the
+    // user explicitly kept/edited the framing, so we never second-guess them.
+    form.append("auto_crop", String(options.autoCrop ?? true));
     return apiFetch<ItemPhoto>(`/catalog/items/${itemId}/photos`, { method: "POST", body: form });
   },
   rotatePhoto: (itemId: string, photoId: string, degrees: number = 90) =>

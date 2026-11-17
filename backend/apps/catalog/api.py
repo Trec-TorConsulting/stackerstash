@@ -881,6 +881,11 @@ def _should_extract_coin_from_slab(item: CollectionItem, label: str) -> bool:
     return True
 
 
+_RECTANGULAR_DOCUMENT_LABELS = frozenset(
+    {ItemPhoto.Label.RECEIPT, ItemPhoto.Label.SLAB_LABEL, ItemPhoto.Label.ASSAY}
+)
+
+
 def _item_shape_hint(item: CollectionItem, label: str) -> str | None:
     """Return 'bar', 'note', 'rect', or 'coin' so cropping/masking snaps cleanly to item edges."""
     if label in (ItemPhoto.Label.RECEIPT, ItemPhoto.Label.SLAB_LABEL):
@@ -917,7 +922,14 @@ def upload_item_photo(
     file: UploadedFile = File(...),
     label: str = Form(ItemPhoto.Label.OBVERSE),
     is_primary: bool = Form(False),
+    auto_crop: bool = Form(True),
 ):
+    """
+    Upload a photo. When ``auto_crop`` is true (default) the server detects the
+    item's edges and crops to them (rectangle crop only, no background removal).
+    Clients send ``auto_crop=false`` when they have already cropped the photo or
+    the user explicitly chose the framing.
+    """
     item = get_object_or_404(CollectionItem, id=item_id, workspace=request.workspace)
     if label not in dict(ItemPhoto.Label.choices):
         raise HttpError(400, f"Invalid photo label: {label}")
@@ -929,11 +941,17 @@ def upload_item_photo(
     height: int | None = None
     upload_content: ContentFile | UploadedFile = file
     try:
+        shape_hint = _item_shape_hint(item, label)
+        if shape_hint is None and label in _RECTANGULAR_DOCUMENT_LABELS:
+            # Receipts, slab labels and assay cards are flat documents: crop to the
+            # sheet's edges, never to a coin printed or pictured on them.
+            shape_hint = "rect"
         processed_bytes, width, height, ext = process_item_image(
             raw_bytes,
             remove_background=False,
             enhance=True,
-            shape_hint=_item_shape_hint(item, label),
+            shape_hint=shape_hint,
+            auto_crop=auto_crop,
         )
         upload_content = ContentFile(processed_bytes, name=f"photo-{label.lower()}.{ext}")
     except Exception:
