@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Camera, CheckCircle2, Crop, Sparkles, Upload, X } from "lucide-react";
-import { useState } from "react";
+import { AlertTriangle, Camera, CheckCircle2, Crop, Layers, Smartphone, Sparkles, Upload, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { GuidedCameraModal, type GuidedCameraResult } from "../components/GuidedCameraModal";
 import { PhotoCropRotateView } from "../components/PhotoCropRotateView";
@@ -42,6 +42,9 @@ export function ScanAddPage() {
   const [quotaDeferred, setQuotaDeferred] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<string | null>(null);
 
   const [form, setForm] = useState({
     category: "COIN",
@@ -88,16 +91,17 @@ export function ScanAddPage() {
     );
   }
 
-  function handleFilePick(e: React.ChangeEvent<HTMLInputElement>, defaultLabel: string) {
-    const picked = Array.from(e.target.files || []);
-    if (!picked.length) return;
-    setIntakeSource("UPLOAD");
+  function ingestFiles(picked: File[], defaultLabel: string, source: "CAMERA" | "UPLOAD" = "UPLOAD") {
+    const imageFiles = picked.filter((f) => !f.type || f.type.startsWith("image/"));
+    if (!imageFiles.length) return;
+    setIntakeSource(source);
     setVerificationStatus("NONE");
     setVerificationWarnings([]);
     setOverrideConfirmed(false);
+
     let hasObverseSoFar = files.some((f) => f.label === "OBVERSE");
     let hasReverseSoFar = files.some((f) => f.label === "REVERSE");
-    const nextItems = picked.map((file) => {
+    const nextItems = imageFiles.map((file, idx) => {
       let autoLabel = defaultLabel;
       if (defaultLabel === "OBVERSE") {
         if (!hasObverseSoFar) {
@@ -106,6 +110,8 @@ export function ScanAddPage() {
         } else if (!hasReverseSoFar) {
           autoLabel = "REVERSE";
           hasReverseSoFar = true;
+        } else {
+          autoLabel = idx % 2 === 0 ? "OBVERSE" : "REVERSE";
         }
       }
       return {
@@ -116,18 +122,53 @@ export function ScanAddPage() {
     });
     const nextFiles = [...files, ...nextItems];
     setFiles(nextFiles);
-    e.target.value = "";
-    if (canIdentifyFiles(nextFiles, "UPLOAD")) {
-      void runIdentify(nextFiles, "UPLOAD");
+
+    // Auto-enable batch pairing when 4+ even-count photos are dropped/picked
+    if (nextFiles.length >= 4 && nextFiles.length % 2 === 0) {
+      setBatchMode(true);
+      return;
+    }
+
+    if (canIdentifyFiles(nextFiles, source)) {
+      void runIdentify(nextFiles, source);
     }
   }
 
+  function handleFilePick(e: React.ChangeEvent<HTMLInputElement>, defaultLabel: string) {
+    const picked = Array.from(e.target.files || []);
+    e.target.value = "";
+    ingestFiles(picked, defaultLabel, "UPLOAD");
+  }
+
+  const ingestFilesRef = useRef(ingestFiles);
+  ingestFilesRef.current = ingestFiles;
+
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+      const items = Array.from(e.clipboardData?.items || []);
+      const pastedFiles = items
+        .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+        .map((item) => item.getAsFile())
+        .filter((f): f is File => Boolean(f));
+      if (pastedFiles.length > 0) {
+        e.preventDefault();
+        ingestFilesRef.current(pastedFiles, "OBVERSE", "UPLOAD");
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
+
   function handleGuidedCameraComplete(result: GuidedCameraResult) {
     setCameraModalOpen(false);
+    setBatchMode(false);
     setIntakeSource("CAMERA");
     setVerificationStatus("NONE");
     setVerificationWarnings([]);
     setOverrideConfirmed(false);
+    files.forEach((f) => URL.revokeObjectURL(f.preview));
     if (result.detectedShape) {
       const mappedCategory =
         result.detectedShape === "note"
@@ -273,6 +314,76 @@ export function ScanAddPage() {
     }
   }
 
+  async function handleBatchCatalogAll() {
+    if (files.length < 2) return;
+    setSaving(true);
+    setError(null);
+    const pairs: Array<Array<{ file: File; label: string; preview: string }>> = [];
+    for (let i = 0; i < files.length; i += 2) {
+      pairs.push(files.slice(i, i + 2));
+    }
+    try {
+      for (let p = 0; p < pairs.length; p++) {
+        setBatchProgress(`Cataloging item ${p + 1} of ${pairs.length}…`);
+        const pair = pairs[p];
+        const normalized = await Promise.all(
+          pair.map((item) => normalizeImageFileForUpload(item.file, 2048, 0.92)),
+        );
+        let candidate: Partial<Awaited<ReturnType<typeof api.identifyImages>>["candidate"]> = {};
+        let quotaDeferredItem = false;
+        try {
+          const res = await api.identifyImages(normalized, undefined, "upload");
+          candidate = res.candidate;
+          quotaDeferredItem = Boolean(res.quota_deferred);
+        } catch {
+          // Still create item with photos if identification times out or hits quota
+        }
+
+        const created = await api.createItem({
+          category: candidate.category || "COIN",
+          title: candidate.title || `Cataloged Item #${p + 1}`,
+          country: candidate.country || "",
+          year: candidate.year || "",
+          mint_or_refiner: candidate.mint_or_refiner || "",
+          denomination: candidate.denomination || "",
+          series: candidate.series || "",
+          quantity: 1,
+          metal_type: candidate.metal_type || "NONE",
+          weight_value: candidate.weight_value ? String(candidate.weight_value) : "0",
+          weight_unit: candidate.weight_unit || "OZ_T",
+          purity: candidate.purity ? String(Number(Number(candidate.purity).toFixed(4))) : "0.999000",
+          grading_service: candidate.grading_service || "NONE",
+          cert_number: candidate.cert_number || "",
+          grade: candidate.grade || "",
+          estimated_grade: candidate.estimated_grade || "",
+          ai_confidence: candidate.ai_confidence ?? null,
+          serial_number: candidate.serial_number || "",
+          container_id: form.container_id || null,
+          market_value_unit: candidate.estimated_value_usd ? String(candidate.estimated_value_usd) : "0.00",
+          valuation_source: candidate.estimated_value_usd ? "AI_ESTIMATE" : "MANUAL",
+          is_estimate: Boolean(candidate.estimated_value_usd),
+          notes: candidate.notes || "",
+          intake_source: "UPLOAD",
+          ai_enrichment_pending: quotaDeferredItem,
+          auto_appraise: true,
+        });
+
+        for (let i = 0; i < normalized.length; i++) {
+          const label = i === 0 ? "OBVERSE" : "REVERSE";
+          await api.uploadPhoto(created.id, normalized[i], label, i === 0, removeBackground);
+        }
+      }
+      qc.invalidateQueries({ queryKey: ["items"] });
+      qc.invalidateQueries({ queryKey: ["portfolio-summary"] });
+      navigate("/collection");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Batch catalog failed");
+    } finally {
+      setBatchProgress(null);
+      setSaving(false);
+    }
+  }
+
   const flatContainers = flattenContainers(containers);
 
   return (
@@ -280,13 +391,28 @@ export function ScanAddPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Scan &amp; Catalog Item</h1>
         <p className="text-sm text-slate-400">
-          Snap or upload coins, paper bills, 1kg copper, Geiger bars, or graded slabs.
+          Hands-free auto-camera, phone camera, drag &amp; drop, or paste photos — we auto-crop, orient, and identify.
         </p>
       </div>
 
       {/* Camera & Photo Intake */}
-      <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
-        <div className="flex flex-wrap gap-3">
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setIsDragging(true);
+        }}
+        onDragLeave={() => setIsDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setIsDragging(false);
+          const dropped = Array.from(e.dataTransfer.files || []);
+          ingestFiles(dropped, "OBVERSE", "UPLOAD");
+        }}
+        className={`p-5 rounded-2xl bg-slate-900 border transition space-y-4 ${
+          isDragging ? "border-amber-400 bg-amber-500/5" : "border-slate-800"
+        }`}
+      >
+        <div className="flex flex-wrap gap-2.5">
           <button
             type="button"
             onClick={() => setCameraModalOpen(true)}
@@ -295,6 +421,21 @@ export function ScanAddPage() {
             <Camera className="h-4 w-4" />
             Take Photo
           </button>
+          <label className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-700 hover:border-amber-500/60 text-slate-200 text-sm font-medium cursor-pointer transition">
+            <Smartphone className="h-4 w-4 text-amber-400" />
+            Phone Camera
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={(e) => {
+                const picked = Array.from(e.target.files || []);
+                e.target.value = "";
+                ingestFiles(picked, hasObverse && !hasReverse ? "REVERSE" : "OBVERSE", "CAMERA");
+              }}
+            />
+          </label>
           <label className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-700 hover:border-slate-500 text-slate-200 text-sm font-medium cursor-pointer transition">
             <Upload className="h-4 w-4" />
             Upload Obverse / Reverse
@@ -308,6 +449,10 @@ export function ScanAddPage() {
           </label>
         </div>
 
+        <p className="text-xs text-slate-400">
+          Tip: Drop 2 photos (1 item) or 4+ photos (auto-paired Front + Back batch), or paste with Ctrl/Cmd+V.
+        </p>
+
         <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
           <input
             type="checkbox"
@@ -320,6 +465,39 @@ export function ScanAddPage() {
 
         {files.length > 0 && (
           <div className="space-y-3">
+            {files.length >= 4 && files.length % 2 === 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3">
+                <div className="flex items-center gap-2 text-xs text-amber-200">
+                  <Layers className="h-4 w-4 text-amber-400 shrink-0" />
+                  <span>
+                    {batchMode
+                      ? `Batch Auto-Pair: ${files.length / 2} items (Front + Back pairs) ready to catalog.`
+                      : `${files.length} photos attached to 1 item.`}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBatchMode((v) => !v)}
+                    className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-800"
+                  >
+                    {batchMode ? "Use all for 1 item" : `Pair as ${files.length / 2} items`}
+                  </button>
+                  {batchMode && (
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={() => void handleBatchCatalogAll()}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-950 hover:bg-amber-400 disabled:opacity-50"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      {batchProgress || `Catalog All ${files.length / 2} Items`}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="flex flex-wrap gap-3">
               {files.map((f, idx) => (
                 <div key={idx} className="w-24 space-y-1">
@@ -329,6 +507,21 @@ export function ScanAddPage() {
                       alt={`Upload ${idx + 1}`}
                       className="h-24 w-24 object-cover rounded-xl border border-slate-700"
                     />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        URL.revokeObjectURL(f.preview);
+                        const nextFiles = files.filter((_, i) => i !== idx);
+                        setFiles(nextFiles);
+                        if (nextFiles.length < 4 || nextFiles.length % 2 !== 0) {
+                          setBatchMode(false);
+                        }
+                      }}
+                      aria-label={`Remove ${f.label} photo`}
+                      className="absolute top-1 right-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-950/85 text-slate-300 ring-1 ring-slate-700 hover:bg-rose-600 hover:text-white"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
                     <button
                       type="button"
                       onClick={() => setEditingPhotoIndex(idx)}
@@ -359,6 +552,23 @@ export function ScanAddPage() {
                   </select>
                 </div>
               ))}
+              {hasObverse && !hasReverse && (
+                <label className="flex h-24 w-24 cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-amber-500/60 bg-amber-500/10 text-center text-[11px] font-medium text-amber-300 hover:bg-amber-500/15">
+                  <Smartphone className="h-4 w-4" />
+                  <span>Snap Back</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={(e) => {
+                      const picked = Array.from(e.target.files || []);
+                      e.target.value = "";
+                      ingestFiles(picked, "REVERSE", "CAMERA");
+                    }}
+                  />
+                </label>
+              )}
             </div>
 
             {missingRequiredSides && (

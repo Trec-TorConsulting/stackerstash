@@ -47,8 +47,8 @@ export interface FrameMetricsResult {
   recommendedZoom: number;
 }
 
-const GLARE_LUMA_THRESHOLD = 245;
-const GLARE_RATIO_THRESHOLD = 0.18;
+const GLARE_LUMA_THRESHOLD = 246;
+const GLARE_RATIO_THRESHOLD = 0.30;
 const DEFAULT_VIEWFINDER_ASPECT = 4 / 3;
 
 function sortedPercentile(values: number[], q: number): number {
@@ -357,7 +357,7 @@ export function evaluateFramingState(subjectBox: SubjectBox | null): FramingStat
     return 'too_small';
   }
   const centerOffset = Math.hypot(subjectBox.centerX - 0.5, subjectBox.centerY - 0.5);
-  if (centerOffset > 0.30) {
+  if (centerOffset > 0.32) {
     return 'off_center';
   }
   return 'locked';
@@ -493,9 +493,9 @@ export function evaluateFrameMetrics(
       ? Math.hypot(
           subjectBox.centerX - prevSubjectBox.centerX,
           subjectBox.centerY - prevSubjectBox.centerY,
-        ) > 0.06
+        ) > 0.08
       : false;
-  const isSteady = prevLuma !== null && meanFrameDiff < 18 && !boxMoved;
+  const isSteady = prevLuma !== null && meanFrameDiff < 22 && !boxMoved;
 
   // Weight sharpness toward the subject inside the reticle
   const effectiveEdge = Math.max(meanEdge, innerEdge * 0.75);
@@ -519,7 +519,7 @@ export function evaluateFrameMetrics(
     quality = { label: 'Move closer or tap 2x zoom', tone: 'warn', isGood: false };
   } else if (framingState === 'off_center') {
     quality = { label: 'Center item inside viewfinder', tone: 'warn', isGood: false };
-  } else if (effectiveEdge < 7.5) {
+  } else if (effectiveEdge < 4.5) {
     quality = { label: 'Focus closer for sharper detail', tone: 'warn', isGood: false };
   } else {
     quality = {
