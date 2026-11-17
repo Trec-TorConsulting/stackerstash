@@ -18,9 +18,11 @@ import { PhotoCropRotateView } from "../components/PhotoCropRotateView";
 import { api, type ContainerNode } from "../lib/api";
 import {
   autoCropImageFile,
+  harmonizeCropPair,
   isAutoCropSupported,
   readAutoCropPreference,
   writeAutoCropPreference,
+  type AutoCropResult,
 } from "../lib/autoCrop";
 import { CATEGORY_LABELS, METAL_LABELS } from "../lib/format";
 import { normalizeImageFileForUpload } from "../lib/imageUtils";
@@ -32,6 +34,8 @@ interface StagedPhoto {
   preview: string;
   /** Pre-crop original, retained so the user can undo an automatic crop. */
   originalFile?: File;
+  /** Metadata from client-side auto-crop so Front/Back pairs can be harmonized. */
+  cropResult?: AutoCropResult;
   /** True when `file` is the result of client-side auto-crop. */
   autoCropped?: boolean;
   /**
@@ -163,7 +167,7 @@ export function ScanAddPage() {
     // identification and the thumbnails both use the tightly framed photo.
     setAutoCropPending((n) => n + imageFiles.length);
     void Promise.all(imageFiles.map((file) => autoCropImageFile(file)))
-      .then((results) => {
+      .then(async (results) => {
         if (!mountedRef.current) return;
         const croppedCount = results.filter((r) => r.applied).length;
         setAutoCropNotice(
@@ -173,21 +177,106 @@ export function ScanAddPage() {
               ? `Auto-cropped ${croppedCount === 1 ? "photo" : `${croppedCount} photos`} to the item's edges.`
               : `Auto-cropped ${croppedCount} of ${results.length} photos. Others kept as taken (edges unclear).`
         );
-        commitIngest(
-          results.map((r, i) => ({
-            file: r.file,
-            originalFile: r.applied ? imageFiles[i] : undefined,
-            autoCropped: r.applied,
-            // Let the server try when the browser couldn't find confident edges.
-            serverAutoCrop: !r.applied,
-          })),
-          defaultLabel,
-          source
-        );
+        const prepared = results.map((r, i) => ({
+          file: r.file,
+          originalFile: r.applied ? imageFiles[i] : undefined,
+          cropResult: r.applied ? r : undefined,
+          autoCropped: r.applied,
+          // Let the server try when the browser couldn't find confident edges.
+          serverAutoCrop: !r.applied,
+        }));
+        await commitIngestWithSymmetry(prepared, defaultLabel, source);
       })
       .finally(() => {
         if (mountedRef.current) setAutoCropPending((n) => Math.max(0, n - imageFiles.length));
       });
+  }
+
+  async function commitIngestWithSymmetry(
+    prepared: Array<
+      Pick<StagedPhoto, "file" | "originalFile" | "cropResult" | "autoCropped" | "serverAutoCrop">
+    >,
+    defaultLabel: string,
+    source: "CAMERA" | "UPLOAD"
+  ) {
+    const current = [...filesRef.current];
+    let hasObverseSoFar = current.some((f) => f.label === "OBVERSE");
+    let hasReverseSoFar = current.some((f) => f.label === "REVERSE");
+    const assigned = prepared.map((item, idx) => {
+      let autoLabel = defaultLabel;
+      if (defaultLabel === "OBVERSE") {
+        if (!hasObverseSoFar) {
+          autoLabel = "OBVERSE";
+          hasObverseSoFar = true;
+        } else if (!hasReverseSoFar) {
+          autoLabel = "REVERSE";
+          hasReverseSoFar = true;
+        } else {
+          autoLabel = idx % 2 === 0 ? "OBVERSE" : "REVERSE";
+        }
+      }
+      return { ...item, label: autoLabel };
+    });
+
+    // Harmonize each (OBVERSE, REVERSE) pair so front and back share the exact
+    // same aspect ratio and output dimensions when both sides were auto-cropped.
+    const combined: Array<Omit<StagedPhoto, "preview"> & { preview?: string }> = [
+      ...current,
+      ...assigned,
+    ];
+    for (let i = 0; i + 1 < combined.length; i += 2) {
+      const a = combined[i];
+      const b = combined[i + 1];
+      if (
+        a.label === "OBVERSE" &&
+        b.label === "REVERSE" &&
+        a.autoCropped &&
+        b.autoCropped &&
+        a.originalFile &&
+        b.originalFile &&
+        a.cropResult &&
+        b.cropResult
+      ) {
+        const harmonized = await harmonizeCropPair(
+          a.originalFile,
+          a.cropResult,
+          b.originalFile,
+          b.cropResult
+        );
+        if (!mountedRef.current) return;
+        if (harmonized) {
+          if (a.preview) URL.revokeObjectURL(a.preview);
+          if (b.preview) URL.revokeObjectURL(b.preview);
+          combined[i] = {
+            ...a,
+            file: harmonized.fileA,
+            preview: URL.createObjectURL(harmonized.fileA),
+            cropResult: { ...a.cropResult, cropRect: harmonized.rectA },
+          };
+          combined[i + 1] = {
+            ...b,
+            file: harmonized.fileB,
+            preview: URL.createObjectURL(harmonized.fileB),
+            cropResult: { ...b.cropResult, cropRect: harmonized.rectB },
+          };
+        }
+      }
+    }
+
+    const nextFiles: StagedPhoto[] = combined.map((item) => ({
+      ...item,
+      preview: item.preview || URL.createObjectURL(item.file),
+    }));
+    setFiles(nextFiles);
+
+    if (nextFiles.length >= 4 && nextFiles.length % 2 === 0) {
+      setBatchMode(true);
+      return;
+    }
+
+    if (canIdentifyFiles(nextFiles, source)) {
+      void runIdentify(nextFiles, source);
+    }
   }
 
   function commitIngest(
@@ -244,6 +333,7 @@ export function ScanAddPage() {
               file: original,
               preview: URL.createObjectURL(original),
               originalFile: undefined,
+              cropResult: undefined,
               autoCropped: false,
               // User explicitly chose the uncropped framing: don't let the server crop either.
               serverAutoCrop: false,
@@ -796,6 +886,7 @@ export function ScanAddPage() {
                       preview: URL.createObjectURL(croppedFile),
                       // Manual framing supersedes any automatic crop (client or server).
                       originalFile: undefined,
+                      cropResult: undefined,
                       autoCropped: false,
                       serverAutoCrop: false,
                     };

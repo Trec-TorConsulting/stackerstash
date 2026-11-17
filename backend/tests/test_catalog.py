@@ -815,3 +815,48 @@ def test_detect_subject_crop_box_goldback_on_textured_weave_with_glare():
     left, top, right, bottom = box
     assert left <= 120 and top <= 140 and right >= 360 and bottom >= 500
     assert (right - left) < 300 and (bottom - top) < 420
+
+
+@pytest.mark.django_db
+def test_symmetrical_obverse_and_reverse_cropping(api_client, user_a):
+    from PIL import ImageDraw
+
+    _, _, token_a = user_a
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token_a}"}
+    item = api_client.post(
+        "/api/v1/catalog/items",
+        data=json.dumps({"title": "2023 Utah Goldback", "category": "PAPER"}),
+        content_type="application/json",
+        **headers,
+    ).json()
+
+    # Front: 240x360 note on 600x800 dark mat
+    front = Image.new("RGB", (600, 800), color=(40, 40, 42))
+    ImageDraw.Draw(front).rectangle((180, 220, 420, 580), fill=(225, 190, 95))
+    f_buf = io.BytesIO()
+    front.save(f_buf, format="JPEG", quality=95)
+
+    # Back: slightly differently framed 260x350 note on 600x800 dark mat
+    back = Image.new("RGB", (600, 800), color=(40, 40, 42))
+    ImageDraw.Draw(back).rectangle((170, 225, 430, 575), fill=(215, 180, 90))
+    b_buf = io.BytesIO()
+    back.save(b_buf, format="JPEG", quality=95)
+
+    r1 = api_client.post(
+        f"/api/v1/catalog/items/{item['id']}/photos",
+        data={"file": SimpleUploadedFile("f.jpg", f_buf.getvalue(), content_type="image/jpeg"), "label": "OBVERSE"},
+        **headers,
+    )
+    assert r1.status_code == 201
+    d1 = r1.json()
+
+    r2 = api_client.post(
+        f"/api/v1/catalog/items/{item['id']}/photos",
+        data={"file": SimpleUploadedFile("b.jpg", b_buf.getvalue(), content_type="image/jpeg"), "label": "REVERSE"},
+        **headers,
+    )
+    assert r2.status_code == 201
+    d2 = r2.json()
+
+    assert (d2["width"], d2["height"]) == (d1["width"], d1["height"])
+    assert d1["width"] < 600 and d1["height"] < 800

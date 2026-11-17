@@ -64,6 +64,8 @@ export interface AutoCropResult {
   detection?: AutoCropDetection;
   /** Crop rectangle in full-resolution, EXIF-upright source pixels. */
   cropRect?: PixelRect;
+  /** Full-resolution, EXIF-upright source image dimensions (when decoded). */
+  sourceSize?: { width: number; height: number };
   durationMs: number;
 }
 
@@ -618,6 +620,7 @@ async function runAutoCrop(
       reason: "cropped",
       detection,
       cropRect,
+      sourceSize: { width: srcW, height: srcH },
       durationMs: now() - started,
     };
   } finally {
@@ -649,6 +652,144 @@ export async function autoCropImageFile(file: File, options: AutoCropOptions = {
       durationMs: now() - started,
     };
   }
+}
+
+/* ------------------------------------------------------------------------ */
+/* Front / Back Symmetry Harmonization                                      */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Expand (never shrink) a crop rectangle around its center so its aspect ratio
+ * matches `targetAspect`, clamped within `(srcW, srcH)`.
+ */
+export function expandRectToAspect(
+  rect: PixelRect,
+  targetAspect: number,
+  srcW: number,
+  srcH: number,
+): PixelRect {
+  if (srcW < 1 || srcH < 1 || targetAspect <= 0) return rect;
+  const curAspect = rect.width / Math.max(1, rect.height);
+  let w = rect.width;
+  let h = rect.height;
+  if (curAspect < targetAspect) {
+    w = Math.min(srcW, h * targetAspect);
+  } else if (curAspect > targetAspect) {
+    h = Math.min(srcH, w / targetAspect);
+  }
+  const cx = rect.x + rect.width / 2;
+  const cy = rect.y + rect.height / 2;
+  const x = Math.max(0, Math.min(srcW - w, cx - w / 2));
+  const y = Math.max(0, Math.min(srcH - h, cy - h / 2));
+  return {
+    x: Math.round(x),
+    y: Math.round(y),
+    width: Math.max(1, Math.round(Math.min(w, srcW - Math.round(x)))),
+    height: Math.max(1, Math.round(Math.min(h, srcH - Math.round(y)))),
+  };
+}
+
+/**
+ * Compute symmetrical target crop rectangles and shared output pixel dimensions
+ * for a Front/Back (Obverse/Reverse) pair of the same item. Returns `null` when
+ * orientations are incompatible (e.g. one side photographed portrait, one landscape).
+ */
+export function computeSymmetricalPairPlan(
+  a: { cropRect: PixelRect; sourceSize: { width: number; height: number }; shape?: AutoCropShape },
+  b: { cropRect: PixelRect; sourceSize: { width: number; height: number }; shape?: AutoCropShape },
+  maxOutputDimension = AUTO_CROP_DEFAULTS.maxOutputDimension,
+): { rectA: PixelRect; rectB: PixelRect; outW: number; outH: number } | null {
+  const aspectA = a.cropRect.width / Math.max(1, a.cropRect.height);
+  const aspectB = b.cropRect.width / Math.max(1, b.cropRect.height);
+  const isNearSquare = (asp: number) => asp >= 0.85 && asp <= 1.18;
+  const sameOrientation =
+    (a.cropRect.width >= a.cropRect.height) === (b.cropRect.width >= b.cropRect.height) ||
+    isNearSquare(aspectA) ||
+    isNearSquare(aspectB);
+  if (!sameOrientation) return null;
+
+  const targetAspect =
+    (a.shape === "coin" || b.shape === "coin") &&
+    aspectA >= 0.8 &&
+    aspectA <= 1.25 &&
+    aspectB >= 0.8 &&
+    aspectB <= 1.25
+      ? 1.0
+      : Math.sqrt(aspectA * aspectB);
+
+  const rectA = expandRectToAspect(a.cropRect, targetAspect, a.sourceSize.width, a.sourceSize.height);
+  const rectB = expandRectToAspect(b.cropRect, targetAspect, b.sourceSize.width, b.sourceSize.height);
+
+  const capA = Math.min(1, maxOutputDimension / Math.max(rectA.width, rectA.height));
+  const capB = Math.min(1, maxOutputDimension / Math.max(rectB.width, rectB.height));
+  const outW = Math.max(1, Math.round(Math.min(rectA.width * capA, rectB.width * capB)));
+  const outH = Math.max(1, Math.round(outW / targetAspect));
+
+  return { rectA, rectB, outW, outH };
+}
+
+async function renderRectToSize(
+  originalFile: File,
+  rect: PixelRect,
+  outW: number,
+  outH: number,
+  quality = AUTO_CROP_DEFAULTS.jpegQuality,
+): Promise<File | null> {
+  if (!isAutoCropSupported()) return null;
+  let bitmap: ImageBitmap | null = null;
+  try {
+    bitmap = await decodeImageBitmapUpright(originalFile);
+    const out = document.createElement("canvas");
+    out.width = outW;
+    out.height = outH;
+    const octx = out.getContext("2d");
+    if (!octx) return null;
+    octx.imageSmoothingEnabled = true;
+    octx.imageSmoothingQuality = "high";
+    octx.drawImage(bitmap, rect.x, rect.y, rect.width, rect.height, 0, 0, outW, outH);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      out.toBlob((b) => resolve(b), "image/jpeg", quality),
+    );
+    out.width = 0;
+    out.height = 0;
+    if (!blob || blob.size === 0) return null;
+    const baseName = originalFile.name.replace(/\.[^.]+$/, "") || "photo";
+    return new File([blob], `${baseName}-autocrop.jpg`, {
+      type: "image/jpeg",
+      lastModified: originalFile.lastModified,
+    });
+  } catch {
+    return null;
+  } finally {
+    bitmap?.close();
+  }
+}
+
+/**
+ * Re-render a Front/Back pair to identical aspect ratio and output dimensions
+ * so both sides of the same collectible look symmetrical in the UI.
+ */
+export async function harmonizeCropPair(
+  origA: File,
+  resA: AutoCropResult,
+  origB: File,
+  resB: AutoCropResult,
+): Promise<{ fileA: File; rectA: PixelRect; fileB: File; rectB: PixelRect } | null> {
+  if (!resA.applied || !resB.applied || !resA.cropRect || !resB.cropRect) return null;
+  if (!resA.sourceSize || !resB.sourceSize) return null;
+
+  const plan = computeSymmetricalPairPlan(
+    { cropRect: resA.cropRect, sourceSize: resA.sourceSize, shape: resA.detection?.shape },
+    { cropRect: resB.cropRect, sourceSize: resB.sourceSize, shape: resB.detection?.shape },
+  );
+  if (!plan) return null;
+
+  const [fileA, fileB] = await Promise.all([
+    renderRectToSize(origA, plan.rectA, plan.outW, plan.outH),
+    renderRectToSize(origB, plan.rectB, plan.outW, plan.outH),
+  ]);
+  if (!fileA || !fileB) return null;
+  return { fileA, rectA: plan.rectA, fileB, rectB: plan.rectB };
 }
 
 /* ------------------------------------------------------------------------ */

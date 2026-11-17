@@ -977,12 +977,26 @@ def upload_item_photo(
             # Receipts, slab labels and assay cards are flat documents: crop to the
             # sheet's edges, never to a coin printed or pictured on them.
             shape_hint = "rect"
+        target_size: tuple[int, int] | None = None
+        if auto_crop and label in (ItemPhoto.Label.OBVERSE, ItemPhoto.Label.REVERSE):
+            sibling_label = (
+                ItemPhoto.Label.REVERSE
+                if label == ItemPhoto.Label.OBVERSE
+                else ItemPhoto.Label.OBVERSE
+            )
+            sibling = (
+                item.photos.filter(label=sibling_label, width__isnull=False, height__isnull=False)
+                .first()
+            )
+            if sibling and sibling.width and sibling.height:
+                target_size = (sibling.width, sibling.height)
         processed_bytes, width, height, ext = process_item_image(
             raw_bytes,
             remove_background=False,
             enhance=True,
             shape_hint=shape_hint,
             auto_crop=auto_crop,
+            target_size=target_size,
         )
         upload_content = ContentFile(processed_bytes, name=f"photo-{label.lower()}.{ext}")
     except Exception:

@@ -3,8 +3,10 @@ import {
   AUTO_CROP_PREF_KEY,
   autoCropImageFile,
   computeAutoCropRect,
+  computeSymmetricalPairPlan,
   detectSubjectInRgba,
   evaluateDetection,
+  expandRectToAspect,
   readAutoCropPreference,
   writeAutoCropPreference,
   type AutoCropDetection,
@@ -240,5 +242,42 @@ describe("auto-crop preference", () => {
     expect(readAutoCropPreference()).toBe(false);
     writeAutoCropPreference(true);
     expect(readAutoCropPreference()).toBe(true);
+  });
+});
+
+describe("Front / Back symmetry harmonization", () => {
+  it("expands a rect around its center to match a target aspect without shrinking", () => {
+    const expanded = expandRectToAspect({ x: 200, y: 100, width: 400, height: 800 }, 0.6, 1536, 2048);
+    expect(expanded.height).toBe(800);
+    expect(expanded.width).toBe(480);
+    expect(expanded.x + expanded.width / 2).toBeCloseTo(400, 0);
+  });
+
+  it("plans identical output dimensions for a Goldback / slab pair", () => {
+    const plan = computeSymmetricalPairPlan(
+      { cropRect: { x: 200, y: 200, width: 880, height: 1320 }, sourceSize: { width: 1536, height: 2048 }, shape: "rect" },
+      { cropRect: { x: 220, y: 300, width: 820, height: 1180 }, sourceSize: { width: 1536, height: 2048 }, shape: "rect" },
+    );
+    expect(plan).not.toBeNull();
+    expect(plan!.outW).toBeGreaterThan(700);
+    expect(plan!.outH).toBeGreaterThan(1000);
+    expect(Math.abs(plan!.rectA.width / plan!.rectA.height - plan!.rectB.width / plan!.rectB.height)).toBeLessThan(0.02);
+  });
+
+  it("forces 1:1 square dimensions when either side is a coin", () => {
+    const plan = computeSymmetricalPairPlan(
+      { cropRect: { x: 200, y: 200, width: 700, height: 700 }, sourceSize: { width: 1500, height: 1500 }, shape: "coin" },
+      { cropRect: { x: 300, y: 300, width: 640, height: 660 }, sourceSize: { width: 1500, height: 1500 }, shape: "rect" },
+    );
+    expect(plan).not.toBeNull();
+    expect(plan!.outW).toBe(plan!.outH);
+  });
+
+  it("skips harmonization when orientations are incompatible", () => {
+    const plan = computeSymmetricalPairPlan(
+      { cropRect: { x: 100, y: 100, width: 500, height: 1000 }, sourceSize: { width: 1500, height: 1500 }, shape: "rect" },
+      { cropRect: { x: 100, y: 100, width: 1000, height: 500 }, sourceSize: { width: 1500, height: 1500 }, shape: "rect" },
+    );
+    expect(plan).toBeNull();
   });
 });

@@ -1492,6 +1492,52 @@ def detect_subject_crop_box(
     return box
 
 
+def align_crop_box_to_size(
+    box: tuple[int, int, int, int],
+    img_size: tuple[int, int],
+    target_size: tuple[int, int],
+) -> tuple[int, int, int, int]:
+    """
+    Expand (never shrink) a crop box around its center so its aspect ratio
+    matches ``target_size``, clamped within ``img_size``.
+    Returns the original ``box`` when orientations are incompatible.
+    """
+    img_w, img_h = img_size
+    tw, th = target_size
+    if tw < 1 or th < 1 or img_w < 1 or img_h < 1:
+        return box
+
+    left, top, right, bottom = box
+    bw = right - left
+    bh = bottom - top
+    if bw < 1 or bh < 1:
+        return box
+
+    t_aspect = tw / th
+    c_aspect = bw / bh
+    is_sq = lambda a: 0.85 <= a <= 1.18
+    if (tw >= th) != (bw >= bh) and not (is_sq(t_aspect) or is_sq(c_aspect)):
+        return box
+
+    w = float(bw)
+    h = float(bh)
+    if c_aspect < t_aspect:
+        w = min(float(img_w), h * t_aspect)
+    elif c_aspect > t_aspect:
+        h = min(float(img_h), w / t_aspect)
+
+    cx = (left + right) / 2.0
+    cy = (top + bottom) / 2.0
+    nx = max(0.0, min(float(img_w) - w, cx - w / 2.0))
+    ny = max(0.0, min(float(img_h) - h, cy - h / 2.0))
+    return (
+        int(round(nx)),
+        int(round(ny)),
+        min(img_w, int(round(nx + w))),
+        min(img_h, int(round(ny + h))),
+    )
+
+
 def process_item_image(
     raw_bytes: bytes,
     *,
@@ -1500,11 +1546,13 @@ def process_item_image(
     max_dimension: int = MAX_IMAGE_DIMENSION,
     shape_hint: str | None = None,
     auto_crop: bool = False,
+    target_size: tuple[int, int] | None = None,
 ) -> tuple[bytes, int, int, str]:
     """
     Normalize EXIF orientation, preserve high resolution (capped at max_dimension),
     optionally crop to the detected subject's edges (rectangle crop only, no
-    background removal), and optionally enhance coin/slab/bar/note detail.
+    background removal), optionally align to a sibling photo's dimensions for
+    Front/Back symmetry, and optionally enhance coin/slab/bar/note detail.
     Returns (processed_bytes, width, height, extension).
     """
     del remove_background
@@ -1522,7 +1570,18 @@ def process_item_image(
                 logger.warning("Auto-crop detection failed; keeping original framing", exc_info=True)
                 box = None
             if box is not None:
-                img = img.crop(box)
+                if target_size is not None and target_size[0] > 0 and target_size[1] > 0:
+                    aligned = align_crop_box_to_size(box, img.size, target_size)
+                    img = img.crop(aligned)
+                    tw, th = target_size
+                    cw, ch = img.size
+                    t_asp = tw / th
+                    c_asp = cw / max(1, ch)
+                    same_orient = (tw >= th) == (cw >= ch) or (0.85 <= t_asp <= 1.18) or (0.85 <= c_asp <= 1.18)
+                    if same_orient and max(tw, th) <= max_dimension:
+                        img = img.resize((tw, th), Image.Resampling.LANCZOS)
+                else:
+                    img = img.crop(box)
 
         if enhance:
             img = _enhance_detail(img)
