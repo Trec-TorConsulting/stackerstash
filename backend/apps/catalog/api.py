@@ -882,7 +882,7 @@ def _should_extract_coin_from_slab(item: CollectionItem, label: str) -> bool:
 
 
 def _item_shape_hint(item: CollectionItem, label: str) -> str | None:
-    """Return 'bar', 'note', or 'coin' so cropping/masking snaps cleanly to item edges."""
+    """Return 'bar', 'note', 'rect', or 'coin' so cropping/masking snaps cleanly to item edges."""
     if label in (ItemPhoto.Label.RECEIPT, ItemPhoto.Label.SLAB_LABEL):
         return None
     if item.category == CollectionItem.Category.BAR:
@@ -892,6 +892,15 @@ def _item_shape_hint(item: CollectionItem, label: str) -> str | None:
         CollectionItem.GradingService.PCGS_BANKNOTE,
     ):
         return "note"
+    # Front/Back consistency & CoA/Assay pre-check: never crop an assay card or proof set as a bare coin
+    card_text = f"{item.title} {item.notes}".lower()
+    if any(k in card_text for k in ("certificate of authenticity", "assay", "proof set", "themed card")):
+        return "rect"
+    sibling = item.photos.exclude(label=label).filter(width__isnull=False, height__isnull=False).first()
+    if sibling and sibling.width and sibling.height:
+        aspect = max(sibling.width, sibling.height) / max(1, min(sibling.width, sibling.height))
+        if aspect >= 1.25:
+            return "rect"
     if (
         item.category in (CollectionItem.Category.COIN, CollectionItem.Category.ROUND)
         and item.grading_service == CollectionItem.GradingService.NONE
