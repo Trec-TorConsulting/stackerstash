@@ -1122,7 +1122,7 @@ def detect_card_rectangle(img: Image.Image) -> tuple[float, float, float, float,
         if rw < 32 or rh < 32:
             continue
         rect_area = float(rw * rh)
-        if rect_area < work_area * 0.10 or rect_area > work_area * 0.86:
+        if rect_area < work_area * 0.10 or rect_area > work_area * 0.96:
             continue
         hull_area = float(cv2.contourArea(cv2.convexHull(cnt)))
         extent = hull_area / max(1.0, rect_area)
@@ -1136,7 +1136,7 @@ def detect_card_rectangle(img: Image.Image) -> tuple[float, float, float, float,
             for pt in box
             if pt[0] <= 2 or pt[0] >= sw - 3 or pt[1] <= 2 or pt[1] >= sh - 3
         )
-        if touching >= 3:
+        if touching >= 4 and rect_area > work_area * 0.95:
             continue
 
         # Verify strong edge support along all 4 sides of the fitted rectangle
@@ -1188,7 +1188,11 @@ def _remove_background_grabcut_guarded(img: Image.Image) -> tuple[Image.Image, b
     bw = int(stats[largest_idx, cv2.CC_STAT_WIDTH])
     bh = int(stats[largest_idx, cv2.CC_STAT_HEIGHT])
     bbox_fill = largest_area / max(1, bw * bh)
-    if largest_area < fg_area * 0.70 or bbox_fill < 0.42:
+    comp_mask = (labels == largest_idx).astype(np.uint8)
+    comp_cnts, _ = cv2.findContours(comp_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    hull_area = float(cv2.contourArea(cv2.convexHull(comp_cnts[0]))) if comp_cnts else float(largest_area)
+    solidity = largest_area / max(1.0, hull_area)
+    if largest_area < fg_area * 0.70 or bbox_fill < 0.55 or solidity < 0.84:
         return img.convert("RGBA"), False
 
     return rgba, True
