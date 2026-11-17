@@ -174,7 +174,7 @@ function buildBackgroundPalette(
     );
   }
 
-  // Drop clusters that hold < 18% of the border (likely a finger or a wide
+  // Drop clusters that hold < 8% of the border (likely a finger or a wide
   // subject grazing the outer margin) so they are not learned as background.
   const counts = new Array(centers.length).fill(0);
   const devs: number[][] = centers.map(() => []);
@@ -185,7 +185,7 @@ function buildBackgroundPalette(
   }
   const keep: number[] = [];
   for (let c = 0; c < centers.length; c++) {
-    if (counts[c] >= samples.length * 0.18) keep.push(c);
+    if (counts[c] >= samples.length * 0.08) keep.push(c);
   }
   if (keep.length === 0) keep.push(counts.indexOf(Math.max(...counts)));
 
@@ -321,7 +321,7 @@ export function detectSubjectInRgba(
 ): AutoCropDetection | null {
   if (w < 16 || h < 16 || rgba.length < w * h * 4) return null;
 
-  const band = Math.max(2, Math.round(Math.min(w, h) * 0.03));
+  const band = Math.max(2, Math.round(Math.min(w, h) * 0.04));
   const { centers, thresholds } = buildBackgroundPalette(rgba, w, h, band);
 
   // Luma + gradient; gradient threshold adapts to border texture.

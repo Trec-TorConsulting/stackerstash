@@ -933,6 +933,11 @@ def _item_shape_hint(item: CollectionItem, label: str) -> str | None:
         if aspect >= 1.25:
             return "rect"
     if (
+        item.category == CollectionItem.Category.SLAB
+        or item.grading_service != CollectionItem.GradingService.NONE
+    ):
+        return "rect"
+    if (
         item.category in (CollectionItem.Category.COIN, CollectionItem.Category.ROUND)
         and item.grading_service == CollectionItem.GradingService.NONE
     ):
