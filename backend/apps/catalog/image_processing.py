@@ -1356,8 +1356,10 @@ def analyze_image_quality_and_forensics(
             gray = img.convert("L")
             gray.thumbnail((512, 512), Image.Resampling.BILINEAR)
             brightness = float(ImageStat.Stat(gray).mean[0])
+            p95_brightness = float(np.percentile(np.asarray(gray), 95))
             metrics["brightness"] = round(brightness, 1)
-            if brightness < 35:
+            metrics["p95_brightness"] = round(p95_brightness, 1)
+            if brightness < 18 or (brightness < 35 and p95_brightness < 60):
                 warnings.append("Image is too dark / underexposed — add more light.")
             elif brightness > 235:
                 warnings.append("Image is overexposed / blown out — reduce glare or flash.")
