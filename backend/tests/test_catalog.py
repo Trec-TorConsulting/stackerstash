@@ -448,6 +448,35 @@ def test_bar_and_note_cropping_on_textured_dark_mat(api_client, user_a):
     assert p_data["width"] / p_data["height"] > 1.6
 
 
+def test_offcenter_goldback_on_woven_mat_with_glare():
+    from PIL import ImageDraw
+
+    from apps.catalog.image_processing import detect_subject_crop_box
+
+    # Off-center Goldback near top-left on a woven carbon-fiber mat with
+    # bright specular glare in the bottom-right corner.
+    img = Image.new("RGB", (500, 560), color=(58, 62, 62))
+    draw = ImageDraw.Draw(img)
+    for y in range(0, 560, 6):
+        for x in range(0, 500, 6):
+            base = 76 if ((x // 6) + (y // 6)) % 2 == 0 else 52
+            if x > 280 and y > 280:
+                glare = min(145, int(((x - 280) + (y - 280)) * 0.45))
+                base = min(245, base + glare)
+            draw.rectangle((x, y, x + 5, y + 5), fill=(base, base, base))
+
+    draw.rectangle((22, 20, 240, 380), fill=(205, 165, 95), outline=(140, 105, 45), width=4)
+    draw.rectangle((45, 55, 215, 340), fill=(195, 152, 82))
+
+    box = detect_subject_crop_box(img, shape_hint="rect")
+    assert box is not None
+    left, top, right, bottom = box
+    assert left <= 22
+    assert top <= 20
+    assert 240 <= right <= 285
+    assert 380 <= bottom <= 425
+
+
 @pytest.mark.django_db
 def test_proof_coin_and_sleeved_note_background_removal():
     from PIL import ImageDraw

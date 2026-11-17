@@ -168,6 +168,26 @@ describe("detectSubjectInRgba", () => {
     expect(evaluateDetection(det)).toBe("low_confidence");
   });
 
+  it("finds an off-center Goldback near the top-left on a woven mat with bottom-right glare", () => {
+    const w = 256;
+    const h = 256;
+    const img = makeImage(w, h, (x, y) => {
+      const weave = ((x >> 2) + (y >> 2)) % 2 === 0 ? 55 : 75;
+      // Bright specular glare in the bottom-right quadrant of the mat
+      const glare = x > 145 && y > 145 ? Math.min(130, ((x - 145) + (y - 145)) * 0.8) : 0;
+      return [weave + glare, weave + glare, weave + glare];
+    });
+    paintRect(img, w, 10, 10, 110, 175, [205, 165, 95]);
+
+    const det = detectSubjectInRgba(img, w, h)!;
+    expect(det).not.toBeNull();
+    expect(det.x * w).toBeLessThan(20);
+    expect(det.y * h).toBeLessThan(20);
+    expect((det.x + det.width) * w).toBeLessThan(135);
+    expect((det.y + det.height) * h).toBeLessThan(200);
+    expect(evaluateDetection(det)).toBeNull();
+  });
+
   it("rejects degenerate inputs", () => {
     expect(detectSubjectInRgba(new Uint8ClampedArray(10), 4, 4)).toBeNull();
   });

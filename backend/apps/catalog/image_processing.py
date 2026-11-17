@@ -1081,40 +1081,16 @@ _RECT_CORNER_RATIOS = {
 }
 
 
-def detect_card_rectangle(img: Image.Image) -> tuple[float, float, float, float, float] | None:
-    """
-    Detect an opaque rectangular card, assay pack, graded slab, proof set, or banknote
-    directly from multi-channel edge contours before running pixel-level GrabCut.
-    Returns (cx, cy, rw, rh, angle) in original image pixel coordinates, or None.
-    """
-    orig_w, orig_h = img.size
-    if orig_w < 48 or orig_h < 48:
-        return None
-
-    work_max = 560.0
-    scale = min(1.0, work_max / max(orig_w, orig_h))
-    sw = max(32, int(round(orig_w * scale)))
-    sh = max(32, int(round(orig_h * scale)))
-
-    rgb = np.array(img.convert("RGB").resize((sw, sh), Image.Resampling.BILINEAR))
-    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
-    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
-
-    edge_map = cv2.Canny(cv2.GaussianBlur(clahe, (5, 5), 1.0), 40, 120)
-    for ch in range(3):
-        ch_blur = cv2.GaussianBlur(lab[:, :, ch], (5, 5), 1.0)
-        edge_map = np.maximum(edge_map, cv2.Canny(ch_blur, 35, 110))
-
+def _best_card_rect_from_contours(
+    edge_map: np.ndarray,
+    closed_map: np.ndarray,
+    sw: int,
+    sh: int,
+    scale: float,
+) -> tuple[tuple[float, float, float, float, float] | None, float]:
+    """Score rectangular contours from an edge map and return (rect, score)."""
     edge_support = cv2.dilate(edge_map, np.ones((5, 5), np.uint8))
-    closed = cv2.morphologyEx(
-        cv2.dilate(edge_map, np.ones((3, 3), np.uint8)),
-        cv2.MORPH_CLOSE,
-        np.ones((7, 7), np.uint8),
-    )
-
-    contours, _ = cv2.findContours(closed, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(closed_map, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     work_area = float(sw * sh)
     best_rect: tuple[float, float, float, float, float] | None = None
     best_score = -1.0
@@ -1125,7 +1101,7 @@ def detect_card_rectangle(img: Image.Image) -> tuple[float, float, float, float,
         if rw < 32 or rh < 32:
             continue
         rect_area = float(rw * rh)
-        if rect_area < work_area * 0.10 or rect_area > work_area * 0.96:
+        if rect_area < work_area * 0.08 or rect_area > work_area * 0.96:
             continue
         hull_area = float(cv2.contourArea(cv2.convexHull(cnt)))
         extent = hull_area / max(1.0, rect_area)
@@ -1133,7 +1109,11 @@ def detect_card_rectangle(img: Image.Image) -> tuple[float, float, float, float,
             continue
 
         box = cv2.boxPoints(rect)
-        # Reject full-frame borders
+        if any(
+            pt[0] < -sw * 0.05 or pt[0] > sw * 1.05 or pt[1] < -sh * 0.05 or pt[1] > sh * 1.05
+            for pt in box
+        ):
+            continue
         touching = sum(
             1
             for pt in box
@@ -1155,7 +1135,8 @@ def detect_card_rectangle(img: Image.Image) -> tuple[float, float, float, float,
         if min(side_covs) < 0.30 or float(np.mean(side_covs)) < 0.52:
             continue
 
-        score = rect_area * extent * float(np.mean(side_covs))
+        touch_penalty = 0.25 if touching >= 2 else (0.7 if touching == 1 else 1.0)
+        score = float(np.sqrt(rect_area)) * extent * float(np.mean(side_covs)) * touch_penalty
         if score > best_score:
             best_score = score
             best_rect = (
@@ -1166,6 +1147,53 @@ def detect_card_rectangle(img: Image.Image) -> tuple[float, float, float, float,
                 float(angle),
             )
 
+    return best_rect, best_score
+
+
+def detect_card_rectangle(img: Image.Image) -> tuple[float, float, float, float, float] | None:
+    """
+    Detect an opaque rectangular card, assay pack, graded slab, proof set, or banknote
+    directly from multi-channel edge contours before running pixel-level GrabCut.
+    Returns (cx, cy, rw, rh, angle) in original image pixel coordinates, or None.
+    """
+    orig_w, orig_h = img.size
+    if orig_w < 48 or orig_h < 48:
+        return None
+
+    work_max = 560.0
+    scale = min(1.0, work_max / max(orig_w, orig_h))
+    sw = max(32, int(round(orig_w * scale)))
+    sh = max(32, int(round(orig_h * scale)))
+
+    rgb = np.array(img.convert("RGB").resize((sw, sh), Image.Resampling.BILINEAR))
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+
+    sharp_edges = cv2.Canny(cv2.GaussianBlur(clahe, (5, 5), 1.0), 40, 120)
+    for ch in range(3):
+        ch_blur = cv2.GaussianBlur(lab[:, :, ch], (5, 5), 1.0)
+        sharp_edges = np.maximum(sharp_edges, cv2.Canny(ch_blur, 35, 110))
+    sharp_closed = cv2.morphologyEx(
+        cv2.dilate(sharp_edges, np.ones((3, 3), np.uint8)),
+        cv2.MORPH_CLOSE,
+        np.ones((7, 7), np.uint8),
+    )
+    best_rect, best_score = _best_card_rect_from_contours(sharp_edges, sharp_closed, sw, sh, scale)
+
+    # Bilateral-filtered pass suppresses woven mat texture (e.g. carbon fiber under
+    # glare) that otherwise merges with the subject in the dilated CLAHE pass.
+    smooth_lab = cv2.cvtColor(cv2.bilateralFilter(bgr, 9, 60, 60), cv2.COLOR_BGR2LAB)
+    smooth_edges = np.zeros((sh, sw), dtype=np.uint8)
+    for ch in range(3):
+        smooth_edges = np.maximum(smooth_edges, cv2.Canny(smooth_lab[:, :, ch], 35, 105))
+    smooth_closed = cv2.morphologyEx(smooth_edges, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    smooth_rect, smooth_score = _best_card_rect_from_contours(
+        smooth_edges, smooth_closed, sw, sh, scale
+    )
+    if smooth_rect is not None and smooth_score > best_score:
+        return smooth_rect
     return best_rect
 
 
@@ -1265,7 +1293,7 @@ def _detect_salient_subject_bounds(img: Image.Image) -> tuple[float, float, floa
 
     rgb = np.array(img.convert("RGB").resize((sw, sh), Image.Resampling.BILINEAR), dtype=np.float32)
 
-    band = max(2, int(round(min(sw, sh) * 0.06)))
+    band = max(2, int(round(min(sw, sh) * 0.03)))
     border_mask = np.zeros((sh, sw), dtype=bool)
     border_mask[:band, :] = True
     border_mask[-band:, :] = True
@@ -1306,7 +1334,11 @@ def _detect_salient_subject_bounds(img: Image.Image) -> tuple[float, float, floa
         dist_map = np.abs(rgb - center.reshape(1, 1, 3)).sum(axis=2)
         is_bg |= dist_map <= thresh
 
-    luma = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
+    luma = cv2.GaussianBlur(
+        0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2],
+        (3, 3),
+        0.8,
+    )
     gx = cv2.Sobel(luma, cv2.CV_32F, 1, 0, ksize=3)
     gy = cv2.Sobel(luma, cv2.CV_32F, 0, 1, ksize=3)
     grad = (np.abs(gx) + np.abs(gy)) / 4.0
@@ -1429,7 +1461,21 @@ def detect_subject_crop_box(
         circle is None or (np.pi * (circle[2] ** 2)) < 0.25 * (card_rect[2] * card_rect[3])
     ):
         # A card/slab/note that contains (or dwarfs) any coin: keep the whole holder.
-        bounds = _rotated_rect_bounds(card_rect)
+        card_bounds = _rotated_rect_bounds(card_rect)
+        # Guard against inner printed artwork boxes (e.g. Goldback/banknote frames)
+        # when the full salient subject is substantially larger and encloses it.
+        salient = _detect_salient_subject_bounds(img)
+        if salient is not None:
+            c_area = max(1.0, (card_bounds[2] - card_bounds[0]) * (card_bounds[3] - card_bounds[1]))
+            s_area = max(1.0, (salient[2] - salient[0]) * (salient[3] - salient[1]))
+            ix = max(0.0, min(card_bounds[2], salient[2]) - max(card_bounds[0], salient[0]))
+            iy = max(0.0, min(card_bounds[3], salient[3]) - max(card_bounds[1], salient[1]))
+            if (ix * iy) >= 0.80 * c_area and c_area < 0.65 * s_area:
+                bounds = salient
+            else:
+                bounds = card_bounds
+        else:
+            bounds = card_bounds
     elif circle is not None:
         cx, cy, r = circle
         bounds = (cx - r, cy - r, cx + r, cy + r)
@@ -1578,7 +1624,7 @@ def process_item_image(
                     t_asp = tw / th
                     c_asp = cw / max(1, ch)
                     same_orient = (tw >= th) == (cw >= ch) or (0.85 <= t_asp <= 1.18) or (0.85 <= c_asp <= 1.18)
-                    if same_orient and max(tw, th) <= max_dimension:
+                    if same_orient and abs(c_asp - t_asp) <= 0.05 and max(tw, th) <= max_dimension:
                         img = img.resize((tw, th), Image.Resampling.LANCZOS)
                 else:
                     img = img.crop(box)

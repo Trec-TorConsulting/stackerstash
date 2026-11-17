@@ -323,7 +323,7 @@ export function detectSubjectInRgba(
 ): AutoCropDetection | null {
   if (w < 16 || h < 16 || rgba.length < w * h * 4) return null;
 
-  const band = Math.max(2, Math.round(Math.min(w, h) * 0.04));
+  const band = Math.max(2, Math.round(Math.min(w, h) * 0.025));
   const { centers, thresholds } = buildBackgroundPalette(rgba, w, h, band);
 
   // Luma + gradient; gradient threshold adapts to border texture.
