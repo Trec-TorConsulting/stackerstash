@@ -1,4 +1,4 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Ollama vision and appraisal fallback avoids grammar-lock empty responses
 `_call_ollama_vision` and `estimate_item_value_with_ai` SHALL NOT force `"format": "json"` on Ollama `/api/chat` requests, SHALL use a `45.0` second timeout (bounded by the request deadline), and SHALL fall back to `message.thinking` if `message.content` and `response` are empty.

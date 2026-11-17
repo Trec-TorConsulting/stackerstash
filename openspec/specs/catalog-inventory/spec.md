@@ -39,11 +39,15 @@ The system SHALL allow each item to store multiple labeled photos (e.g., Obverse
 - **THEN** the system uses LAB border-saliency GrabCut seeding, detects the tight oriented rectangle, and applies an anti-aliased rounded-rectangle alpha cutout (`0.075` corner ratio for bars, `0.015` for notes) before cropping tightly
 
 ### Requirement: Sorting, filtering, and search
-The system SHALL allow users to sort and filter their collection by category, metal type, container, grading service, item status, tags, purchase date, current value, melt value, and gain/loss, plus full-text search.
+The system SHALL allow users to sort and filter their collection by category, primary sort category, sub-category, graded status, metal type, container, grading service, item status, tags, purchase date, current value, melt value, and gain/loss, plus full-text search.
 
 #### Scenario: Sort by most valuable items
 - **WHEN** a user selects sort by current value descending in the collection view
 - **THEN** the system returns items ordered from highest to lowest current estimated value with images visible
+
+#### Scenario: Filter by sub-category and graded status
+- **WHEN** a user filters the collection by primary sort category `Coins`, sub-category `Mexico`, and graded status `Graded`
+- **THEN** the system returns only graded coin items (including coin slabs) whose sub-category is `Mexico`
 
 ### Requirement: Item lifecycle status, tags, and presets
 The system SHALL track item status (`IN_COLLECTION`, `FOR_SALE`, `SOLD`, `WISHLIST`), user-defined tags, and quick-add bullion/constitutional silver presets (such as 90% US silver, 1oz .999 silver round, 1kg copper bar) to accelerate bulk entry.
@@ -58,3 +62,21 @@ The system SHALL allow users to bulk-import items from CSV spreadsheets with val
 #### Scenario: Bulk import from CSV
 - **WHEN** a user uploads a valid CSV file of holdings and confirms the column mapping preview
 - **THEN** the system creates the corresponding items in the user's active workspace and reports any row-level validation errors
+
+### Requirement: Grouped category and sub-category collection view
+The system SHALL provide a grouped browse mode in the collection view that organizes items under canonical primary categories (`Coins`, `Paper Currency`, `Bars / Ingots`, `Rounds`, `Other`) and nested sub-categories (Country/Origin including `Ancient` for Coins and Paper Currency; Mint/Pourer/Refiner for Bars and Rounds), displaying item counts and aggregate values per group.
+
+#### Scenario: Browse collection grouped by category and sub-category
+- **WHEN** a user selects the grouped category view in the collection page
+- **THEN** the system renders collapsible primary category sections (`Coins`, `Paper Currency`, `Bars / Ingots`, etc.) containing nested sub-category groups (e.g., `United States`, `Mexico`, `Ancient`, `Geiger Edelmetalle`) with item counts and totals
+
+#### Scenario: Graded slabs display Graded badge inside parent category
+- **WHEN** a graded coin slab appears under `Coins -> United States` or a PMG banknote appears under `Paper Currency -> United States` in the grouped view
+- **THEN** the item card displays a visible `Graded` badge alongside its grading service and grade
+
+### Requirement: Manual sort category and sub-category override on items
+The system SHALL allow users to view and manually edit an item's primary sort category and sub-category from the item detail view, or reset it to automatic classification.
+
+#### Scenario: User overrides item sub-category
+- **WHEN** a user edits an item's sub-category to a custom value (e.g., `Bison Bullion`) and saves
+- **THEN** the system persists the new sub-category, sets `sort_override` to true, and places the item under that sub-category in the collection view

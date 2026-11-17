@@ -77,6 +77,37 @@ def extract_text_from_images(images: list[tuple[bytes, str]]) -> str:
     return "\n".join(lines)
 
 
+def extract_barcode_hint(images: list[tuple[bytes, str]]) -> str:
+    """
+    Decode QR codes from uploaded images (e.g. PCGS/NGC/PMG slab QR codes)
+    and extract any embedded certification number. Returns empty string if none found.
+    """
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        return ""
+
+    detector = cv2.QRCodeDetector()
+    for img_bytes, _ in images:
+        try:
+            with Image.open(io.BytesIO(img_bytes)) as opened:
+                img = ImageOps.exif_transpose(opened).convert("RGB")
+                if max(img.size) > 1200:
+                    img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+                arr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+            data, _, _ = detector.detectAndDecode(arr)
+            if not data:
+                continue
+            m = re.search(r"(\d{7,10}(?:-\d{3})?)", data)
+            if m:
+                return m.group(1)
+            return data.strip()[:64]
+        except Exception:
+            continue
+    return ""
+
+
 _WORD_DENOM_MAP: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bONE\s+HUNDRED\s+DOLLARS?\b", re.I), "$100"),
     (re.compile(r"\bFIFTY\s+DOLLARS?\b", re.I), "$50"),
@@ -134,8 +165,14 @@ def parse_ocr_numismatic_hints(
     # 3. Cert number
     cert_number = (barcode_hint or "").strip()
     if not cert_number and grading_service != "NONE":
+        pcgs_slash = re.search(r"\b\d{4,7}\.\d{1,2}/(\d{7,10})\b", upper)
+        ngc_dash = re.search(r"\b(\d{7,10}-\d{3})\b", upper)
         cert_match = re.search(r"(?:CERT(?:\s*#|\s*NO\.?)?|#)\s*:?\s*(\d{7,10})\b", upper)
-        if cert_match:
+        if pcgs_slash:
+            cert_number = pcgs_slash.group(1)
+        elif ngc_dash:
+            cert_number = ngc_dash.group(1)
+        elif cert_match:
             cert_number = cert_match.group(1)
         else:
             # Look for standalone 7-10 digit slab registry number
@@ -167,6 +204,8 @@ def parse_ocr_numismatic_hints(
             "BANKNOTE",
             "PMG",
             "PCGS BANKNOTE",
+            "GOLDBACK",
+            "NEGOTIABLE INSTRUMENT",
         )
     ) or bool(serial_number)
 

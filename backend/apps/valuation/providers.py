@@ -61,10 +61,39 @@ def fetch_spot_prices_from_gold_api(timeout: float = 8.0) -> dict[str, Decimal]:
     return prices
 
 
+def _hydrate_cached_specs(specs: dict[str, Any]) -> dict[str, Any]:
+    out = dict(specs or {})
+    for dec_key in ("diameter_mm", "thickness_mm", "gross_weight_grams"):
+        if dec_key in out and out[dec_key] is not None and not isinstance(out[dec_key], Decimal):
+            try:
+                out[dec_key] = Decimal(str(out[dec_key]))
+            except Exception:
+                pass
+    return out
+
+
+def _serialize_specs_for_cache(specs: dict[str, Any]) -> dict[str, Any]:
+    return {
+        k: (str(v) if isinstance(v, Decimal) else v)
+        for k, v in (specs or {}).items()
+    }
+
+
 def lookup_pcgs_cert(cert_number: str, pcgs_token: str, timeout: float = 10.0) -> dict[str, Any] | None:
     """Query PCGS Public API for cert details and price guide value when BYOK token is set."""
     if not cert_number or not pcgs_token:
         return None
+    from apps.vision.cache import lookup_cert_cache, store_cert_cache
+
+    cached = lookup_cert_cache("PCGS", cert_number)
+    if cached and cached.get("market_value"):
+        return {
+            "market_value": Decimal(str(cached["market_value"])),
+            "source": cached.get("source") or "PCGS",
+            "specs": _hydrate_cached_specs(cached.get("specs") or {}),
+            "raw": cached.get("raw") or {},
+        }
+
     url = f"https://api.pcgs.com/publicapi/coindetails/GetCoinFactsByCertNo/{cert_number}"
     try:
         with httpx.Client(timeout=timeout) as client:
@@ -99,8 +128,20 @@ def lookup_pcgs_cert(cert_number: str, pcgs_token: str, timeout: float = 10.0) -
             if data.get("PCGSNo"):
                 specs["catalog_numbers"] = {"PCGS": str(data["PCGSNo"])}
             if price is not None and Decimal(str(price)) > 0:
+                mv = Decimal(str(price)).quantize(Decimal("0.01"))
+                store_cert_cache(
+                    "PCGS",
+                    cert_number,
+                    {
+                        "market_value": str(mv),
+                        "source": "PCGS",
+                        "specs": _serialize_specs_for_cache(specs),
+                        "raw": data,
+                    },
+                    source="PCGS",
+                )
                 return {
-                    "market_value": Decimal(str(price)).quantize(Decimal("0.01")),
+                    "market_value": mv,
                     "source": "PCGS",
                     "specs": specs,
                     "raw": data,
@@ -218,7 +259,17 @@ def lookup_numista_specs(
     """Query Numista v3 API for coin specifications (mintage, weight, diameter, composition)."""
     if not title or not api_key:
         return None
+    from apps.vision.cache import lookup_cert_cache, store_cert_cache
+
     query = " ".join(part for part in [year, country, denomination, title] if part).strip()
+    cache_key = query.lower()[:64]
+    cached = lookup_cert_cache("NUMISTA", cache_key)
+    if cached and isinstance(cached.get("specs"), dict):
+        return {
+            "specs": _hydrate_cached_specs(cached["specs"]),
+            "raw": cached.get("raw") or {},
+        }
+
     headers = {"Numista-API-Key": api_key}
     try:
         with httpx.Client(timeout=timeout) as client:
@@ -272,6 +323,12 @@ def lookup_numista_specs(
                     specs["mintage"] = int(detail["mintage"])
                 except (TypeError, ValueError):
                     pass
+            store_cert_cache(
+                "NUMISTA",
+                cache_key,
+                {"specs": _serialize_specs_for_cache(specs), "raw": detail},
+                source="NUMISTA",
+            )
             return {"specs": specs, "raw": detail}
     except Exception as exc:
         logger.warning("Numista lookup failed for %s: %s", title, exc)

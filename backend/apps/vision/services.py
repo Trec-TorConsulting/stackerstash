@@ -17,7 +17,7 @@ from apps.accounts.models import ProviderCredential, Workspace
 from apps.catalog.models import CollectionItem
 
 from .models import IdentificationJob
-from .ocr import extract_text_from_images, parse_ocr_numismatic_hints
+from .ocr import extract_barcode_hint, extract_text_from_images, parse_ocr_numismatic_hints
 
 logger = logging.getLogger(__name__)
 
@@ -530,14 +530,16 @@ def _attempt_ocr_fallback(
     skip_ollama_text: bool = False,
     skip_gemini: bool = False,
     deadline: float | None = None,
+    precomputed_ocr_text: str | None = None,
+    precomputed_hints: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Run local OCR, optional text-only LLM structuring, and deterministic catalog enrichment."""
     if deadline is not None and deadline - time.monotonic() < 12.0:
         return None
-    ocr_text = extract_text_from_images(vision_images)
+    ocr_text = precomputed_ocr_text if precomputed_ocr_text is not None else extract_text_from_images(vision_images)
     if not ocr_text.strip():
         return None
-    hints = parse_ocr_numismatic_hints(ocr_text, barcode_hint=barcode_hint)
+    hints = precomputed_hints if precomputed_hints is not None else parse_ocr_numismatic_hints(ocr_text, barcode_hint=barcode_hint)
     if not hints.get("has_usable_hints"):
         return None
 
@@ -680,6 +682,45 @@ def _merge_ocr_hints_into_parsed(
     return merged
 
 
+def _build_vision_composite(
+    images: list[tuple[bytes, str]], max_side: int = 768
+) -> list[tuple[bytes, str]]:
+    """
+    Combine 2+ prepared images into a single side-by-side composite JPEG
+    (<= max_side px) to cut Vision AI image token usage by ~50-65%.
+    Falls back to the input list if any image cannot be decoded.
+    """
+    if len(images) <= 1:
+        return images
+    try:
+        decoded: list[Image.Image] = []
+        for raw, _ in images[:2]:
+            with Image.open(io.BytesIO(raw)) as opened:
+                decoded.append(ImageOps.exif_transpose(opened).convert("RGB"))
+        if len(decoded) < 2:
+            return images
+        target_h = min(max_side // 2, max(im.height for im in decoded))
+        target_h = max(128, target_h)
+        resized = []
+        for im in decoded:
+            w = max(1, int(round(im.width * (target_h / max(1, im.height)))))
+            resized.append(im.resize((w, target_h), Image.Resampling.LANCZOS))
+        gap = 8
+        total_w = sum(im.width for im in resized) + gap
+        canvas = Image.new("RGB", (total_w, target_h), (24, 24, 28))
+        x = 0
+        for im in resized:
+            canvas.paste(im, (x, 0))
+            x += im.width + gap
+        if max(canvas.size) > max_side:
+            canvas.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+        out = io.BytesIO()
+        canvas.save(out, format="JPEG", quality=85, optimize=True)
+        return [(out.getvalue(), "image/jpeg")]
+    except Exception:
+        return images
+
+
 def _record_vision_success(
     workspace: Workspace,
     provider_used: str,
@@ -689,8 +730,16 @@ def _record_vision_success(
     intake_mode: str,
     warning: str | None = None,
     quota_deferred: bool = False,
+    cache_result: bool = True,
 ) -> dict[str, Any]:
     candidate = _normalize_candidate(res["parsed"], barcode_hint)
+    if cache_result and provider_used not in ("MANUAL", "CACHE"):
+        try:
+            from apps.vision.cache import store_image_cache
+
+            store_image_cache(workspace, images, provider_used, candidate)
+        except Exception:
+            pass
     job = IdentificationJob.objects.create(
         workspace=workspace,
         status=IdentificationJob.Status.SUCCEEDED,
@@ -717,8 +766,104 @@ def identify_images(
     workspace: Workspace,
     barcode_hint: str | None = None,
     intake_mode: str = "camera",
+    identify_mode: str = "full",
 ) -> dict[str, Any]:
-    """Identify item metadata from images using Gemini cascade, Groq, OpenRouter, Ollama, or OCR/manual fallback."""
+    """
+    Identify item metadata using a local-first cascade:
+      1. Exact SHA-256 / perceptual dHash image cache (0 tokens)
+      2. Local QR/barcode + RapidOCR + CertLookupCache + static reference catalog (0 tokens)
+      3. Text-only LLM structuring when OCR yields rich text (no image tokens)
+      4. Compact composite Vision AI (Gemini -> Groq -> OpenRouter -> Ollama)
+    When ``identify_mode == 'fast_local'``, stops after Step 2 (zero LLM calls).
+    """
+    from apps.catalog.reference_catalog import match_static_reference
+    from apps.vision.cache import lookup_cert_cache, lookup_image_cache
+
+    # 1. Image hash cache hit (SHA-256 or close perceptual dHash)
+    cached_hit = lookup_image_cache(workspace, images)
+    if cached_hit and cached_hit.get("parsed_candidate"):
+        return _record_vision_success(
+            workspace,
+            "CACHE",
+            {"parsed": cached_hit["parsed_candidate"], "raw": {"cached_from": cached_hit.get("provider_used")}},
+            images,
+            barcode_hint,
+            intake_mode,
+            warning="Identified instantly from local image cache (0 AI tokens).",
+            cache_result=False,
+        )
+
+    vision_images = _prepare_images_for_vision(images)
+
+    # 2. Local barcode/QR + RapidOCR + Cert cache + Static reference catalog
+    if not barcode_hint:
+        barcode_hint = extract_barcode_hint(images) or None
+
+    ocr_text = ""
+    hints: dict[str, Any] = {}
+    try:
+        ocr_text = extract_text_from_images(vision_images)
+        if ocr_text.strip() or barcode_hint:
+            hints = parse_ocr_numismatic_hints(ocr_text, barcode_hint=barcode_hint)
+    except Exception as exc:
+        logger.debug("Pre-vision OCR pass skipped: %s", exc)
+
+    if hints.get("grading_service") not in (None, "", "NONE") and hints.get("cert_number"):
+        cert_cached = lookup_cert_cache(hints["grading_service"], hints["cert_number"])
+        if cert_cached:
+            if cert_cached.get("title") and not hints.get("title"):
+                hints["title"] = cert_cached["title"]
+            if cert_cached.get("grade") and not hints.get("grade"):
+                hints["grade"] = cert_cached["grade"]
+
+    static_match = match_static_reference(ocr_text, hints)
+    if static_match and static_match.get("candidate"):
+        enriched = _enrich_candidate_from_catalog(
+            _normalize_candidate(static_match["candidate"], barcode_hint),
+            workspace,
+        )
+        return _record_vision_success(
+            workspace,
+            "LOCAL_CATALOG",
+            {"parsed": enriched, "raw": {"ocr_text": ocr_text, "static_key": static_match.get("key")}},
+            images,
+            barcode_hint,
+            intake_mode,
+            warning="Identified locally via OCR + static collectible catalog (0 AI tokens).",
+        )
+
+    if identify_mode == "fast_local":
+        if hints.get("has_usable_hints"):
+            return _record_vision_success(
+                workspace,
+                "OCR_LOCAL",
+                {"parsed": hints, "raw": {"ocr_text": ocr_text}},
+                images,
+                barcode_hint,
+                intake_mode,
+                warning="Identified locally via OCR (Fast Bulk Mode, 0 AI tokens).",
+                quota_deferred=True,
+                cache_result=False,
+            )
+        fallback_candidate = _normalize_candidate({}, barcode_hint)
+        job = IdentificationJob.objects.create(
+            workspace=workspace,
+            status=IdentificationJob.Status.MANUAL_FALLBACK,
+            provider_used="MANUAL",
+            parsed_candidate=fallback_candidate,
+            error_message="Fast Bulk Mode: no local OCR/catalog match",
+        )
+        v_status, v_warnings = _run_image_verification(images, None, intake_mode)
+        return {
+            "job_id": str(job.id),
+            "provider_used": "MANUAL",
+            "candidate": fallback_candidate,
+            "warning": "Fast Bulk Mode: saved with basic details; AI enrichment queued.",
+            "verification_status": v_status,
+            "verification_warnings": v_warnings,
+            "quota_deferred": True,
+        }
+
     prompt = IDENTIFICATION_PROMPT
     if barcode_hint:
         prompt += f"\nDetected slab barcode/QR hint: {barcode_hint}\n"
@@ -731,12 +876,48 @@ def identify_images(
         _get_secret(workspace, ProviderCredential.Provider.OLLAMA_MODEL) or "llama3.2-vision"
     )
 
-    vision_images = _prepare_images_for_vision(images)
     provider_errors: list[str] = []
     # Stay safely under Gunicorn's 60s worker timeout in production
     deadline = time.monotonic() + 40.0
     ollama_failed = False
     gemini_quota_hit = False
+
+    # 3. Text-only LLM tier when OCR extracted rich text (avoids sending image tokens)
+    if len(ocr_text.strip()) >= 25 and hints.get("has_usable_hints"):
+        ocr_text_res = _attempt_ocr_fallback(
+            workspace=workspace,
+            images=images,
+            vision_images=vision_images,
+            barcode_hint=barcode_hint,
+            intake_mode=intake_mode,
+            gemini_key=gemini_key,
+            groq_key=groq_key,
+            openrouter_key=openrouter_key,
+            ollama_url=ollama_url,
+            ollama_model=ollama_model,
+            provider_errors=provider_errors,
+            skip_ollama_text=False,
+            skip_gemini=_is_gemini_in_cooldown(workspace),
+            deadline=deadline,
+            precomputed_ocr_text=ocr_text,
+            precomputed_hints=hints,
+        )
+        if (
+            ocr_text_res is not None
+            and ocr_text_res.get("provider_used") == "OCR_TEXT"
+            and (ocr_text_res.get("candidate", {}).get("title") or "").strip()
+        ):
+            try:
+                from apps.vision.cache import store_image_cache
+
+                store_image_cache(workspace, images, "OCR_TEXT", ocr_text_res["candidate"])
+            except Exception:
+                pass
+            ocr_text_res["warning"] = "Identified via OCR + text-only LLM (zero image tokens)."
+            return ocr_text_res
+
+    # 4. Compact composite Vision AI escalation
+    compact_vision_images = _build_vision_composite(vision_images, max_side=768)
 
     if gemini_key:
         if _is_gemini_in_cooldown(workspace):
@@ -746,7 +927,7 @@ def identify_images(
             try:
                 remaining = deadline - time.monotonic()
                 res = _call_gemini_vision(
-                    vision_images,
+                    compact_vision_images,
                     gemini_key,
                     prompt,
                     timeout=min(25.0, max(5.0, remaining)),
@@ -771,7 +952,7 @@ def identify_images(
                     groq_key,
                     GROQ_VISION_MODEL,
                     prompt,
-                    images=vision_images,
+                    images=compact_vision_images,
                     timeout=min(25.0, remaining),
                 )
                 return _record_vision_success(
@@ -791,7 +972,7 @@ def identify_images(
                     openrouter_key,
                     OPENROUTER_VISION_MODEL,
                     prompt,
-                    images=vision_images,
+                    images=compact_vision_images,
                     extra_headers={"HTTP-Referer": "https://stackerstash.com", "X-Title": "Stackers Stash"},
                     timeout=min(25.0, remaining),
                 )

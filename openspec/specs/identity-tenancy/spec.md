@@ -24,10 +24,10 @@ The system SHALL isolate all collection items, containers, photos, valuations, a
 - **THEN** the system denies access and returns HTTP 404 or 403 without exposing any record metadata
 
 ### Requirement: Encrypted BYOK API key vault
-The system SHALL allow each workspace owner to store, update, and delete personal API credentials (Gemini, PCGS, Greysheet, Ollama URL) encrypted at rest and never returned in plaintext after save.
+The system SHALL allow each workspace owner to store, update, and delete personal API credentials (Gemini, Groq, OpenRouter, PCGS, Greysheet, Numista, NumisMedia, eBay, Ollama URL/Model) encrypted at rest and never returned in plaintext after save.
 
 #### Scenario: Save and mask provider key
-- **WHEN** a user saves a Gemini or PCGS API key in settings
+- **WHEN** a user saves a Gemini, Groq, OpenRouter, or PCGS API key in settings
 - **THEN** the system encrypts the credential at rest and returns only a masked suffix in subsequent settings responses
 
 #### Scenario: Clear provider key
@@ -40,3 +40,10 @@ The system SHALL provide a role-restricted administrative portal for operators t
 #### Scenario: Non-staff user blocked from admin portal
 - **WHEN** a standard collector user navigates to the admin portal
 - **THEN** the system denies access and requires staff/superuser privileges
+
+### Requirement: Workspace auto-sort preference
+The system SHALL store a per-workspace `auto_sort_enabled` preference (enabled by default) and allow workspace owners to toggle it in Settings.
+
+#### Scenario: User disables auto-sort in Settings
+- **WHEN** a workspace owner toggles "Auto-Sort Collection Items" off in Settings and saves
+- **THEN** the system persists `auto_sort_enabled = false` for the active workspace and stops automatic background sorting for newly added items until re-enabled

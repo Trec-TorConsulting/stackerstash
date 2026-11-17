@@ -1,4 +1,4 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Gemini vision model cascade avoids retired models
 `GEMINI_VISION_MODELS` SHALL only include active Gemini vision models (`gemini-2.5-flash` and `gemini-2.5-flash-lite`) and SHALL NOT attempt retired models such as `gemini-2.0-flash`.

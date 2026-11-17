@@ -99,6 +99,7 @@ export function ScanAddPage() {
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [batchMode, setBatchMode] = useState(false);
+  const [fastBulkMode, setFastBulkMode] = useState(true);
   const [batchProgress, setBatchProgress] = useState<string | null>(null);
 
   const [form, setForm] = useState({
@@ -134,11 +135,13 @@ export function ScanAddPage() {
 
   function canIdentifyFiles(
     targetFiles: StagedPhoto[],
-    source: "CAMERA" | "UPLOAD" | "MANUAL"
+    source: "CAMERA" | "UPLOAD" | "MANUAL",
+    forceSingleSide = false
   ) {
     if (!targetFiles.length) return false;
+    if (forceSingleSide && source !== "UPLOAD") return true;
     const needsBothSides =
-      source === "UPLOAD" && (form.category === "COIN" || form.category === "PAPER");
+      form.category === "COIN" || form.category === "SLAB" || form.category === "PAPER";
     if (!needsBothSides) return true;
     return (
       targetFiles.some((f) => f.label === "OBVERSE") &&
@@ -384,9 +387,10 @@ export function ScanAddPage() {
 
   async function runIdentify(
     targetFiles: StagedPhoto[] = files,
-    source: "CAMERA" | "UPLOAD" | "MANUAL" = intakeSource
+    source: "CAMERA" | "UPLOAD" | "MANUAL" = intakeSource,
+    forceSingleSide = false
   ) {
-    if (!canIdentifyFiles(targetFiles, source)) return;
+    if (!canIdentifyFiles(targetFiles, source, forceSingleSide)) return;
     setIdentifying(true);
     setAiNotice(null);
     setQuotaDeferred(false);
@@ -514,7 +518,12 @@ export function ScanAddPage() {
         let candidate: Partial<Awaited<ReturnType<typeof api.identifyImages>>["candidate"]> = {};
         let quotaDeferredItem = false;
         try {
-          const res = await api.identifyImages(normalized, undefined, "upload");
+          const res = await api.identifyImages(
+            normalized,
+            undefined,
+            "upload",
+            fastBulkMode ? "fast_local" : "full"
+          );
           candidate = res.candidate;
           quotaDeferredItem = Boolean(res.quota_deferred);
         } catch {
@@ -546,16 +555,17 @@ export function ScanAddPage() {
           is_estimate: Boolean(candidate.estimated_value_usd),
           notes: candidate.notes || "",
           intake_source: "UPLOAD",
-          ai_enrichment_pending: quotaDeferredItem,
-          auto_appraise: true,
+          ai_enrichment_pending: fastBulkMode ? (!candidate.title || quotaDeferredItem) : quotaDeferredItem,
+          auto_appraise: !fastBulkMode,
         });
 
-        for (let i = 0; i < normalized.length; i++) {
-          const label = i === 0 ? "OBVERSE" : "REVERSE";
-          await api.uploadPhoto(created.id, normalized[i], label, i === 0, {
-            autoCrop: pair[i].serverAutoCrop,
-          });
-        }
+        await Promise.all(
+          normalized.map((normFile, i) =>
+            api.uploadPhoto(created.id, normFile, i === 0 ? "OBVERSE" : "REVERSE", i === 0, {
+              autoCrop: pair[i].serverAutoCrop,
+            })
+          )
+        );
       }
       qc.invalidateQueries({ queryKey: ["items"] });
       qc.invalidateQueries({ queryKey: ["portfolio-summary"] });
@@ -673,7 +683,23 @@ export function ScanAddPage() {
                       : `${files.length} photos attached to 1 item.`}
                   </span>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  {batchMode && (
+                    <label
+                      htmlFor="fast-bulk-toggle"
+                      className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs text-slate-200"
+                      title="Use local OCR & static catalog only (0 AI tokens, instant melt valuation, parallel uploads)."
+                    >
+                      <input
+                        id="fast-bulk-toggle"
+                        type="checkbox"
+                        checked={fastBulkMode}
+                        onChange={(e) => setFastBulkMode(e.target.checked)}
+                        className="h-3.5 w-3.5 accent-amber-500"
+                      />
+                      Fast Bulk (Local OCR, 0 AI)
+                    </label>
+                  )}
                   <button
                     type="button"
                     onClick={() => setBatchMode((v) => !v)}
@@ -799,7 +825,7 @@ export function ScanAddPage() {
               />
               <button
                 type="button"
-                onClick={() => void runIdentify()}
+                onClick={() => void runIdentify(files, intakeSource, true)}
                 disabled={identifying || missingRequiredSides}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-semibold transition disabled:opacity-50"
               >

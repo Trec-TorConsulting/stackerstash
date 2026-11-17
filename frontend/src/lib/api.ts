@@ -445,11 +445,19 @@ export const api = {
   deleteContainer: (id: string) =>
     apiFetch<void>(`/catalog/containers/${id}`, { method: "DELETE" }),
 
-  identifyImages: (files: File[], barcodeHint?: string, intakeMode: "camera" | "upload" = "camera") => {
+  identifyImages: (
+    files: File[],
+    barcodeHint?: string,
+    intakeMode: "camera" | "upload" = "camera",
+    identifyMode: "full" | "fast_local" = "full"
+  ) => {
     const form = new FormData();
     files.forEach((f) => form.append("files", f));
     if (barcodeHint) form.append("barcode_hint", barcodeHint);
     form.append("intake_mode", intakeMode);
+    if (identifyMode !== "full") {
+      form.append("identify_mode", identifyMode);
+    }
     return apiFetch<VisionIdentifyResponse>("/vision/identify", { method: "POST", body: form });
   },
 

@@ -75,6 +75,9 @@ describe("ScanAddPage auto-crop", () => {
 
     expect(await screen.findByText(/Auto-cropped photo to the item's edges/i)).toBeInTheDocument();
     expect(autoCropMock.autoCropImageFile).toHaveBeenCalledWith(original);
+    // Camera mode waits for Back before auto-identifying, unless user clicks Identify with AI
+    expect(identifySpy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /Identify with AI/i }));
     await waitFor(() => expect(identifySpy).toHaveBeenCalled());
     expect(identifySpy.mock.calls[0][0][0]).toBe(cropped);
 
@@ -143,5 +146,43 @@ describe("ScanAddPage auto-crop", () => {
     unmount();
     renderScanAdd();
     expect((screen.getByRole("switch", { name: /Auto-crop to item edges/i }) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("uses fast_local and auto_appraise=false in Fast Bulk Mode", async () => {
+    autoCropMock.autoCropImageFile.mockImplementation(async (f: File) => ({
+      file: f,
+      applied: false,
+      reason: "no_subject",
+      durationMs: 1,
+    }));
+    const identifySpy = mockIdentify();
+    const createSpy = vi.spyOn(api, "createItem").mockResolvedValue({
+      id: "fast-item",
+      appraisal_job_id: null,
+    } as never);
+    const uploadSpy = vi.spyOn(api, "uploadPhoto").mockResolvedValue({} as never);
+
+    const { container } = renderScanAdd();
+    const uploadInput = container.querySelector('input[type="file"][multiple]') as HTMLInputElement;
+    fireEvent.change(uploadInput, {
+      target: {
+        files: [
+          new File(["f1"], "f1.jpg", { type: "image/jpeg" }),
+          new File(["b1"], "b1.jpg", { type: "image/jpeg" }),
+          new File(["f2"], "f2.jpg", { type: "image/jpeg" }),
+          new File(["b2"], "b2.jpg", { type: "image/jpeg" }),
+        ],
+      },
+    });
+
+    const fastToggle = (await screen.findByLabelText(/Fast Bulk/i)) as HTMLInputElement;
+    expect(fastToggle.checked).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: /Catalog All 2 Items/i }));
+
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(2));
+    expect(identifySpy).toHaveBeenCalledWith(expect.any(Array), undefined, "upload", "fast_local");
+    expect(createSpy.mock.calls[0][0]).toMatchObject({ auto_appraise: false });
+    expect(uploadSpy).toHaveBeenCalledTimes(4);
   });
 });
