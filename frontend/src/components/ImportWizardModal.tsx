@@ -52,7 +52,6 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
   const [preview, setPreview] = useState<CsvImportPreview | null>(null);
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [importPhotos, setImportPhotos] = useState(false);
-  const [removeBackground, setRemoveBackground] = useState(false);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -65,7 +64,6 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
     setPreview(null);
     setMapping({});
     setImportPhotos(false);
-    setRemoveBackground(true);
     setErrorMsg(null);
     setResult(null);
   }
@@ -103,7 +101,7 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
     setIsImporting(true);
     setErrorMsg(null);
     try {
-      const res = await api.importMappedCsv(selectedFile, mapping, importPhotos, removeBackground);
+      const res = await api.importMappedCsv(selectedFile, mapping, importPhotos);
       setResult(res);
       const summary = `Imported ${res.created_count} items${
         res.errors.length ? ` (${res.errors.length} row errors)` : ""
@@ -243,17 +241,6 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
                   />
                   Download and attach photos from mapped Image URL columns (best-effort)
                 </label>
-                {importPhotos && (
-                  <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer pl-5">
-                    <input
-                      type="checkbox"
-                      checked={removeBackground}
-                      onChange={(e) => setRemoveBackground(e.target.checked)}
-                      className="rounded border-slate-700 bg-slate-950 text-amber-500"
-                    />
-                    Auto-remove background, crop tightly &amp; enhance coin/slab photos
-                  </label>
-                )}
               </div>
             )}
 

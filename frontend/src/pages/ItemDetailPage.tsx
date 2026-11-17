@@ -197,7 +197,7 @@ export function ItemDetailPage() {
         : !existingLabels.has("REVERSE")
           ? "REVERSE"
           : "OTHER";
-      const uploaded = await api.uploadPhoto(id, normalized, nextLabel, !existingLabels.size, true);
+      const uploaded = await api.uploadPhoto(id, normalized, nextLabel, !existingLabels.size);
       setActivePhotoUrl(uploaded.url);
       qc.invalidateQueries({ queryKey: ["item", id] });
       qc.invalidateQueries({ queryKey: ["items"] });

@@ -484,7 +484,6 @@ def _download_and_validate_photo(
     item_id: Any,
     item_title: str,
     url: str,
-    remove_background: bool = True,
     shape_hint: str | None = None,
 ) -> tuple[tuple[bytes, int, int, str] | None, str | None]:
     """Download, validate, and process a remote image URL. Returns ((content, width, height, ext), warning)."""
@@ -500,7 +499,7 @@ def _download_and_validate_photo(
             img.verify()
         processed, width, height, ext = process_item_image(
             content,
-            remove_background=remove_background,
+            remove_background=False,
             enhance=True,
             shape_hint=shape_hint,
         )
@@ -565,7 +564,6 @@ def import_mapped_csv(
     workspace: Workspace,
     mapping: dict[str, str] | None = None,
     import_photos: bool = False,
-    remove_background: bool = True,
     auto_appraise: bool = True,
 ) -> MappedImportResult:
     """Import CSV rows using explicit or auto-detected column mappings."""
@@ -636,7 +634,6 @@ def import_mapped_csv(
                             task[0].id,
                             task[0].title,
                             task[1],
-                            remove_background=remove_background,
                             shape_hint=(
                                 "bar"
                                 if task[0].category == CollectionItem.Category.BAR

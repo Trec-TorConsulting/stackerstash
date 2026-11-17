@@ -397,20 +397,14 @@ export const api = {
     itemId: string,
     file: File,
     label = "OBVERSE",
-    isPrimary = false,
-    removeBackground = false
+    isPrimary = false
   ) => {
     const form = new FormData();
     form.append("file", file);
     form.append("label", label);
     form.append("is_primary", String(isPrimary));
-    form.append("remove_background", String(removeBackground));
     return apiFetch<ItemPhoto>(`/catalog/items/${itemId}/photos`, { method: "POST", body: form });
   },
-  removePhotoBackground: (itemId: string, photoId: string) =>
-    apiFetch<ItemPhoto>(`/catalog/items/${itemId}/photos/${photoId}/remove-background`, {
-      method: "POST",
-    }),
   rotatePhoto: (itemId: string, photoId: string, degrees: number = 90) =>
     apiFetch<ItemPhoto>(`/catalog/items/${itemId}/photos/${photoId}/rotate`, {
       method: "POST",
@@ -475,14 +469,12 @@ export const api = {
   importMappedCsv: (
     file: File,
     mapping: Record<string, string>,
-    importPhotos: boolean,
-    removeBackground = false
+    importPhotos: boolean
   ) => {
     const form = new FormData();
     form.append("file", file);
     form.append("mapping", JSON.stringify(mapping));
     form.append("import_photos", importPhotos ? "true" : "false");
-    form.append("remove_background", removeBackground ? "true" : "false");
     return apiFetch<MappedCsvImportResult>("/catalog/items/import/mapped", {
       method: "POST",
       body: form,

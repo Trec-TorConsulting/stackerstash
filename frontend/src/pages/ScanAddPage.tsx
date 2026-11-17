@@ -260,7 +260,7 @@ export function ScanAddPage() {
 
       for (let i = 0; i < files.length; i++) {
         const uploadFile = await normalizeImageFileForUpload(files[i].file, 2048, 0.92);
-        await api.uploadPhoto(created.id, uploadFile, files[i].label, i === 0, false);
+        await api.uploadPhoto(created.id, uploadFile, files[i].label, i === 0);
       }
       qc.invalidateQueries({ queryKey: ["items"] });
       qc.invalidateQueries({ queryKey: ["portfolio-summary"] });
@@ -332,7 +332,7 @@ export function ScanAddPage() {
 
         for (let i = 0; i < normalized.length; i++) {
           const label = i === 0 ? "OBVERSE" : "REVERSE";
-          await api.uploadPhoto(created.id, normalized[i], label, i === 0, false);
+          await api.uploadPhoto(created.id, normalized[i], label, i === 0);
         }
       }
       qc.invalidateQueries({ queryKey: ["items"] });

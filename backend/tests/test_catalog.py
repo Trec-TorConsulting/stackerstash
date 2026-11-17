@@ -260,7 +260,7 @@ def test_image_background_removal_and_tight_crop(api_client, user_a):
     upload = SimpleUploadedFile("coin.jpg", buf.getvalue(), content_type="image/jpeg")
     p_resp = api_client.post(
         f"/api/v1/catalog/items/{item['id']}/photos",
-        data={"file": upload, "label": "OBVERSE", "is_primary": "true", "remove_background": "true"},
+        data={"file": upload, "label": "OBVERSE", "is_primary": "true"},
         **headers_a,
     )
     assert p_resp.status_code == 201
@@ -268,12 +268,6 @@ def test_image_background_removal_and_tight_crop(api_client, user_a):
     assert photo_data["width"] == 200
     assert photo_data["height"] == 200
     assert photo_data["url"].endswith(".jpg")
-
-    bg_resp = api_client.post(
-        f"/api/v1/catalog/items/{item['id']}/photos/{photo_data['id']}/remove-background",
-        **headers_a,
-    )
-    assert bg_resp.status_code == 200
 
 
 @pytest.mark.django_db
