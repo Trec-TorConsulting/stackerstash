@@ -398,7 +398,7 @@ export const api = {
     file: File,
     label = "OBVERSE",
     isPrimary = false,
-    removeBackground = true
+    removeBackground = false
   ) => {
     const form = new FormData();
     form.append("file", file);
@@ -476,7 +476,7 @@ export const api = {
     file: File,
     mapping: Record<string, string>,
     importPhotos: boolean,
-    removeBackground = true
+    removeBackground = false
   ) => {
     const form = new FormData();
     form.append("file", file);

@@ -947,7 +947,7 @@ def upload_item_photo(
     file: UploadedFile = File(...),
     label: str = Form(ItemPhoto.Label.OBVERSE),
     is_primary: bool = Form(False),
-    remove_background: bool = Form(True),
+    remove_background: bool = Form(False),
 ):
     item = get_object_or_404(CollectionItem, id=item_id, workspace=request.workspace)
     if label not in dict(ItemPhoto.Label.choices):
@@ -1038,7 +1038,7 @@ def remove_photo_background(request, item_id: UUID, photo_id: UUID):
     else:
         processed_bytes, width, height, ext = process_item_image(
             raw_bytes,
-            remove_background=True,
+            remove_background=False,
             enhance=True,
             shape_hint=_item_shape_hint(item, photo.label),
         )
@@ -1274,7 +1274,7 @@ def import_items_csv_mapped(
     file: UploadedFile = File(...),
     mapping: str = Form(""),
     import_photos: bool = Form(False),
-    remove_background: bool = Form(True),
+    remove_background: bool = Form(False),
 ):
     parsed_mapping: dict[str, str] | None = None
     if mapping.strip():

@@ -33,7 +33,6 @@ export function ScanAddPage() {
   const [verificationStatus, setVerificationStatus] = useState<"NONE" | "VERIFIED" | "FLAGGED" | "OVERRIDDEN">("NONE");
   const [verificationWarnings, setVerificationWarnings] = useState<string[]>([]);
   const [overrideConfirmed, setOverrideConfirmed] = useState(false);
-  const [removeBackground, setRemoveBackground] = useState(false);
   const [barcodeHint, setBarcodeHint] = useState("");
   const [identifying, setIdentifying] = useState(false);
   const [aiNotice, setAiNotice] = useState<string | null>(null);
@@ -261,7 +260,7 @@ export function ScanAddPage() {
 
       for (let i = 0; i < files.length; i++) {
         const uploadFile = await normalizeImageFileForUpload(files[i].file, 2048, 0.92);
-        await api.uploadPhoto(created.id, uploadFile, files[i].label, i === 0, removeBackground);
+        await api.uploadPhoto(created.id, uploadFile, files[i].label, i === 0, false);
       }
       qc.invalidateQueries({ queryKey: ["items"] });
       qc.invalidateQueries({ queryKey: ["portfolio-summary"] });
@@ -333,7 +332,7 @@ export function ScanAddPage() {
 
         for (let i = 0; i < normalized.length; i++) {
           const label = i === 0 ? "OBVERSE" : "REVERSE";
-          await api.uploadPhoto(created.id, normalized[i], label, i === 0, removeBackground);
+          await api.uploadPhoto(created.id, normalized[i], label, i === 0, false);
         }
       }
       qc.invalidateQueries({ queryKey: ["items"] });
@@ -407,16 +406,6 @@ export function ScanAddPage() {
         <p className="text-xs text-slate-400">
           Tip: Drop 2 photos (1 item) or 4+ photos (auto-paired Front + Back batch), or paste with Ctrl/Cmd+V.
         </p>
-
-        <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={removeBackground}
-            onChange={(e) => setRemoveBackground(e.target.checked)}
-            className="rounded border-slate-700 bg-slate-950 text-amber-500"
-          />
-          Auto-remove background, crop tightly &amp; enhance coin/slab photo quality
-        </label>
 
         {files.length > 0 && (
           <div className="space-y-3">
