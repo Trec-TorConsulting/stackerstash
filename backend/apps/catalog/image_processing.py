@@ -1198,6 +1198,38 @@ def _remove_background_grabcut_guarded(img: Image.Image) -> tuple[Image.Image, b
     return rgba, True
 
 
+def _is_embedded_coin_in_card(img: Image.Image, circle: tuple[int, int, int]) -> bool:
+    """
+    Return True when a detected circle is a small coin embedded inside an assay card,
+    CoA card, or proof set (surrounded by colorful artwork/text rather than a uniform desk).
+    """
+    orig_w, orig_h = img.size
+    cx, cy, r = circle
+    if r <= 0 or orig_w < 64 or orig_h < 64:
+        return False
+    if r >= 0.16 * min(orig_w, orig_h) and (2 * r) >= 200:
+        return False
+
+    work_max = 480.0
+    scale = min(1.0, work_max / max(orig_w, orig_h))
+    sw = max(32, int(round(orig_w * scale)))
+    sh = max(32, int(round(orig_h * scale)))
+    rgb = np.array(img.convert("RGB").resize((sw, sh), Image.Resampling.BILINEAR))
+    lab = cv2.cvtColor(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), cv2.COLOR_BGR2LAB).astype(np.float32)
+
+    yy, xx = np.ogrid[:sh, :sw]
+    dist = np.sqrt((xx - cx * scale) ** 2 + (yy - cy * scale) ** 2)
+    rs = r * scale
+    annulus = (dist >= 1.45 * rs) & (dist <= 2.8 * rs)
+    if int(annulus.sum()) < 32:
+        return False
+
+    lab_std = float(np.linalg.norm(lab[annulus].std(axis=0)))
+    luma_vals = lab[:, :, 0][annulus]
+    luma_spread = float(np.percentile(luma_vals, 95) - np.percentile(luma_vals, 5))
+    return lab_std >= 15.0 or luma_spread >= 65.0
+
+
 def process_item_image(
     raw_bytes: bytes,
     *,
@@ -1225,7 +1257,7 @@ def process_item_image(
                     circle is None or (np.pi * (circle[2] ** 2)) < 0.25 * (card_rect[2] * card_rect[3])
                 ):
                     img = extract_rectangular_cutout(img.convert("RGBA"), card_rect, corner_ratio=0.03)
-                elif circle is not None:
+                elif circle is not None and not _is_embedded_coin_in_card(img, circle):
                     img = extract_coin_cutout(img.convert("RGBA"), *circle)
                 else:
                     rgba, used_gc = _remove_background_grabcut_guarded(img)

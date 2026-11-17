@@ -95,8 +95,8 @@ function drawNormalizedSource(
   const targetAspect = reticleMode === 'coin' ? 1 : VIEWFINDER_ASPECT;
   const useSubjectCrop =
     Boolean(subjectBox) &&
-    subjectBox!.confidence >= 0.4 &&
-    subjectBox!.areaRatio >= 0.05 &&
+    subjectBox!.confidence >= 0.45 &&
+    subjectBox!.areaRatio >= 0.18 &&
     subjectBox!.areaRatio <= 0.78;
   const { sx, sy, sw, sh } = useSubjectCrop
     ? computeSubjectCropRect(srcW, srcH, VIEWFINDER_ASPECT, baseZoom, subjectBox!, 1.25)
