@@ -555,9 +555,10 @@ def detect_circular_coin(img: Image.Image) -> tuple[int, int, int] | None:
     edges = cv2.Canny(blurred, 40, 120)
 
     min_dim = min(sw, sh)
-    min_r = max(12, int(min_dim * 0.09))
+    min_r = max(10, int(min_dim * 0.065))
     max_r = max(min_r + 6, int(min_dim * 0.49))
 
+    hough_candidates: set[tuple[int, int, int]] = set()
     candidates: list[tuple[float, float, float]] = []
     for p1, p2 in ((90, 26), (80, 18)):
         circles = cv2.HoughCircles(
@@ -572,7 +573,9 @@ def detect_circular_coin(img: Image.Image) -> tuple[int, int, int] | None:
         )
         if circles is not None:
             for c in circles[0]:
-                candidates.append((float(c[0]), float(c[1]), float(c[2])))
+                cx_c, cy_c, r_c = float(c[0]), float(c[1]), float(c[2])
+                candidates.append((cx_c, cy_c, r_c))
+                hough_candidates.add((int(round(cx_c)), int(round(cy_c)), int(round(r_c))))
 
     # Concentric sweep near image center so outer capsule/card borders never suppress inner small coins
     for dy in range(-18, 19, 6):
@@ -593,8 +596,10 @@ def detect_circular_coin(img: Image.Image) -> tuple[int, int, int] | None:
     best_outer_score = -1e9
 
     for cx_s, cy_s, r_s in candidates:
-        # Must be near the center of the frame — never jump to off-center card text
-        if abs(cx_s - 0.5 * sw) > 0.18 * sw or abs(cy_s - 0.5 * sh) > 0.20 * sh:
+        is_hough = (int(round(cx_s)), int(round(cy_s)), int(round(r_s))) in hough_candidates
+        max_dx = 0.22 * sw if is_hough else 0.18 * sw
+        max_dy = 0.28 * sh if is_hough else 0.20 * sh
+        if abs(cx_s - 0.5 * sw) > max_dx or abs(cy_s - 0.5 * sh) > max_dy:
             continue
         if (
             cx_s - r_s < -0.03 * sw
@@ -610,9 +615,10 @@ def detect_circular_coin(img: Image.Image) -> tuple[int, int, int] | None:
             px = np.clip(np.round(cx_s + rr * cos_a).astype(int), 0, sw - 1)
             py = np.clip(np.round(cy_s + rr * sin_a).astype(int), 0, sh - 1)
             dot = np.abs(gx[py, px] * cos_a + gy[py, px] * sin_a) / mag[py, px]
-            aligned |= (edges[py, px] > 0) & (dot >= 0.76)
+            aligned |= (edges[py, px] > 0) & (dot >= 0.72)
         aligned_cov = int(aligned.sum())
-        if aligned_cov < 43:
+        min_cov = 48 if (is_hough and (abs(cx_s - 0.5 * sw) > 0.18 * sw or abs(cy_s - 0.5 * sh) > 0.20 * sh)) else 38
+        if aligned_cov < min_cov:
             continue
 
         dist = np.sqrt((xx - cx_s) ** 2 + (yy - cy_s) ** 2)
@@ -1072,6 +1078,122 @@ _RECT_CORNER_RATIOS = {
 }
 
 
+def detect_card_rectangle(img: Image.Image) -> tuple[float, float, float, float, float] | None:
+    """
+    Detect an opaque rectangular card, assay pack, graded slab, proof set, or banknote
+    directly from multi-channel edge contours before running pixel-level GrabCut.
+    Returns (cx, cy, rw, rh, angle) in original image pixel coordinates, or None.
+    """
+    orig_w, orig_h = img.size
+    if orig_w < 48 or orig_h < 48:
+        return None
+
+    work_max = 560.0
+    scale = min(1.0, work_max / max(orig_w, orig_h))
+    sw = max(32, int(round(orig_w * scale)))
+    sh = max(32, int(round(orig_h * scale)))
+
+    rgb = np.array(img.convert("RGB").resize((sw, sh), Image.Resampling.BILINEAR))
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+
+    edge_map = cv2.Canny(cv2.GaussianBlur(clahe, (5, 5), 1.0), 40, 120)
+    for ch in range(3):
+        ch_blur = cv2.GaussianBlur(lab[:, :, ch], (5, 5), 1.0)
+        edge_map = np.maximum(edge_map, cv2.Canny(ch_blur, 35, 110))
+
+    edge_support = cv2.dilate(edge_map, np.ones((5, 5), np.uint8))
+    closed = cv2.morphologyEx(
+        cv2.dilate(edge_map, np.ones((3, 3), np.uint8)),
+        cv2.MORPH_CLOSE,
+        np.ones((7, 7), np.uint8),
+    )
+
+    contours, _ = cv2.findContours(closed, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    work_area = float(sw * sh)
+    best_rect: tuple[float, float, float, float, float] | None = None
+    best_score = -1.0
+
+    for cnt in contours:
+        rect = cv2.minAreaRect(cnt)
+        (cx, cy), (rw, rh), angle = rect
+        if rw < 32 or rh < 32:
+            continue
+        rect_area = float(rw * rh)
+        if rect_area < work_area * 0.10 or rect_area > work_area * 0.86:
+            continue
+        hull_area = float(cv2.contourArea(cv2.convexHull(cnt)))
+        extent = hull_area / max(1.0, rect_area)
+        if extent < 0.78:
+            continue
+
+        box = cv2.boxPoints(rect)
+        # Reject full-frame borders
+        touching = sum(
+            1
+            for pt in box
+            if pt[0] <= 2 or pt[0] >= sw - 3 or pt[1] <= 2 or pt[1] >= sh - 3
+        )
+        if touching >= 3:
+            continue
+
+        # Verify strong edge support along all 4 sides of the fitted rectangle
+        side_covs: list[float] = []
+        for i in range(4):
+            p1 = box[i]
+            p2 = box[(i + 1) % 4]
+            ts = np.linspace(0.08, 0.92, 24)
+            xs = np.clip(np.round(p1[0] + ts * (p2[0] - p1[0])).astype(int), 0, sw - 1)
+            ys = np.clip(np.round(p1[1] + ts * (p2[1] - p1[1])).astype(int), 0, sh - 1)
+            side_covs.append(float((edge_support[ys, xs] > 0).mean()))
+
+        if min(side_covs) < 0.30 or float(np.mean(side_covs)) < 0.52:
+            continue
+
+        score = rect_area * extent * float(np.mean(side_covs))
+        if score > best_score:
+            best_score = score
+            best_rect = (
+                float(cx) / scale,
+                float(cy) / scale,
+                float(rw) / scale,
+                float(rh) / scale,
+                float(angle),
+            )
+
+    return best_rect
+
+
+def _remove_background_grabcut_guarded(img: Image.Image) -> tuple[Image.Image, bool]:
+    """
+    Run _remove_background_grabcut and validate that the resulting mask is a coherent,
+    non-fragmented subject. Returns (rgba_image, used_grabcut).
+    """
+    rgba = _remove_background_grabcut(img)
+    arr = np.array(rgba)
+    alpha = arr[:, :, 3]
+    fg = (alpha > 128).astype(np.uint8)
+    h, w = fg.shape
+    fg_area = int(fg.sum())
+    if fg_area < w * h * 0.04 or fg_area > w * h * 0.95:
+        return img.convert("RGBA"), False
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(fg, connectivity=8)
+    if num_labels <= 1:
+        return img.convert("RGBA"), False
+    largest_idx = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    largest_area = int(stats[largest_idx, cv2.CC_STAT_AREA])
+    bw = int(stats[largest_idx, cv2.CC_STAT_WIDTH])
+    bh = int(stats[largest_idx, cv2.CC_STAT_HEIGHT])
+    bbox_fill = largest_area / max(1, bw * bh)
+    if largest_area < fg_area * 0.70 or bbox_fill < 0.42:
+        return img.convert("RGBA"), False
+
+    return rgba, True
+
+
 def process_item_image(
     raw_bytes: bytes,
     *,
@@ -1092,24 +1214,35 @@ def process_item_image(
             img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
 
         if remove_background:
+            card_rect = detect_card_rectangle(img)
             if shape_hint == "coin":
                 circle = detect_circular_coin(img)
-                if circle is not None:
+                if card_rect is not None and (
+                    circle is None or (np.pi * (circle[2] ** 2)) < 0.25 * (card_rect[2] * card_rect[3])
+                ):
+                    img = extract_rectangular_cutout(img.convert("RGBA"), card_rect, corner_ratio=0.03)
+                elif circle is not None:
                     img = extract_coin_cutout(img.convert("RGBA"), *circle)
                 else:
-                    img = _crop_to_subject(_remove_background_grabcut(img))
+                    rgba, used_gc = _remove_background_grabcut_guarded(img)
+                    img = _crop_to_subject(rgba) if used_gc else rgba
             else:
-                rgba = _remove_background_grabcut(img)
-                if shape_hint in _RECT_CORNER_RATIOS:
-                    rect = detect_rectangular_subject(rgba)
-                    if rect is not None:
-                        img = extract_rectangular_cutout(
-                            rgba, rect, corner_ratio=_RECT_CORNER_RATIOS[shape_hint]
-                        )
-                    else:
-                        img = _crop_to_subject(rgba)
+                if shape_hint is None and card_rect is not None:
+                    img = extract_rectangular_cutout(img.convert("RGBA"), card_rect, corner_ratio=0.03)
                 else:
-                    img = _crop_to_subject(rgba)
+                    rgba, used_gc = _remove_background_grabcut_guarded(img)
+                    if used_gc and shape_hint in _RECT_CORNER_RATIOS:
+                        rect = detect_rectangular_subject(rgba)
+                        if rect is not None:
+                            img = extract_rectangular_cutout(
+                                rgba, rect, corner_ratio=_RECT_CORNER_RATIOS[shape_hint]
+                            )
+                        else:
+                            img = _crop_to_subject(rgba)
+                    elif used_gc:
+                        img = _crop_to_subject(rgba)
+                    else:
+                        img = rgba
 
         if enhance:
             img = _enhance_detail(img)

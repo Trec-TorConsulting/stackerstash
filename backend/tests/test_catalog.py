@@ -656,6 +656,38 @@ def test_goldback_on_shadowed_white_paper_sheet_background_removal():
     assert center_r > 70 and center_g > 55
 
 
+def test_assay_card_with_mixed_border_and_small_coin_preserves_full_card():
+    from PIL import ImageDraw
+    from apps.catalog.image_processing import process_item_image
+
+    # White desk with dark top/bottom desk edges + dark-artwork assay card containing an off-center bright coin
+    img = Image.new("RGB", (600, 800), (225, 225, 225))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((0, 0, 599, 75), fill=(18, 18, 22))
+    draw.rectangle((0, 725, 599, 799), fill=(18, 18, 22))
+
+    # Assay card: dark left half, colorful right half, small coin in top-right
+    draw.rectangle((60, 230, 540, 560), fill=(25, 28, 35))
+    draw.rectangle((260, 235, 535, 555), fill=(110, 85, 145))
+    draw.ellipse((395, 275, 485, 365), fill=(210, 212, 218), outline=(140, 145, 152), width=3)
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=95)
+
+    out_bytes, out_w, out_h, out_ext = process_item_image(
+        buf.getvalue(), remove_background=True, enhance=True, shape_hint="coin"
+    )
+    assert out_ext == "png"
+    # Must preserve the full ~480x330 assay card rather than erasing the dark left half or cropping to the 90px coin
+    assert 440 <= out_w <= 525
+    assert 300 <= out_h <= 375
+    out_img = Image.open(io.BytesIO(out_bytes)).convert("RGBA")
+    # Dark left artwork and coin center must both remain opaque
+    assert out_img.getpixel((int(out_w * 0.2), out_h // 2))[3] > 200
+    assert out_img.getpixel((int(out_w * 0.8), int(out_h * 0.25)))[3] > 200
+
+
+
 
 
 
