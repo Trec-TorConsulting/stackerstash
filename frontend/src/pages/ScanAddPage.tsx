@@ -1,8 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Camera, CheckCircle2, Crop, Layers, Smartphone, Sparkles, Upload, X } from "lucide-react";
+import { AlertTriangle, Camera, CheckCircle2, Crop, Layers, Sparkles, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { GuidedCameraModal, type GuidedCameraResult } from "../components/GuidedCameraModal";
 import { PhotoCropRotateView } from "../components/PhotoCropRotateView";
 import { api, type ContainerNode } from "../lib/api";
 import { CATEGORY_LABELS, METAL_LABELS } from "../lib/format";
@@ -30,12 +29,11 @@ export function ScanAddPage() {
 
   const [files, setFiles] = useState<Array<{ file: File; label: string; preview: string }>>([]);
   const [editingPhotoIndex, setEditingPhotoIndex] = useState<number | null>(null);
-  const [cameraModalOpen, setCameraModalOpen] = useState(false);
   const [intakeSource, setIntakeSource] = useState<"CAMERA" | "UPLOAD" | "MANUAL">("MANUAL");
   const [verificationStatus, setVerificationStatus] = useState<"NONE" | "VERIFIED" | "FLAGGED" | "OVERRIDDEN">("NONE");
   const [verificationWarnings, setVerificationWarnings] = useState<string[]>([]);
   const [overrideConfirmed, setOverrideConfirmed] = useState(false);
-  const [removeBackground, setRemoveBackground] = useState(true);
+  const [removeBackground, setRemoveBackground] = useState(false);
   const [barcodeHint, setBarcodeHint] = useState("");
   const [identifying, setIdentifying] = useState(false);
   const [aiNotice, setAiNotice] = useState<string | null>(null);
@@ -160,41 +158,6 @@ export function ScanAddPage() {
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
   }, []);
-
-  function handleGuidedCameraComplete(result: GuidedCameraResult) {
-    setCameraModalOpen(false);
-    setBatchMode(false);
-    setIntakeSource("CAMERA");
-    setVerificationStatus("NONE");
-    setVerificationWarnings([]);
-    setOverrideConfirmed(false);
-    files.forEach((f) => URL.revokeObjectURL(f.preview));
-    if (result.detectedShape) {
-      const mappedCategory =
-        result.detectedShape === "note"
-          ? "PAPER"
-          : result.detectedShape === "slab"
-            ? "SLAB"
-            : "COIN";
-      setForm((prev) => ({ ...prev, category: mappedCategory }));
-    }
-    const next: Array<{ file: File; label: string; preview: string }> = [
-      {
-        file: result.frontFile,
-        label: "OBVERSE",
-        preview: URL.createObjectURL(result.frontFile),
-      },
-    ];
-    if (result.backFile) {
-      next.push({
-        file: result.backFile,
-        label: "REVERSE",
-        preview: URL.createObjectURL(result.backFile),
-      });
-    }
-    setFiles(next);
-    void runIdentify(next, "CAMERA");
-  }
 
   const needsFrontBack =
     intakeSource === "UPLOAD" && (form.category === "COIN" || form.category === "PAPER");
@@ -391,7 +354,7 @@ export function ScanAddPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Scan &amp; Catalog Item</h1>
         <p className="text-sm text-slate-400">
-          Hands-free auto-camera, phone camera, drag &amp; drop, or paste photos — we auto-crop, orient, and identify.
+          Snap a photo with your camera or upload images to identify and catalog your item.
         </p>
       </div>
 
@@ -413,17 +376,9 @@ export function ScanAddPage() {
         }`}
       >
         <div className="flex flex-wrap gap-2.5">
-          <button
-            type="button"
-            onClick={() => setCameraModalOpen(true)}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-sm cursor-pointer transition"
-          >
+          <label className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-sm cursor-pointer transition">
             <Camera className="h-4 w-4" />
-            Take Photo
-          </button>
-          <label className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-700 hover:border-amber-500/60 text-slate-200 text-sm font-medium cursor-pointer transition">
-            <Smartphone className="h-4 w-4 text-amber-400" />
-            Phone Camera
+            {hasObverse && !hasReverse ? "Snap Back Photo" : "Take Photo"}
             <input
               type="file"
               accept="image/*"
@@ -554,7 +509,7 @@ export function ScanAddPage() {
               ))}
               {hasObverse && !hasReverse && (
                 <label className="flex h-24 w-24 cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-amber-500/60 bg-amber-500/10 text-center text-[11px] font-medium text-amber-300 hover:bg-amber-500/15">
-                  <Smartphone className="h-4 w-4" />
+                  <Camera className="h-4 w-4" />
                   <span>Snap Back</span>
                   <input
                     type="file"
@@ -637,14 +592,6 @@ export function ScanAddPage() {
           </div>
         )}
       </div>
-
-      <GuidedCameraModal
-        open={cameraModalOpen}
-        onClose={() => setCameraModalOpen(false)}
-        onComplete={handleGuidedCameraComplete}
-        requireBack={true}
-        initialShape="auto"
-      />
 
       {editingPhotoIndex !== null && files[editingPhotoIndex] && (
         <div
