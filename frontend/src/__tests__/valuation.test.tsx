@@ -209,6 +209,19 @@ describe("Valuation & Specs UI Components", () => {
     expect(screen.getByText("Price Guides & Certs")).toBeInTheDocument();
     expect(screen.getByText("Marketplaces & Numismatic Catalogs")).toBeInTheDocument();
     expect(screen.getByText("Trading & Collectible Cards (Optional BYOK)")).toBeInTheDocument();
+
+    const geminiLink = screen.getByRole("link", { name: /Get key in Google AI Studio/i });
+    expect(geminiLink).toHaveAttribute("href", "https://aistudio.google.com/apikey");
+    expect(geminiLink).toHaveAttribute("target", "_blank");
+
+    const ebayLink = screen.getByRole("link", { name: /eBay Developer App Keys/i });
+    expect(ebayLink).toHaveAttribute("href", "https://developer.ebay.com/my/keys");
+
+    const pcgsLink = screen.getByRole("link", { name: /PCGS Public API docs/i });
+    expect(pcgsLink).toHaveAttribute("href", "https://www.pcgs.com/publicapi/documentation");
+
+    const priceChartingLink = screen.getByRole("link", { name: /PriceCharting API & token/i });
+    expect(priceChartingLink).toHaveAttribute("href", "https://www.pricecharting.com/api-documentation");
   });
 
   it("builds card comp links and renders CardSpecsCard with inline edit", async () => {

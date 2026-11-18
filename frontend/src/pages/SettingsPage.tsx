@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderTree, KeyRound, RefreshCw, Trash2 } from "lucide-react";
+import { ExternalLink, FolderTree, KeyRound, RefreshCw, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../lib/api";
 
@@ -43,6 +43,24 @@ const PROVIDER_HINTS: Record<string, string> = {
   PRICECHARTING_API_KEY: "PriceCharting API token (ungraded + PSA/BGS/CGC card prices)",
   PSA_API_TOKEN: "PSA Public API bearer token (cert metadata & pop report)",
   POKEMON_TCG_API_KEY: "Optional Pokémon TCG API key (pokemontcg.io — higher rate limit)",
+};
+
+const PROVIDER_LINKS: Record<string, { label: string; url: string }> = {
+  GEMINI: { label: "Get key in Google AI Studio", url: "https://aistudio.google.com/apikey" },
+  GROQ_API_KEY: { label: "Get key in Groq Console", url: "https://console.groq.com/keys" },
+  OPENROUTER_API_KEY: { label: "Get key on OpenRouter", url: "https://openrouter.ai/keys" },
+  OLLAMA_URL: { label: "Download Ollama", url: "https://ollama.com/download" },
+  OLLAMA_MODEL: { label: "Browse Ollama models", url: "https://ollama.com/library" },
+  PCGS: { label: "PCGS Public API docs", url: "https://www.pcgs.com/publicapi/documentation" },
+  GREYSHEET_KEY: { label: "Get key in Greysheet CDN", url: "https://www.greysheet.com/cdni/apicredentials" },
+  GREYSHEET_TOKEN: { label: "Get token in Greysheet CDN", url: "https://www.greysheet.com/cdni/apicredentials" },
+  NUMISMEDIA_KEY: { label: "NumisMedia licensing", url: "https://www.numismedia.com/" },
+  EBAY_CLIENT_ID: { label: "eBay Developer App Keys", url: "https://developer.ebay.com/my/keys" },
+  EBAY_CLIENT_SECRET: { label: "eBay Developer App Keys", url: "https://developer.ebay.com/my/keys" },
+  NUMISTA_KEY: { label: "Get key on Numista API", url: "https://en.numista.com/api/" },
+  PRICECHARTING_API_KEY: { label: "PriceCharting API & token", url: "https://www.pricecharting.com/api-documentation" },
+  PSA_API_TOKEN: { label: "Get token in PSA Public API", url: "https://www.psacard.com/publicapi" },
+  POKEMON_TCG_API_KEY: { label: "Pokémon TCG Dev Portal", url: "https://dev.pokemontcg.io/" },
 };
 
 export function SettingsPage() {
@@ -202,6 +220,25 @@ export function SettingsPage() {
                       <span className="text-xs text-slate-500">Not configured</span>
                     )}
                   </div>
+
+                  {(PROVIDER_HINTS[cred.provider] || PROVIDER_LINKS[cred.provider]) && (
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <span className="text-slate-400">
+                        {PROVIDER_HINTS[cred.provider]}
+                      </span>
+                      {PROVIDER_LINKS[cred.provider] && (
+                        <a
+                          href={PROVIDER_LINKS[cred.provider].url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-amber-400 hover:text-amber-300 hover:underline shrink-0 font-medium"
+                        >
+                          {PROVIDER_LINKS[cred.provider].label}
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
+                    </div>
+                  )}
 
                   <form
                     onSubmit={(e) => {
