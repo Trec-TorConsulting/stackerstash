@@ -90,6 +90,7 @@ class CollectionItem(models.Model):
         PAPER = "PAPER", "Paper Currency"
         BAR = "BAR", "Bar / Ingot"
         ROUND = "ROUND", "Round"
+        CARD = "CARD", "Trading Card"
         SLAB = "SLAB", "Graded Slab"
         FLIPPER = "FLIPPER", "Coin Flip / Holder"
         OTHER = "OTHER", "Other Collectible"
@@ -99,6 +100,7 @@ class CollectionItem(models.Model):
         PAPER = "PAPER", "Paper Currency"
         BAR = "BAR", "Bars / Ingots"
         ROUND = "ROUND", "Rounds"
+        CARD = "CARD", "Trading Cards"
         OTHER = "OTHER", "Other"
 
     class MetalType(models.TextChoices):
@@ -124,7 +126,20 @@ class CollectionItem(models.Model):
         CACG = "CACG", "CACG"
         ANACS = "ANACS", "ANACS"
         ICG = "ICG", "ICG"
+        PSA = "PSA", "PSA"
+        BGS = "BGS", "BGS"
+        CGC = "CGC", "CGC"
+        SGC = "SGC", "SGC"
+        TAG = "TAG", "TAG"
         OTHER = "OTHER", "Other"
+
+    CARD_GRADING_SERVICES = frozenset({
+        GradingService.PSA,
+        GradingService.BGS,
+        GradingService.CGC,
+        GradingService.SGC,
+        GradingService.TAG,
+    })
 
     class Status(models.TextChoices):
         IN_COLLECTION = "IN_COLLECTION", "In Collection"
@@ -335,6 +350,16 @@ class CollectionItem(models.Model):
         return (
             self.category == self.Category.SLAB
             or self.grading_service not in ("", self.GradingService.NONE)
+        )
+
+    @property
+    def is_card_item(self) -> bool:
+        attrs = self.attributes if isinstance(self.attributes, dict) else {}
+        return (
+            self.category == self.Category.CARD
+            or self.sort_category == self.SortCategory.CARD
+            or self.grading_service in self.CARD_GRADING_SERVICES
+            or bool(str(attrs.get("card_game") or "").strip())
         )
 
     @property

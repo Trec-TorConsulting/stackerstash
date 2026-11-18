@@ -210,4 +210,40 @@ describe("Auto-sort UI flows", () => {
     fireEvent.click(resetBtn);
     await waitFor(() => expect(updateSpy).toHaveBeenCalledWith("item-1", { sort_override: false }));
   });
+
+  it("groups trading cards and PSA-slabbed cards under Trading Cards in CollectionPage", async () => {
+    const psaPokemon: CollectionItem = {
+      ...SAMPLE_ITEMS[0],
+      id: "card-1",
+      category: "SLAB",
+      title: "1999 Base Set Charizard",
+      country: "",
+      metal_type: "NONE",
+      grading_service: "PSA",
+      grade: "10",
+      is_graded: true,
+      is_card_item: true,
+      card_game: "Pokémon",
+      sort_category: "CARD",
+      sort_subcategory: "Pokémon",
+      attributes: { card_game: "Pokémon" },
+    };
+    vi.spyOn(api, "getItems").mockResolvedValue([psaPokemon]);
+    vi.spyOn(api, "getContainers").mockResolvedValue([]);
+
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <MemoryRouter>
+          <CollectionPage />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+
+    await screen.findByText("1999 Base Set Charizard");
+    expect(screen.getByText(/PSA 10/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Grouped by category view" }));
+
+    expect((await screen.findAllByText("Trading Cards")).length).toBeGreaterThanOrEqual(1);
+    expect((await screen.findAllByText("Pokémon")).length).toBeGreaterThanOrEqual(1);
+  });
 });

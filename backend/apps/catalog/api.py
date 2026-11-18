@@ -111,6 +111,15 @@ class ItemIn(Schema):
     photo_verification_status: str = CollectionItem.PhotoVerificationStatus.NONE
     photo_verification_notes: list[str] = []
     auto_appraise: bool = True
+    card_game: str = ""
+    set_name: str = ""
+    set_code: str = ""
+    card_number: str = ""
+    rarity: str = ""
+    card_finish: str = ""
+    card_edition: str = ""
+    language: str = ""
+    raw_condition: str = ""
     tags: list[str] = []
     attributes: dict[str, Any] = {}
     notes: str = ""
@@ -162,6 +171,15 @@ class ItemPatch(Schema):
     sort_category: str | None = None
     sort_subcategory: str | None = None
     sort_override: bool | None = None
+    card_game: str | None = None
+    set_name: str | None = None
+    set_code: str | None = None
+    card_number: str | None = None
+    rarity: str | None = None
+    card_finish: str | None = None
+    card_edition: str | None = None
+    language: str | None = None
+    raw_condition: str | None = None
     tags: list[str] | None = None
     attributes: dict[str, Any] | None = None
     notes: str | None = None
@@ -235,6 +253,16 @@ class ItemOut(Schema):
     sort_override: bool
     sort_updated_at: datetime | None
     is_graded: bool
+    is_card_item: bool = False
+    card_game: str = ""
+    set_name: str = ""
+    set_code: str = ""
+    card_number: str = ""
+    rarity: str = ""
+    card_finish: str = ""
+    card_edition: str = ""
+    language: str = ""
+    raw_condition: str = ""
     appraisal_job_id: UUID | None = None
     tags: list[str]
     attributes: dict[str, Any]
@@ -317,9 +345,52 @@ def _photo_to_out(photo: ItemPhoto) -> PhotoOut:
     )
 
 
+CARD_ATTRIBUTE_FIELDS = (
+    "card_game",
+    "set_name",
+    "set_code",
+    "card_number",
+    "rarity",
+    "card_finish",
+    "card_edition",
+    "language",
+    "raw_condition",
+)
+
+
+def _apply_card_fields(
+    item: CollectionItem,
+    values: dict[str, Any],
+    provenance: dict[str, str] | None = None,
+) -> None:
+    """Sync structured card fields into item.attributes (and item.series for set_name)."""
+    attrs = dict(item.attributes or {})
+    for field in CARD_ATTRIBUTE_FIELDS:
+        if field not in values:
+            continue
+        raw_val = values[field]
+        cleaned = str(raw_val or "").strip()
+        if cleaned:
+            attrs[field] = cleaned
+            if provenance is not None:
+                provenance[field] = "USER"
+        else:
+            attrs.pop(field, None)
+            if provenance is not None:
+                provenance.pop(field, None)
+    if attrs.get("set_name") and not item.series:
+        item.series = str(attrs["set_name"])
+    elif item.series and not attrs.get("set_name") and item.is_card_item:
+        attrs["set_name"] = item.series
+    item.attributes = attrs
+
+
 def _item_to_out(item: CollectionItem, appraisal_job_id: UUID | None = None) -> ItemOut:
     photos = list(item.photos.all())
     primary = next((p for p in photos if p.is_primary), photos[0] if photos else None)
+    attrs = item.attributes if isinstance(item.attributes, dict) else {}
+    is_card = item.is_card_item
+    set_name = str(attrs.get("set_name") or (item.series if is_card else "") or "")
     return ItemOut(
         id=item.id,
         container_id=item.container_id,
@@ -388,6 +459,16 @@ def _item_to_out(item: CollectionItem, appraisal_job_id: UUID | None = None) -> 
         sort_override=item.sort_override,
         sort_updated_at=item.sort_updated_at,
         is_graded=item.is_graded,
+        is_card_item=is_card,
+        card_game=str(attrs.get("card_game") or ""),
+        set_name=set_name,
+        set_code=str(attrs.get("set_code") or ""),
+        card_number=str(attrs.get("card_number") or ""),
+        rarity=str(attrs.get("rarity") or ""),
+        card_finish=str(attrs.get("card_finish") or ""),
+        card_edition=str(attrs.get("card_edition") or ""),
+        language=str(attrs.get("language") or ""),
+        raw_condition=str(attrs.get("raw_condition") or ""),
         appraisal_job_id=appraisal_job_id,
         tags=item.tags or [],
         attributes=item.attributes or {},
@@ -581,7 +662,9 @@ def list_items(
             | Q(serial_number__icontains=term)
             | Q(mint_or_refiner__icontains=term)
             | Q(country__icontains=term)
+            | Q(series__icontains=term)
             | Q(notes__icontains=term)
+            | Q(attributes__icontains=term)
         )
 
     items = list(qs)
@@ -676,6 +759,7 @@ def create_item(request, payload: ItemIn):
     item.edge_type = payload.edge_type
     item.designer = payload.designer
     item.catalog_numbers = payload.catalog_numbers
+    _apply_card_fields(item, payload.dict())
 
     item.save()
     refresh_item_melt_from_latest_spot(item)
@@ -853,6 +937,7 @@ def update_item(request, item_id: UUID, payload: ItemPatch):
     if "container_id" in data:
         item.container = _validate_container(request.workspace, data.pop("container_id"))
     provenance = dict(item.specs_provenance or {})
+    card_updates = {f: data.pop(f) for f in CARD_ATTRIBUTE_FIELDS if f in data}
     for field, value in data.items():
         setattr(item, field, value)
         if field in SPEC_FIELDS:
@@ -860,6 +945,8 @@ def update_item(request, item_id: UUID, payload: ItemPatch):
                 provenance[field] = "USER"
             else:
                 provenance.pop(field, None)
+    if card_updates:
+        _apply_card_fields(item, card_updates, provenance=provenance)
     item.specs_provenance = provenance
     if ("sort_category" in data or "sort_subcategory" in data) and data.get("sort_override") is not False:
         item.sort_override = True
@@ -897,6 +984,8 @@ def _should_extract_coin_from_slab(item: CollectionItem, label: str) -> bool:
     """Return True when an OBVERSE/REVERSE/OTHER upload may contain a circular coin inside a grading slab."""
     if label in (ItemPhoto.Label.RECEIPT, ItemPhoto.Label.SLAB_LABEL, ItemPhoto.Label.ASSAY):
         return False
+    if item.is_card_item:
+        return False
     if item.category in (CollectionItem.Category.PAPER, CollectionItem.Category.BAR):
         return False
     if item.grading_service in (
@@ -918,6 +1007,8 @@ def _item_shape_hint(item: CollectionItem, label: str) -> str | None:
         return None
     if item.category == CollectionItem.Category.BAR:
         return "bar"
+    if item.is_card_item:
+        return "rect"
     if item.category == CollectionItem.Category.PAPER or item.grading_service in (
         CollectionItem.GradingService.PMG,
         CollectionItem.GradingService.PCGS_BANKNOTE,
@@ -1114,8 +1205,18 @@ def export_items_csv(request):
         "market_value_total",
         "valuation_source",
         "is_estimate",
+        "card_game",
+        "set_name",
+        "set_code",
+        "card_number",
+        "rarity",
+        "card_finish",
+        "card_edition",
+        "language",
+        "raw_condition",
     ])
     for item in items:
+        attrs = item.attributes if isinstance(item.attributes, dict) else {}
         writer.writerow([
             str(item.id),
             item.title,
@@ -1138,6 +1239,15 @@ def export_items_csv(request):
             str(item.total_market_value),
             item.valuation_source,
             str(item.is_estimate),
+            str(attrs.get("card_game") or ""),
+            str(attrs.get("set_name") or (item.series if item.is_card_item else "") or ""),
+            str(attrs.get("set_code") or ""),
+            str(attrs.get("card_number") or ""),
+            str(attrs.get("rarity") or ""),
+            str(attrs.get("card_finish") or ""),
+            str(attrs.get("card_edition") or ""),
+            str(attrs.get("language") or ""),
+            str(attrs.get("raw_condition") or ""),
         ])
     resp = HttpResponse(buf.getvalue(), content_type="text/csv")
     resp["Content-Disposition"] = 'attachment; filename="stackerstash-collection.csv"'

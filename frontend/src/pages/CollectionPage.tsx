@@ -19,6 +19,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { ImportWizardModal } from "../components/ImportWizardModal";
 import { api, type CollectionItem, type ContainerNode } from "../lib/api";
 import {
+  CARD_GRADING_SERVICES,
   CATEGORY_LABELS,
   METAL_BADGE_COLORS,
   METAL_LABELS,
@@ -26,6 +27,7 @@ import {
   SORT_CATEGORY_ORDER,
   STATUS_LABELS,
   formatUsd,
+  isCardItem,
 } from "../lib/format";
 
 function flattenContainers(nodes: ContainerNode[], depth = 0): Array<{ id: string; label: string }> {
@@ -100,11 +102,15 @@ export function CollectionPage() {
     for (const item of items) {
       const primary =
         item.sort_category ||
-        (item.category === "SLAB" || item.category === "FLIPPER"
-          ? item.grading_service === "PMG" || item.grading_service === "PCGS_BANKNOTE"
-            ? "PAPER"
-            : "COIN"
-          : item.category || "OTHER");
+        (isCardItem(item)
+          ? "CARD"
+          : item.category === "SLAB" || item.category === "FLIPPER"
+            ? item.grading_service === "PMG" || item.grading_service === "PCGS_BANKNOTE"
+              ? "PAPER"
+              : CARD_GRADING_SERVICES.has(item.grading_service)
+                ? "CARD"
+                : "COIN"
+            : item.category || "OTHER");
       const sub = item.sort_subcategory || "Uncategorized";
       if (!byPrimary.has(primary)) byPrimary.set(primary, new Map());
       const subMap = byPrimary.get(primary)!;

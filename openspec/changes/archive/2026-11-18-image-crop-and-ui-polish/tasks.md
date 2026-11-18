@@ -8,4 +8,4 @@
 - [x] 3.1 Deduplicate `Graded Slab` / `Graded` badges on `CollectionPage.tsx` cards.
 - [x] 3.2 Add fine-weight fallback from `gross_weight_g` × `purity` when `fine_weight_oz == 0`, and show `—` for Dashboard `Unrealized P&L` when `total_cost_basis == 0`.
 - [x] 4.1 Hide/update `Vault Sign In` in `SiteFooter.tsx` when authenticated, add ellipsis truncation to `SettingsPage.tsx` credential badge, and improve mobile header logo contrast in `Layout.tsx`.
-- [ ] 5.1 Add/update tests, run `openspec validate image-crop-and-ui-polish`, build frontend (`npm run build`), and execute `branch -> commit -> push -> pr -> merge -> deploy`.
+- [x] 5.1 Add/update tests, run `openspec validate image-crop-and-ui-polish`, build frontend (`npm run build`), and execute `branch -> commit -> push -> pr -> merge -> deploy`.

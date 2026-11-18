@@ -160,4 +160,34 @@ describe("ItemDetailPage slab removal & quantity updates", () => {
     expect(payload.cert_number).toBe("");
     expect(payload.attributes).toEqual({});
   });
+
+  it("renders CardSpecsCard for PSA-slabbed trading cards and restores CARD on slab removal", async () => {
+    const cardSlab = makeItem({
+      category: "SLAB",
+      title: "Charizard Holo",
+      grading_service: "PSA",
+      grade: "10",
+      cert_number: "12345678",
+      is_card_item: true,
+      card_game: "Pokémon",
+      set_name: "Base Set",
+      card_number: "4/102",
+      attributes: { card_game: "Pokémon", set_name: "Base Set", card_number: "4/102" },
+    });
+    const updateSpy = vi.spyOn(api, "updateItem").mockResolvedValue(cardSlab);
+
+    renderItemDetail(cardSlab);
+    expect(await screen.findByText("Charizard Holo")).toBeInTheDocument();
+    expect(screen.getByText("Card Specifications")).toBeInTheDocument();
+    expect(screen.queryByText("Numismatic Specifications")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Edit Details/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Remove Slab \/ Mark Raw/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Save Changes/i }));
+
+    await waitFor(() => expect(updateSpy).toHaveBeenCalled());
+    const payload = updateSpy.mock.calls[0][1] as Record<string, unknown>;
+    expect(payload.category).toBe("CARD");
+    expect(payload.grading_service).toBe("NONE");
+  });
 });

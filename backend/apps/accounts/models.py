@@ -113,6 +113,9 @@ class ProviderCredential(models.Model):
         NUMISMEDIA_KEY = "NUMISMEDIA_KEY", "NumisMedia FMV API Key"
         EBAY_CLIENT_ID = "EBAY_CLIENT_ID", "eBay App Client ID"
         EBAY_CLIENT_SECRET = "EBAY_CLIENT_SECRET", "eBay App Client Secret"
+        PRICECHARTING_API_KEY = "PRICECHARTING_API_KEY", "PriceCharting API Key"
+        PSA_API_TOKEN = "PSA_API_TOKEN", "PSA Cert API Token"
+        POKEMON_TCG_API_KEY = "POKEMON_TCG_API_KEY", "Pokémon TCG API Key"
         OLLAMA_URL = "OLLAMA_URL", "Self-Hosted Ollama URL"
         OLLAMA_MODEL = "OLLAMA_MODEL", "Self-Hosted Ollama Vision Model"
 

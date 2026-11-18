@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { AppraisalProgressBanner } from "../components/valuation/AppraisalProgressBanner";
+import { CardSpecsCard } from "../components/valuation/CardSpecsCard";
 import { CollectibilityThesisCard } from "../components/valuation/CollectibilityThesisCard";
 import { EstimatedGradeCard } from "../components/valuation/EstimatedGradeCard";
 import { NumismaticSpecsCard } from "../components/valuation/NumismaticSpecsCard";
@@ -195,6 +196,7 @@ describe("Valuation & Specs UI Components", () => {
       { provider: "GEMINI", label: "Google Gemini API", is_configured: true, masked_hint: "AIza...123", updated_at: null },
       { provider: "EBAY_CLIENT_ID", label: "eBay App Client ID", is_configured: false, masked_hint: "", updated_at: null },
       { provider: "PCGS", label: "PCGS API Token", is_configured: false, masked_hint: "", updated_at: null },
+      { provider: "PRICECHARTING_API_KEY", label: "PriceCharting API Key", is_configured: false, masked_hint: "", updated_at: null },
     ]);
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
@@ -206,6 +208,60 @@ describe("Valuation & Specs UI Components", () => {
     expect(await screen.findByText("AI Vision & Search Grounding")).toBeInTheDocument();
     expect(screen.getByText("Price Guides & Certs")).toBeInTheDocument();
     expect(screen.getByText("Marketplaces & Numismatic Catalogs")).toBeInTheDocument();
+    expect(screen.getByText("Trading & Collectible Cards (Optional BYOK)")).toBeInTheDocument();
+  });
+
+  it("builds card comp links and renders CardSpecsCard with inline edit", async () => {
+    const cardItem: CollectionItem = {
+      ...SAMPLE_ITEM,
+      category: "CARD",
+      title: "Charizard",
+      year: "1999",
+      mint_mark: "",
+      grading_service: "PSA",
+      grade: "10",
+      is_card_item: true,
+      card_game: "Pokémon",
+      set_name: "Base Set",
+      set_code: "BS",
+      card_number: "4/102",
+      rarity: "Holo Rare",
+      card_finish: "Holo",
+      card_edition: "1st Edition",
+      language: "English",
+      raw_condition: "NM",
+      catalog_numbers: { pokemon_tcg_id: "base1-4" },
+      attributes: { card_game: "Pokémon", set_name: "Base Set", card_number: "4/102" },
+    };
+
+    const links = buildCompLinks(cardItem);
+    expect(links.map((l) => l.label)).toEqual([
+      "eBay Sold",
+      "TCGplayer",
+      "PriceCharting",
+      "130point",
+    ]);
+    expect(links[1].url).toContain("tcgplayer.com");
+    expect(links[2].url).toContain("pricecharting.com");
+    expect(links[3].url).toContain("130point.com");
+
+    const onSaveSpecs = vi.fn().mockResolvedValue(undefined);
+    render(<CardSpecsCard item={cardItem} onSaveSpecs={onSaveSpecs} />);
+
+    expect(screen.getByText("Card Specifications")).toBeInTheDocument();
+    expect(screen.getByText("4/102")).toBeInTheDocument();
+    expect(screen.getByText("POKEMON TCG ID")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Edit Specs/i }));
+    const finishInput = screen.getByDisplayValue("Holo");
+    fireEvent.change(finishInput, { target: { value: "Shadowless Holo" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save Specs/i }));
+
+    await waitFor(() => {
+      expect(onSaveSpecs).toHaveBeenCalledWith(
+        expect.objectContaining({ card_finish: "Shadowless Holo" }),
+      );
+    });
   });
 });
 

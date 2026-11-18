@@ -47,6 +47,15 @@ TARGET_FIELDS: list[str] = [
     "tags",
     "purchase_price",
     "market_value_unit",
+    "card_game",
+    "set_name",
+    "set_code",
+    "card_number",
+    "rarity",
+    "card_finish",
+    "card_edition",
+    "language",
+    "raw_condition",
     "notes",
     "obverse_image_url",
     "reverse_image_url",
@@ -114,6 +123,15 @@ FIELD_ALIASES: dict[str, list[str]] = {
     "container": ["container", "custom set", "box", "location", "storage", "album", "tube"],
     "tags": ["tags", "tag", "labels"],
     "purchase_price": ["purchase_price", "paid", "price paid", "cost", "purchase cost", "cost basis"],
+    "card_game": ["card_game", "game", "tcg", "franchise", "sport"],
+    "set_name": ["set_name", "set", "expansion", "release"],
+    "set_code": ["set_code", "set id", "expansion code"],
+    "card_number": ["card_number", "card #", "card no", "collector number", "number"],
+    "rarity": ["rarity"],
+    "card_finish": ["card_finish", "finish", "parallel", "foil", "holo", "printing"],
+    "card_edition": ["card_edition", "edition", "1st edition"],
+    "language": ["language", "lang"],
+    "raw_condition": ["raw_condition", "card condition", "tcg condition"],
     "market_value_unit": [
         "market_value_unit",
         "market_value",
@@ -279,6 +297,8 @@ def normalize_category(raw: str | None) -> str:
         return CollectionItem.Category.BAR
     if "round" in low:
         return CollectionItem.Category.ROUND
+    if any(k in low for k in ("card", "tcg", "pokemon", "pokémon", "mtg", "yugioh", "sports")):
+        return CollectionItem.Category.CARD
     if "slab" in low:
         return CollectionItem.Category.SLAB
     if "flip" in low:
@@ -310,6 +330,16 @@ def normalize_grading_service(raw: str | None) -> str:
         return CollectionItem.GradingService.ANACS
     if "icg" in low:
         return CollectionItem.GradingService.ICG
+    if "psa" in low:
+        return CollectionItem.GradingService.PSA
+    if "bgs" in low or "beckett" in low:
+        return CollectionItem.GradingService.BGS
+    if "cgc" in low:
+        return CollectionItem.GradingService.CGC
+    if "sgc" in low:
+        return CollectionItem.GradingService.SGC
+    if low == "tag" or "tag " in low or "technical authentication" in low:
+        return CollectionItem.GradingService.TAG
     if low in {"none", "raw", "ungraded", ""}:
         return CollectionItem.GradingService.NONE
     return CollectionItem.GradingService.OTHER
@@ -390,9 +420,9 @@ def _normalize_item_kwargs(
 
     grade_val = (extracted.get("grade") or "").strip()
     if not grade_val and grading_service != CollectionItem.GradingService.NONE and grading_raw:
-        # Extract embedded grade like "PCGS MS65" or "NGC PF70 UC"
+        # Extract embedded grade like "PCGS MS65", "NGC PF70 UC", or "PSA 10"
         stripped = re.sub(
-            r"\b(pcgs\s*banknote|pcgs|ngc|pmg|cacg|cac|anacs|icg)\b",
+            r"\b(pcgs\s*banknote|pcgs|ngc|pmg|cacg|cac|anacs|icg|psa|bgs|beckett|cgc|sgc|tag)\b",
             "",
             grading_raw,
             flags=re.IGNORECASE,
@@ -400,11 +430,27 @@ def _normalize_item_kwargs(
         if stripped:
             grade_val = stripped
 
+    card_attr_keys = (
+        "card_game",
+        "set_name",
+        "set_code",
+        "card_number",
+        "rarity",
+        "card_finish",
+        "card_edition",
+        "language",
+        "raw_condition",
+    )
+    has_card_fields = any((extracted.get(k) or "").strip() for k in card_attr_keys) or (
+        grading_service in CollectionItem.CARD_GRADING_SERVICES
+    )
+
     category = normalize_category(extracted.get("category"))
-    if "category" not in extracted and (
-        grading_service != CollectionItem.GradingService.NONE or extracted.get("cert_number")
-    ):
-        category = CollectionItem.Category.SLAB
+    if "category" not in extracted:
+        if grading_service != CollectionItem.GradingService.NONE or extracted.get("cert_number"):
+            category = CollectionItem.Category.SLAB
+        elif has_card_fields:
+            category = CollectionItem.Category.CARD
 
     weight_unit = (
         CollectionItem.WeightUnit.G
@@ -419,6 +465,12 @@ def _normalize_item_kwargs(
     slab_designation = (extracted.get("slab_designation") or "").strip()
     if slab_designation:
         attributes["slab_designation"] = slab_designation[:120]
+    for key in card_attr_keys:
+        val = (extracted.get(key) or "").strip()
+        if val:
+            attributes[key] = val[:120]
+
+    series_val = (extracted.get("series") or attributes.get("set_name") or "")[:120]
 
     return {
         "title": title,
@@ -428,7 +480,7 @@ def _normalize_item_kwargs(
         "year": (extracted.get("year") or "")[:32],
         "denomination": (extracted.get("denomination") or "")[:64],
         "mint_or_refiner": (extracted.get("mint_or_refiner") or "")[:120],
-        "series": (extracted.get("series") or "")[:120],
+        "series": series_val,
         "quantity": qty,
         "metal_type": normalize_metal_type(extracted.get("metal_type")),
         "weight_value": weight_val,
