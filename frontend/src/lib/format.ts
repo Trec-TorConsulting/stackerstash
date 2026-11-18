@@ -22,6 +22,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   PAPER: "Paper Currency",
   BAR: "Bar / Ingot",
   ROUND: "Round",
+  CARD: "Trading Card",
   SLAB: "Graded Slab",
   FLIPPER: "Flip / Holder",
   OTHER: "Other",
@@ -32,10 +33,56 @@ export const SORT_CATEGORY_LABELS: Record<string, string> = {
   PAPER: "Paper Currency",
   BAR: "Bars / Ingots",
   ROUND: "Rounds",
+  CARD: "Trading Cards",
   OTHER: "Other",
 };
 
-export const SORT_CATEGORY_ORDER: string[] = ["COIN", "PAPER", "BAR", "ROUND", "OTHER"];
+export const SORT_CATEGORY_ORDER: string[] = ["COIN", "PAPER", "BAR", "ROUND", "CARD", "OTHER"];
+
+export const CARD_GRADING_SERVICES = new Set(["PSA", "BGS", "CGC", "SGC", "TAG"]);
+
+export const GRADING_SERVICE_OPTIONS = [
+  { value: "NONE", label: "Raw / Ungraded" },
+  { value: "PCGS", label: "PCGS" },
+  { value: "NGC", label: "NGC" },
+  { value: "PMG", label: "PMG" },
+  { value: "PCGS_BANKNOTE", label: "PCGS Banknote" },
+  { value: "CACG", label: "CACG" },
+  { value: "ANACS", label: "ANACS" },
+  { value: "ICG", label: "ICG" },
+  { value: "PSA", label: "PSA (Cards)" },
+  { value: "BGS", label: "BGS / Beckett (Cards)" },
+  { value: "CGC", label: "CGC (Cards)" },
+  { value: "SGC", label: "SGC (Cards)" },
+  { value: "TAG", label: "TAG (Cards)" },
+  { value: "OTHER", label: "Other" },
+] as const;
+
+export const RAW_CARD_CONDITIONS: Record<string, string> = {
+  NM: "NM (Near Mint)",
+  LP: "LP (Lightly Played)",
+  MP: "MP (Moderately Played)",
+  HP: "HP (Heavily Played)",
+  DMG: "DMG (Damaged)",
+};
+
+export function isCardItem(
+  item: {
+    category?: string | null;
+    sort_category?: string | null;
+    grading_service?: string | null;
+    is_card_item?: boolean;
+    card_game?: string | null;
+    attributes?: Record<string, unknown> | null;
+  } | null | undefined,
+): boolean {
+  if (!item) return false;
+  if (item.is_card_item) return true;
+  if (item.category === "CARD" || item.sort_category === "CARD") return true;
+  if (item.grading_service && CARD_GRADING_SERVICES.has(item.grading_service)) return true;
+  const attrGame = item.attributes && typeof item.attributes === "object" ? item.attributes.card_game : undefined;
+  return Boolean(String(item.card_game || attrGame || "").trim());
+}
 
 export const METAL_LABELS: Record<string, string> = {
   NONE: "Non-Bullion",

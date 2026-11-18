@@ -235,6 +235,32 @@ REFINER_ALIASES: tuple[tuple[tuple[str, ...], str], ...] = (
 
 POURED_KEYWORDS = ("hand poured", "hand-poured", "poured", "cast bar", "artisan pour")
 
+CARD_FRANCHISE_ALIASES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("pokémon", "pokemon", "pikachu", "charizard", "scarlet & violet", "sword & shield"), "Pokémon"),
+    (("magic: the gathering", "magic the gathering", "mtg", "planeswalker"), "Magic: The Gathering"),
+    (("yu-gi-oh", "yugioh", "blue-eyes", "dark magician"), "Yu-Gi-Oh!"),
+    (("lorcana", "disney lorcana"), "Disney Lorcana"),
+    (("one piece", "one-piece"), "One Piece"),
+    (("baseball", "mlb", "bowman", "topps heritage", "topps series"), "Sports — Baseball"),
+    (("basketball", "nba", "nba hoops"), "Sports — Basketball"),
+    (("football", "nfl", "donruss", "gridiron"), "Sports — Football"),
+)
+
+CARD_KEYWORDS = (
+    "trading card",
+    "pokémon",
+    "pokemon",
+    "magic: the gathering",
+    "magic the gathering",
+    "yu-gi-oh",
+    "yugioh",
+    "lorcana",
+    "rookie card",
+    "holo rare",
+    "topps",
+    "panini",
+)
+
 
 @dataclass(frozen=True)
 class SortResult:
@@ -253,10 +279,15 @@ def _determine_sort_category(item: CollectionItem) -> str:
         CollectionItem.SortCategory.PAPER,
         CollectionItem.SortCategory.BAR,
         CollectionItem.SortCategory.ROUND,
+        CollectionItem.SortCategory.CARD,
     ):
         return cat
 
     grading = (item.grading_service or "").upper()
+    attrs = item.attributes if isinstance(item.attributes, dict) else {}
+    if grading in CollectionItem.CARD_GRADING_SERVICES or str(attrs.get("card_game") or "").strip():
+        return CollectionItem.SortCategory.CARD
+
     if cat == CollectionItem.Category.SLAB and grading in (
         CollectionItem.GradingService.PMG,
         CollectionItem.GradingService.PCGS_BANKNOTE,
@@ -267,6 +298,8 @@ def _determine_sort_category(item: CollectionItem) -> str:
         filter(None, [item.title, item.denomination, item.series, item.notes])
     ).lower()
 
+    if _contains_any(text, CARD_KEYWORDS):
+        return CollectionItem.SortCategory.CARD
     if _contains_any(text, PAPER_KEYWORDS):
         return CollectionItem.SortCategory.PAPER
     if _contains_any(text, BAR_KEYWORDS):
@@ -328,6 +361,23 @@ def _normalize_mint_or_pourer(item: CollectionItem) -> str:
     return "Uncategorized"
 
 
+def _normalize_card_franchise(item: CollectionItem) -> str:
+    attrs = item.attributes if isinstance(item.attributes, dict) else {}
+    raw_game = str(attrs.get("card_game") or "").strip()
+    combined = " ".join(
+        filter(
+            None,
+            [raw_game, item.title, item.series, str(attrs.get("set_name") or ""), item.notes],
+        )
+    ).lower()
+
+    for aliases, canonical in CARD_FRANCHISE_ALIASES:
+        if _contains_any(combined, aliases):
+            return canonical
+
+    return "Other Cards"
+
+
 def classify_item_deterministic(item: CollectionItem) -> SortResult:
     """Classify an item into canonical sort_category and sort_subcategory using local rules."""
     sort_cat = _determine_sort_category(item)
@@ -335,6 +385,8 @@ def classify_item_deterministic(item: CollectionItem) -> SortResult:
         subcat = _normalize_country_or_era(item)
     elif sort_cat in (CollectionItem.SortCategory.BAR, CollectionItem.SortCategory.ROUND):
         subcat = _normalize_mint_or_pourer(item)
+    elif sort_cat == CollectionItem.SortCategory.CARD:
+        subcat = _normalize_card_franchise(item)
     else:
         subcat = _normalize_country_or_era(item)
         if subcat == "Uncategorized":

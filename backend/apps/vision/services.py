@@ -32,12 +32,12 @@ OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_VISION_MODEL = "qwen/qwen2.5-vl-72b-instruct:free"
 OPENROUTER_TEXT_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
 
-IDENTIFICATION_PROMPT = """You are an expert numismatist, paper-currency specialist, and precious-metals bullion authenticator.
-Analyze the provided image(s) of a collectible or bullion item (which may be a coin, paper banknote, bar/ingot such as Geiger or 1kg copper, round, coin flip, or PCGS/NGC/PMG/CACG/ANACS graded slab).
+IDENTIFICATION_PROMPT = """You are an expert numismatist, paper-currency specialist, trading-card authenticator, and precious-metals bullion appraiser.
+Analyze the provided image(s) of a collectible or bullion item (which may be a coin, paper banknote, bar/ingot such as Geiger or 1kg copper, round, coin flip, trading/TCG/sports card, or PCGS/NGC/PMG/CACG/ANACS/PSA/BGS/CGC/SGC/TAG graded slab).
 
 Return ONLY valid JSON with these exact keys:
 {
-  "category": "COIN|PAPER|BAR|ROUND|SLAB|FLIPPER|OTHER",
+  "category": "COIN|PAPER|BAR|ROUND|CARD|SLAB|FLIPPER|OTHER",
   "title": "concise descriptive title",
   "country": "",
   "year": "",
@@ -48,12 +48,21 @@ Return ONLY valid JSON with these exact keys:
   "weight_value": 0,
   "weight_unit": "OZ_T|G|KG|OZ_AVDP",
   "purity": 0.999,
-  "grading_service": "NONE|PCGS|NGC|PMG|PCGS_BANKNOTE|CACG|ANACS|ICG|OTHER",
+  "grading_service": "NONE|PCGS|NGC|PMG|PCGS_BANKNOTE|CACG|ANACS|ICG|PSA|BGS|CGC|SGC|TAG|OTHER",
   "cert_number": "",
   "grade": "",
   "slab_designation": "",
   "estimated_grade": "",
   "serial_number": "",
+  "card_game": "",
+  "set_name": "",
+  "set_code": "",
+  "card_number": "",
+  "rarity": "",
+  "card_finish": "",
+  "card_edition": "",
+  "language": "",
+  "raw_condition": "",
   "estimated_value_usd": 0,
   "ai_confidence": 0.0,
   "notes": "",
@@ -69,7 +78,8 @@ Return ONLY valid JSON with these exact keys:
 Strict rules:
 - NEVER invent or guess a cert_number or serial_number. Only populate them if clearly legible in the image or barcode hint.
 - Check carefully whether the image shows a real physical item vs. a photo of a screen/monitor, a printed photo, a screenshot, or a synthetic/edited image. Set authenticity flags and add concise warnings if suspicious.
-- If the item is encapsulated in a third-party grading slab (PCGS, NGC, PMG, PCGS Banknote, CACG, ANACS, ICG, etc.), set "category" to "SLAB", populate "grading_service", "grade", "cert_number" (the slab certification/registry number), and "slab_designation" (e.g., First Strike, Early Releases, DCAM, UCAM, PL, DMPL, EPQ, PPQ, Star, CAC, Pedigree).
+- If the item is encapsulated in a third-party grading slab (PCGS, NGC, PMG, PCGS Banknote, CACG, ANACS, ICG, PSA, BGS, CGC, SGC, TAG, etc.), set "category" to "SLAB", populate "grading_service", "grade", "cert_number" (the slab certification/registry number), and "slab_designation" (e.g., First Strike, Early Releases, DCAM, UCAM, PL, DMPL, EPQ, PPQ, Star, CAC, Pedigree, Gem Mint, Pristine).
+- For trading cards, Pokémon cards, Magic: The Gathering, Yu-Gi-Oh!, Lorcana, One Piece, or sports cards: set "category" to "CARD" (or "SLAB" if inside a PSA/BGS/CGC/SGC/TAG slab), set "metal_type" to "NONE" and "weight_value" to 0, and populate "card_game", "set_name", "set_code", "card_number" (e.g. "4/102"), "rarity", "card_finish" (Holo, Reverse Holo, Full Art, Alt Art, Foil, Refractor, etc.), "card_edition" (1st Edition, Shadowless, Unlimited, etc.), "language", and "raw_condition" (NM, LP, MP, HP, DMG) if ungraded.
 - For paper currency (including slabbed banknotes) or serialized bars, put the note/bar serial number in "serial_number" (separate from the slab "cert_number").
 - For Goldbacks (Aurum/Goldback Inc. 24K .9999 gold foil voluntary currency notes across Utah, Nevada, New Hampshire, Wyoming, South Dakota, Florida, Oklahoma, Arizona, Idaho, California, etc.), NEVER confuse fractional Goldbacks with troy-ounce bullion: 1/4 = 0.00025 ozt (1/4,000), 1/2 = 0.0005 ozt (1/2,000), 1 = 0.001 ozt (1/1,000), 2 = 0.002 ozt (1/500), 5 = 0.005 ozt (1/200), 10 = 0.01 ozt (1/100), 25 = 0.025 ozt (1/40), 50 = 0.05 ozt (1/20), 100 = 0.1 ozt (1/10). Set category="PAPER", metal_type="GOLD", purity=0.9999, weight_unit="OZ_T", and read the exact year and serial number printed on the note.
 - If the item is packaged in an Assay Card, Certificate of Authenticity (CoA) card, or Proof Set, treat the printed specifications on the card/CoA (Issuing Country, Year, Face Value, Metal, Fineness/Purity, Weight, Mintage, Serial Number) as authoritative over any design-name guess, and set "category" to "COIN" (or "BAR" if a bar) rather than "ROUND".
@@ -100,24 +110,40 @@ def _extract_json_block(text: str) -> dict[str, Any]:
 
 
 def _normalize_candidate(raw: dict[str, Any], barcode_hint: str | None = None) -> dict[str, Any]:
+    grading_service = str(raw.get("grading_service") or "NONE").upper()
+    card_game = str(raw.get("card_game") or "").strip()
+    is_card = (
+        str(raw.get("category") or "").upper() == "CARD"
+        or grading_service in {"PSA", "BGS", "CGC", "SGC", "TAG"}
+        or bool(card_game)
+    )
     candidate = {
-        "category": raw.get("category") or "COIN",
+        "category": raw.get("category") or ("CARD" if is_card else "COIN"),
         "title": raw.get("title") or "",
         "country": raw.get("country") or "",
         "year": str(raw.get("year") or ""),
         "mint_or_refiner": raw.get("mint_or_refiner") or "",
         "denomination": raw.get("denomination") or "",
-        "series": raw.get("series") or "",
-        "metal_type": raw.get("metal_type") or "NONE",
-        "weight_value": raw.get("weight_value") or 0,
+        "series": raw.get("series") or raw.get("set_name") or "",
+        "metal_type": "NONE" if is_card else (raw.get("metal_type") or "NONE"),
+        "weight_value": 0 if is_card else (raw.get("weight_value") or 0),
         "weight_unit": raw.get("weight_unit") or "OZ_T",
         "purity": raw.get("purity") if raw.get("purity") is not None else 0.999,
-        "grading_service": raw.get("grading_service") or "NONE",
+        "grading_service": grading_service,
         "cert_number": raw.get("cert_number") or (barcode_hint or ""),
         "grade": raw.get("grade") or "",
         "slab_designation": raw.get("slab_designation") or "",
         "estimated_grade": raw.get("estimated_grade") or "",
         "serial_number": raw.get("serial_number") or "",
+        "card_game": card_game,
+        "set_name": str(raw.get("set_name") or "").strip(),
+        "set_code": str(raw.get("set_code") or "").strip(),
+        "card_number": str(raw.get("card_number") or "").strip(),
+        "rarity": str(raw.get("rarity") or "").strip(),
+        "card_finish": str(raw.get("card_finish") or "").strip(),
+        "card_edition": str(raw.get("card_edition") or "").strip(),
+        "language": str(raw.get("language") or "").strip(),
+        "raw_condition": str(raw.get("raw_condition") or "").strip(),
         "estimated_value_usd": raw.get("estimated_value_usd") or 0,
         "ai_confidence": float(raw.get("ai_confidence") or 0.0),
         "notes": raw.get("notes") or "",
@@ -1155,6 +1181,10 @@ def _normalize_ai_appraisal(
         except Exception:
             upside_str = None
 
+    raw_cond = str(parsed.get("raw_condition") or "").strip().upper()
+    if raw_cond not in {"NM", "LP", "MP", "HP", "DMG"}:
+        raw_cond = ""
+
     normalized = {
         "low_usd": low_str or str((mid_val * Decimal("0.85")).quantize(Decimal("0.01"))),
         "mid_usd": str(mid_val),
@@ -1168,6 +1198,7 @@ def _normalize_ai_appraisal(
         "estimated_grade": str(parsed.get("estimated_grade") or "").strip()[:32] if is_raw_gradeable else "",
         "estimated_grade_range": str(parsed.get("estimated_grade_range") or "").strip()[:32] if is_raw_gradeable else "",
         "estimated_grade_rationale": str(parsed.get("estimated_grade_rationale") or "").strip() if is_raw_gradeable else "",
+        "raw_condition": raw_cond if is_raw_gradeable else "",
         "grading_upside_usd": upside_str,
         "normalized_title": str(parsed.get("normalized_title") or "").strip()[:200],
     }
@@ -1206,20 +1237,34 @@ def estimate_item_value_with_ai(
     photo_inspected = len(encoded_photos) > 0
     is_raw_gradeable = (
         item.grading_service == CollectionItem.GradingService.NONE
-        and item.category in {"COIN", "PAPER", "FLIPPER", "ROUND"}
+        and item.category in {"COIN", "PAPER", "FLIPPER", "ROUND", "CARD"}
     )
-    grade_scale = "PMG 1-70 paper currency scale" if item.category == "PAPER" else "Sheldon 1-70 coin scale"
-    raw_grade_schema = (
-        f', "estimated_grade": "<{grade_scale}, e.g. AU55 or MS63>", '
-        '"estimated_grade_range": "<e.g. AU50-AU58>", '
-        '"estimated_grade_rationale": "<surface, luster, wear, strike notes>", '
-        '"grading_upside_usd": <net USD gain/loss after ~$40 grading fees>'
-        if is_raw_gradeable
-        else ""
-    )
+    if item.is_card_item:
+        grade_scale = "TCG/Sports 1-10 scale (evaluating centering, corners, edges, and surface)"
+        raw_grade_schema = (
+            f', "estimated_grade": "<{grade_scale}, e.g. 8 or PSA 9 Est.>", '
+            '"estimated_grade_range": "<e.g. 7-8.5>", '
+            '"raw_condition": "NM|LP|MP|HP|DMG", '
+            '"estimated_grade_rationale": "<centering, corners, edges, and surface notes>", '
+            '"grading_upside_usd": <net USD gain/loss after ~$20-$25 card grading fees>'
+            if is_raw_gradeable
+            else ""
+        )
+        expert_role = "trading card and sports card appraiser"
+    else:
+        grade_scale = "PMG 1-70 paper currency scale" if item.category == "PAPER" else "Sheldon 1-70 coin scale"
+        raw_grade_schema = (
+            f', "estimated_grade": "<{grade_scale}, e.g. AU55 or MS63>", '
+            '"estimated_grade_range": "<e.g. AU50-AU58>", '
+            '"estimated_grade_rationale": "<surface, luster, wear, strike notes>", '
+            '"grading_upside_usd": <net USD gain/loss after ~$40 grading fees>'
+            if is_raw_gradeable
+            else ""
+        )
+        expert_role = "numismatist and bullion appraiser"
 
     prompt = (
-        "You are an expert numismatist and bullion appraiser. Analyze the item metadata"
+        f"You are an expert {expert_role}. Analyze the item metadata"
         + (" and attached obverse/reverse/slab photos" if photo_inspected else " (no photos attached)")
         + " and return ONLY valid JSON with these exact keys:\n"
         '{"low_usd": <number>, "mid_usd": <number>, "high_usd": <number>, '

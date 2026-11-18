@@ -147,10 +147,34 @@ def parse_ocr_numismatic_hints(
         grading_service = "ANACS"
     elif "ICG" in upper:
         grading_service = "ICG"
+    elif re.search(r"\bPSA\b", upper):
+        grading_service = "PSA"
+    elif re.search(r"\b(?:BGS|BECKETT)\b", upper):
+        grading_service = "BGS"
+    elif re.search(r"\bCGC\b", upper):
+        grading_service = "CGC"
+    elif re.search(r"\bSGC\b", upper):
+        grading_service = "SGC"
+    elif re.search(r"\bTAG\b", upper):
+        grading_service = "TAG"
 
     # 2. Grade
     grade = ""
-    if grading_service != "NONE":
+    if grading_service in {"PSA", "BGS", "CGC", "SGC", "TAG"}:
+        card_grade_match = re.search(
+            r"\b(?:GEM\s*MT|GEM\s*MINT|PRISTINE|MINT|NM-MT|NM|EX-MT|EX|VG-EX|VG|GOOD|PR)\s*(10|9\.5|9|8\.5|8|7\.5|7|6\.5|6|5|4|3|2|1)\b",
+            upper,
+        )
+        if card_grade_match:
+            grade = card_grade_match.group(1)
+        else:
+            svc_grade_match = re.search(
+                rf"\b{grading_service}\s*[-]?\s*(10|9\.5|9|8\.5|8|7\.5|7|6|5|4|3|2|1)\b",
+                upper,
+            )
+            if svc_grade_match:
+                grade = svc_grade_match.group(1)
+    elif grading_service != "NONE":
         grade_match = re.search(
             r"\b((?:MS|PR|PF|AU|XF|EF|VF|VG|F|G|AG|FR|PO)\s*-?\s*\d{1,2}(?:\s*(?:UC|UCAM|DCAM|CAM|PL|DMPL|EPQ|PPQ|\+|★))?)\b",
             upper,
@@ -285,9 +309,34 @@ def parse_ocr_numismatic_hints(
             series = label
             break
 
+    # 8b. Trading card hints
+    card_game = ""
+    for kw, canonical_game in (
+        ("POKÉMON", "Pokémon"),
+        ("POKEMON", "Pokémon"),
+        ("MAGIC: THE GATHERING", "Magic: The Gathering"),
+        ("MAGIC THE GATHERING", "Magic: The Gathering"),
+        ("YU-GI-OH", "Yu-Gi-Oh!"),
+        ("YUGIOH", "Yu-Gi-Oh!"),
+        ("LORCANA", "Disney Lorcana"),
+        ("ONE PIECE", "One Piece"),
+        ("TOPPS", "Sports — Baseball"),
+        ("PANINI", "Sports — Basketball"),
+    ):
+        if kw in upper:
+            card_game = canonical_game
+            break
+    card_number = ""
+    card_num_match = re.search(r"\b(\d{1,3}/\d{1,3})\b", upper)
+    if card_num_match and (card_game or grading_service in {"PSA", "BGS", "CGC", "SGC", "TAG"}):
+        card_number = card_num_match.group(1)
+    is_card = bool(card_game) or grading_service in {"PSA", "BGS", "CGC", "SGC", "TAG"}
+
     # 9. Category
     if grading_service != "NONE":
         category = "SLAB"
+    elif is_card:
+        category = "CARD"
     elif is_paper:
         category = "PAPER"
     elif any(kw in upper for kw in ("BAR", "INGOT", "GEIGER", "FINE SILVER", "FINE GOLD")) and weight_value > 0:
@@ -317,7 +366,7 @@ def parse_ocr_numismatic_hints(
 
     title = " ".join(p for p in title_parts if p).strip()
     has_usable_hints = bool(
-        title or cert_number or serial_number or year or denomination or grading_service != "NONE" or metal_type != "NONE"
+        title or cert_number or serial_number or year or denomination or grading_service != "NONE" or metal_type != "NONE" or is_card
     )
 
     return {
@@ -328,8 +377,8 @@ def parse_ocr_numismatic_hints(
         "mint_or_refiner": "Geiger Edelmetalle" if "GEIGER" in upper else "",
         "denomination": denomination,
         "series": series,
-        "metal_type": metal_type,
-        "weight_value": weight_value,
+        "metal_type": "NONE" if is_card else metal_type,
+        "weight_value": 0 if is_card else weight_value,
         "weight_unit": weight_unit,
         "purity": purity,
         "grading_service": grading_service,
@@ -338,6 +387,8 @@ def parse_ocr_numismatic_hints(
         "slab_designation": "",
         "estimated_grade": "",
         "serial_number": serial_number,
+        "card_game": card_game,
+        "card_number": card_number,
         "estimated_value_usd": 0,
         "ai_confidence": 0.45 if has_usable_hints else 0.0,
         "notes": f"Extracted via local OCR: {text[:240]}" if text else "",

@@ -275,3 +275,61 @@ def test_workspace_settings_and_catalog_auto_sort_apis(api_client, user_a):
     )
     assert reset_res.status_code == 200
     assert reset_res.json()["sort_override"] is False
+
+
+def test_trading_card_auto_sort_and_franchises(workspace):
+    raw_pokemon = CollectionItem(
+        workspace=workspace,
+        category=CollectionItem.Category.CARD,
+        title="Charizard 4/102 Base Set",
+        attributes={"card_game": "Pokémon", "set_name": "Base Set"},
+    )
+    res_poke = classify_item_deterministic(raw_pokemon)
+    assert res_poke.sort_category == CollectionItem.SortCategory.CARD
+    assert res_poke.sort_subcategory == "Pokémon"
+
+    psa_slab = CollectionItem(
+        workspace=workspace,
+        category=CollectionItem.Category.SLAB,
+        grading_service=CollectionItem.GradingService.PSA,
+        grade="10",
+        title="2023 Topps Chrome Shohei Ohtani Baseball #1",
+    )
+    res_baseball = classify_item_deterministic(psa_slab)
+    assert res_baseball.sort_category == CollectionItem.SortCategory.CARD
+    assert res_baseball.sort_subcategory == "Sports — Baseball"
+
+    mtg_card = CollectionItem(
+        workspace=workspace,
+        category=CollectionItem.Category.CARD,
+        title="Black Lotus",
+        attributes={"card_game": "MTG"},
+    )
+    assert classify_item_deterministic(mtg_card).sort_subcategory == "Magic: The Gathering"
+
+    unknown_card = CollectionItem(
+        workspace=workspace,
+        category=CollectionItem.Category.CARD,
+        title="Mystery Promo Card",
+    )
+    res_unknown = classify_item_deterministic(unknown_card)
+    assert res_unknown.sort_category == CollectionItem.SortCategory.CARD
+    assert res_unknown.sort_subcategory == "Other Cards"
+
+
+@pytest.mark.django_db
+def test_trading_card_manual_override_preserved(workspace):
+    card = CollectionItem.objects.create(
+        workspace=workspace,
+        category=CollectionItem.Category.SLAB,
+        grading_service=CollectionItem.GradingService.PSA,
+        grade="9",
+        title="1999 Base Set Blastoise",
+        attributes={"card_game": "Pokémon"},
+        sort_category=CollectionItem.SortCategory.CARD,
+        sort_subcategory="WOTC Vintage",
+        sort_override=True,
+    )
+    assert classify_and_save_item(card.id, use_ollama=False) is False
+    card.refresh_from_db()
+    assert card.sort_subcategory == "WOTC Vintage"

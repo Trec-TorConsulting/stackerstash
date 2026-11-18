@@ -3,10 +3,22 @@ import { AlertTriangle, Camera, Check, Edit3, ExternalLink, RotateCw, Sparkles, 
 import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type AppraisalJob, type CollectionItem, type ContainerNode, type ValuationHistoryEntry } from "../lib/api";
-import { CATEGORY_LABELS, METAL_LABELS, SORT_CATEGORY_LABELS, SORT_CATEGORY_ORDER, STATUS_LABELS, formatOz, formatUsd } from "../lib/format";
+import {
+  CARD_GRADING_SERVICES,
+  CATEGORY_LABELS,
+  GRADING_SERVICE_OPTIONS,
+  METAL_LABELS,
+  SORT_CATEGORY_LABELS,
+  SORT_CATEGORY_ORDER,
+  STATUS_LABELS,
+  formatOz,
+  formatUsd,
+  isCardItem,
+} from "../lib/format";
 import { normalizeImageFileForUpload } from "../lib/imageUtils";
 import { cacheItemSnapshot, getCachedItemSnapshot } from "../lib/offlineCache";
 import { AppraisalProgressBanner } from "../components/valuation/AppraisalProgressBanner";
+import { CardSpecsCard } from "../components/valuation/CardSpecsCard";
 import { CollectibilityThesisCard } from "../components/valuation/CollectibilityThesisCard";
 import { EstimatedGradeCard } from "../components/valuation/EstimatedGradeCard";
 import { NumismaticSpecsCard } from "../components/valuation/NumismaticSpecsCard";
@@ -239,7 +251,9 @@ export function ItemDetailPage() {
 
   function rawCategoryForClearedSlab(currentCategory: string, prevService: string) {
     if (currentCategory !== "SLAB") return currentCategory;
-    return prevService === "PMG" || prevService === "PCGS_BANKNOTE" ? "PAPER" : "COIN";
+    if (prevService === "PMG" || prevService === "PCGS_BANKNOTE") return "PAPER";
+    if (CARD_GRADING_SERVICES.has(prevService) || isCardItem(item)) return "CARD";
+    return "COIN";
   }
 
   function handleRemoveSlab() {
@@ -823,15 +837,11 @@ export function ItemDetailPage() {
                     }}
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
                   >
-                    <option value="NONE">Raw / Ungraded</option>
-                    <option value="PCGS">PCGS</option>
-                    <option value="NGC">NGC</option>
-                    <option value="PMG">PMG</option>
-                    <option value="PCGS_BANKNOTE">PCGS Banknote</option>
-                    <option value="CACG">CACG</option>
-                    <option value="ANACS">ANACS</option>
-                    <option value="ICG">ICG</option>
-                    <option value="OTHER">Other</option>
+                    {GRADING_SERVICE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 {editForm.grading_service !== "NONE" ? (
@@ -1005,13 +1015,23 @@ export function ItemDetailPage() {
             }}
           />
         </div>
-        <NumismaticSpecsCard
-          item={item}
-          isSaving={updateMut.isPending}
-          onSaveSpecs={async (patch) => {
-            await updateMut.mutateAsync(patch);
-          }}
-        />
+        {isCardItem(item) ? (
+          <CardSpecsCard
+            item={item}
+            isSaving={updateMut.isPending}
+            onSaveSpecs={async (patch) => {
+              await updateMut.mutateAsync(patch);
+            }}
+          />
+        ) : (
+          <NumismaticSpecsCard
+            item={item}
+            isSaving={updateMut.isPending}
+            onSaveSpecs={async (patch) => {
+              await updateMut.mutateAsync(patch);
+            }}
+          />
+        )}
       </div>
     </div>
   );

@@ -24,7 +24,7 @@ import {
   writeAutoCropPreference,
   type AutoCropResult,
 } from "../lib/autoCrop";
-import { CATEGORY_LABELS, METAL_LABELS } from "../lib/format";
+import { CATEGORY_LABELS, GRADING_SERVICE_OPTIONS, METAL_LABELS } from "../lib/format";
 import { normalizeImageFileForUpload } from "../lib/imageUtils";
 
 /** A photo staged for identification / upload on the scan page. */
@@ -131,6 +131,15 @@ export function ScanAddPage() {
     is_estimate: false,
     tagsText: "",
     notes: "",
+    card_game: "",
+    set_name: "",
+    set_code: "",
+    card_number: "",
+    rarity: "",
+    card_finish: "",
+    card_edition: "",
+    language: "",
+    raw_condition: "",
   });
 
   function canIdentifyFiles(
@@ -433,6 +442,15 @@ export function ScanAddPage() {
         valuation_source: c.estimated_value_usd ? "AI_ESTIMATE" : f.valuation_source,
         is_estimate: Boolean(c.estimated_value_usd),
         notes: c.notes || f.notes,
+        card_game: String(c.card_game || f.card_game || ""),
+        set_name: String(c.set_name || f.set_name || ""),
+        set_code: String(c.set_code || f.set_code || ""),
+        card_number: String(c.card_number || f.card_number || ""),
+        rarity: String(c.rarity || f.rarity || ""),
+        card_finish: String(c.card_finish || f.card_finish || ""),
+        card_edition: String(c.card_edition || f.card_edition || ""),
+        language: String(c.language || f.language || ""),
+        raw_condition: String(c.raw_condition || f.raw_condition || ""),
       }));
       setQuotaDeferred(Boolean(res.quota_deferred));
       setAiNotice(
@@ -897,7 +915,13 @@ export function ScanAddPage() {
             <PhotoCropRotateView
               imageFile={files[editingPhotoIndex].file}
               title={`Adjust ${files[editingPhotoIndex].label}`}
-              initialPreset={form.category === "COIN" ? "coin" : form.category === "PAPER" ? "note" : "slab"}
+              initialPreset={
+                form.category === "COIN"
+                  ? "coin"
+                  : form.category === "PAPER"
+                    ? "note"
+                    : "slab"
+              }
               confirmLabel="Save Changes"
               cancelLabel="Cancel"
               onConfirm={(croppedFile) => {
@@ -1177,15 +1201,11 @@ export function ScanAddPage() {
                   }}
                   className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
                 >
-                  <option value="NONE">Raw / Ungraded</option>
-                  <option value="PCGS">PCGS</option>
-                  <option value="NGC">NGC</option>
-                  <option value="PMG">PMG</option>
-                  <option value="PCGS_BANKNOTE">PCGS Banknote</option>
-                  <option value="CACG">CACG</option>
-                  <option value="ANACS">ANACS</option>
-                  <option value="ICG">ICG</option>
-                  <option value="OTHER">Other</option>
+                  {GRADING_SERVICE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
                 </select>
               </div>
 

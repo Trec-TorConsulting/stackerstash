@@ -60,7 +60,7 @@ function resolveInitialMode(
 ): ReticleMode {
   if (!initialShape || initialShape === 'auto') return 'auto';
   if (initialShape === 'circle' || initialShape === 'coin') return 'coin';
-  if (initialShape === 'slab') return 'slab';
+  if (initialShape === 'slab' || initialShape === 'rect') return 'slab';
   return 'note';
 }
 

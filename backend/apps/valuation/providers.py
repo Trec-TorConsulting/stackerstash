@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from decimal import ROUND_HALF_UP, Decimal
 from statistics import median
@@ -26,6 +27,11 @@ CERT_VERIFICATION_URLS = {
     "PCGS_BANKNOTE": "https://www.pcgs.com/banknote/cert/{cert}",
     "CACG": "https://www.cacgrading.com/cert/{cert}",
     "ANACS": "https://www.anacs.com/Verify/CertVerification.aspx?cert={cert}",
+    "PSA": "https://www.psacard.com/cert/{cert}",
+    "BGS": "https://www.beckett.com/grading/card-lookup?item_type=BGS&item_id={cert}",
+    "CGC": "https://www.cgccards.com/certlookup/{cert}/",
+    "SGC": "https://www.gosgc.com/cert-code-lookup?cert={cert}",
+    "TAG": "https://my.taggrading.com/card/{cert}",
 }
 
 
@@ -186,9 +192,13 @@ def lookup_greysheet(
 
 
 def lookup_cert_metadata(
-    grading_service: str, cert_number: str, pcgs_token: str = "", timeout: float = 10.0
+    grading_service: str,
+    cert_number: str,
+    pcgs_token: str = "",
+    psa_token: str = "",
+    timeout: float = 10.0,
 ) -> dict[str, Any] | None:
-    """Resolve cert data (PCGS API when token exists) or official verification link."""
+    """Resolve cert data (PCGS/PSA API when token exists) or official verification link."""
     cert = cert_number.strip()
     if not cert or grading_service == "NONE":
         return None
@@ -196,6 +206,10 @@ def lookup_cert_metadata(
         pcgs_res = lookup_pcgs_cert(cert, pcgs_token, timeout=timeout)
         if pcgs_res:
             return pcgs_res
+    if grading_service == "PSA" and psa_token:
+        psa_res = lookup_psa_cert(cert, psa_token, timeout=timeout)
+        if psa_res:
+            return psa_res
     url = build_cert_verification_url(grading_service, cert)
     if not url:
         return None
@@ -528,4 +542,338 @@ def lookup_goldback_exchange_benchmark(
         "mid_usd": str(mid),
         "high_usd": str(high),
     }
+
+
+def _card_cache_key(prefix: str, *parts: str) -> str:
+    joined = "|".join(str(p or "").strip().lower() for p in parts)
+    return f"card_ref:{prefix}:{hashlib.sha256(joined.encode('utf-8')).hexdigest()[:24]}"
+
+
+def lookup_psa_cert(
+    cert_number: str, psa_token: str, timeout: float = 10.0
+) -> dict[str, Any] | None:
+    """Query PSA Public Cert API when PSA_API_TOKEN is configured."""
+    cert = cert_number.strip()
+    if not cert or not psa_token:
+        return None
+    from django.core.cache import cache
+
+    cache_key = _card_cache_key("psa_cert", cert)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached or None
+
+    url = f"https://api.psacard.com/publicapi/cert/GetByCertNumber/{cert}"
+    headers = {"Authorization": f"bearer {psa_token}", "Accept": "application/json"}
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+        psa_cert = data.get("PSACert") or data
+        if not isinstance(psa_cert, dict) or not psa_cert.get("CertNumber"):
+            cache.set(cache_key, False, timeout=3600)
+            return None
+        subject = str(psa_cert.get("Subject") or "").strip()
+        brand = str(psa_cert.get("Brand") or "").strip()
+        year = str(psa_cert.get("Year") or "").strip()
+        card_num = str(psa_cert.get("CardNumber") or "").strip()
+        grade_desc = str(psa_cert.get("GradeDescription") or psa_cert.get("CardGrade") or "").strip()
+        pop = psa_cert.get("TotalPopulation")
+        pop_higher = psa_cert.get("PopulationHigher")
+        res = {
+            "source": "PSA",
+            "cert_number": cert,
+            "verification_url": build_cert_verification_url("PSA", cert),
+            "market_value": None,
+            "grade": grade_desc,
+            "specs": {
+                "set_name": brand,
+                "card_number": card_num,
+                "year": year,
+                "title": " ".join(p for p in [year, brand, subject, f"#{card_num}" if card_num else ""] if p),
+                "psa_pop": pop,
+                "psa_pop_higher": pop_higher,
+            },
+            "raw": psa_cert,
+        }
+        cache.set(cache_key, res, timeout=86400)
+        return res
+    except Exception as exc:
+        logger.warning("PSA cert lookup failed for %s: %s", cert, exc)
+        return None
+
+
+def _select_pokemon_tcg_price(prices: dict[str, Any], card_finish: str = "") -> tuple[Decimal | None, Decimal | None, Decimal | None]:
+    if not isinstance(prices, dict) or not prices:
+        return None, None, None
+    finish_low = card_finish.strip().lower()
+    preferred_keys: list[str] = []
+    if "1st" in finish_low:
+        preferred_keys.extend(["1stEditionHolofoil", "1stEditionNormal"])
+    if "reverse" in finish_low:
+        preferred_keys.append("reverseHolofoil")
+    if "holo" in finish_low or "foil" in finish_low:
+        preferred_keys.append("holofoil")
+    preferred_keys.extend(["holofoil", "normal", "reverseHolofoil", "1stEditionHolofoil", "unlimitedHolofoil"])
+
+    chosen: dict[str, Any] | None = None
+    for key in preferred_keys:
+        if isinstance(prices.get(key), dict) and prices[key].get("market"):
+            chosen = prices[key]
+            break
+    if not chosen:
+        for val in prices.values():
+            if isinstance(val, dict) and (val.get("market") or val.get("mid")):
+                chosen = val
+                break
+    if not chosen:
+        return None, None, None
+
+    def _to_dec(v: Any) -> Decimal | None:
+        if v is None:
+            return None
+        try:
+            d = Decimal(str(v)).quantize(Decimal("0.01"))
+            return d if d > 0 else None
+        except Exception:
+            return None
+
+    market = _to_dec(chosen.get("market") or chosen.get("mid"))
+    low = _to_dec(chosen.get("low"))
+    high = _to_dec(chosen.get("high"))
+    return market, low, high
+
+
+def lookup_pokemon_tcg_card(
+    title: str,
+    set_name: str = "",
+    card_number: str = "",
+    card_finish: str = "",
+    api_key: str = "",
+    timeout: float = 10.0,
+) -> dict[str, Any] | None:
+    """Query Pokémon TCG API (zero-key or optional X-Api-Key) for card specs and TCGplayer prices."""
+    if not title:
+        return None
+    from django.core.cache import cache
+
+    cache_key = _card_cache_key("pokemon_tcg", title, set_name, card_number, card_finish)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached or None
+
+    clean_num = card_number.split("/")[0].strip() if card_number else ""
+    query_parts = [f'name:"{title.strip()}"']
+    if clean_num:
+        query_parts.append(f'number:"{clean_num}"')
+    if set_name:
+        query_parts.append(f'set.name:"{set_name.strip()}"')
+
+    headers: dict[str, str] = {"Accept": "application/json"}
+    if api_key:
+        headers["X-Api-Key"] = api_key
+
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.get(
+                "https://api.pokemontcg.io/v2/cards",
+                params={"q": " ".join(query_parts), "pageSize": 5},
+                headers=headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        cards = data.get("data") or []
+        if not cards and set_name:
+            # Retry without strict set.name filter
+            fallback_q = " ".join(query_parts[:2])
+            with httpx.Client(timeout=timeout) as client:
+                resp = client.get(
+                    "https://api.pokemontcg.io/v2/cards",
+                    params={"q": fallback_q, "pageSize": 5},
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                cards = (resp.json() or {}).get("data") or []
+        if not cards:
+            cache.set(cache_key, False, timeout=3600)
+            return None
+
+        card = cards[0]
+        set_obj = card.get("set") or {}
+        tcgplayer = card.get("tcgplayer") or {}
+        market, low, high = _select_pokemon_tcg_price(tcgplayer.get("prices") or {}, card_finish)
+        total_cards = set_obj.get("printedTotal") or set_obj.get("total")
+        num_str = str(card.get("number") or "")
+        full_num = f"{num_str}/{total_cards}" if num_str and total_cards else num_str
+
+        res = {
+            "source": "POKEMON_TCG",
+            "market_value": str(market) if market is not None else None,
+            "low_usd": str(low) if low is not None else None,
+            "high_usd": str(high) if high is not None else None,
+            "specs": {
+                "card_game": "Pokémon",
+                "set_name": str(set_obj.get("name") or ""),
+                "set_code": str(set_obj.get("ptcgoCode") or set_obj.get("id") or ""),
+                "card_number": full_num,
+                "rarity": str(card.get("rarity") or ""),
+                "artist": str(card.get("artist") or ""),
+            },
+            "catalog_numbers": {
+                "pokemon_tcg_id": str(card.get("id") or ""),
+                **({"tcgplayer_url": str(tcgplayer["url"])} if tcgplayer.get("url") else {}),
+            },
+            "raw": {"id": card.get("id"), "name": card.get("name"), "tcgplayer": tcgplayer},
+        }
+        cache.set(cache_key, res, timeout=43200)
+        return res
+    except Exception as exc:
+        logger.warning("Pokémon TCG lookup failed for %r: %s", title, exc)
+        return None
+
+
+def lookup_scryfall_card(
+    title: str,
+    set_code: str = "",
+    card_number: str = "",
+    card_finish: str = "",
+    timeout: float = 10.0,
+) -> dict[str, Any] | None:
+    """Query Scryfall zero-key API for Magic: The Gathering card metadata and USD prices."""
+    if not title:
+        return None
+    from django.core.cache import cache
+
+    cache_key = _card_cache_key("scryfall", title, set_code, card_number, card_finish)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached or None
+
+    params: dict[str, str] = {"fuzzy": title.strip()}
+    if set_code:
+        params["set"] = set_code.strip().lower()
+
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.get(
+                "https://api.scryfall.com/cards/named",
+                params=params,
+                headers={"Accept": "application/json", "User-Agent": "StackersStash/1.0"},
+            )
+            resp.raise_for_status()
+            card = resp.json()
+        if not isinstance(card, dict) or card.get("object") == "error":
+            cache.set(cache_key, False, timeout=3600)
+            return None
+
+        prices = card.get("prices") or {}
+        finish_low = card_finish.strip().lower()
+        if "etched" in finish_low and prices.get("usd_etched"):
+            raw_price = prices.get("usd_etched")
+        elif ("foil" in finish_low or "holo" in finish_low) and prices.get("usd_foil"):
+            raw_price = prices.get("usd_foil")
+        else:
+            raw_price = prices.get("usd") or prices.get("usd_foil") or prices.get("usd_etched")
+
+        market_str: str | None = None
+        if raw_price:
+            try:
+                d = Decimal(str(raw_price)).quantize(Decimal("0.01"))
+                if d > 0:
+                    market_str = str(d)
+            except Exception:
+                pass
+
+        res = {
+            "source": "SCRYFALL",
+            "market_value": market_str,
+            "specs": {
+                "card_game": "Magic: The Gathering",
+                "set_name": str(card.get("set_name") or ""),
+                "set_code": str(card.get("set") or "").upper(),
+                "card_number": str(card.get("collector_number") or ""),
+                "rarity": str(card.get("rarity") or "").title(),
+                "artist": str(card.get("artist") or ""),
+            },
+            "catalog_numbers": {
+                "scryfall_id": str(card.get("id") or ""),
+                **({"tcgplayer_id": str(card["tcgplayer_id"])} if card.get("tcgplayer_id") else {}),
+            },
+            "raw": {"id": card.get("id"), "name": card.get("name"), "prices": prices},
+        }
+        cache.set(cache_key, res, timeout=43200)
+        return res
+    except Exception as exc:
+        logger.warning("Scryfall lookup failed for %r: %s", title, exc)
+        return None
+
+
+def lookup_pricecharting_card(
+    title: str,
+    set_name: str = "",
+    card_number: str = "",
+    grading_service: str = "NONE",
+    grade: str = "",
+    api_key: str = "",
+    timeout: float = 10.0,
+) -> dict[str, Any] | None:
+    """Query PriceCharting API for ungraded and graded (PSA/BGS/CGC) trading card prices."""
+    if not title or not api_key:
+        return None
+    from django.core.cache import cache
+
+    cache_key = _card_cache_key("pricecharting", title, set_name, card_number, grading_service, grade)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached or None
+
+    query = " ".join(p for p in [title.strip(), set_name.strip(), card_number.strip()] if p)
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.get(
+                "https://www.pricecharting.com/api/products",
+                params={"t": api_key, "q": query},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        products = data.get("products") or []
+        if not products:
+            cache.set(cache_key, False, timeout=3600)
+            return None
+
+        prod = products[0]
+        svc = (grading_service or "").upper()
+        grade_str = str(grade or "").strip()
+
+        # PriceCharting returns prices in integer cents
+        price_cents = None
+        if svc == "PSA" and grade_str == "10":
+            price_cents = prod.get("manual-only-price") or prod.get("graded-price")
+        elif svc == "BGS" and grade_str in {"9.5", "10"}:
+            price_cents = prod.get("bgs-10-price") or prod.get("graded-price")
+        elif svc == "CGC" and grade_str in {"9.5", "10"}:
+            price_cents = prod.get("cgc-10-price") or prod.get("graded-price")
+        elif svc not in {"", "NONE"}:
+            price_cents = prod.get("graded-price") or prod.get("cib-price")
+        else:
+            price_cents = prod.get("loose-price")
+
+        if not price_cents or int(price_cents) <= 0:
+            return None
+
+        market = (Decimal(str(price_cents)) / Decimal("100")).quantize(Decimal("0.01"))
+        res = {
+            "source": "PRICECHARTING",
+            "market_value": str(market),
+            "catalog_numbers": {
+                **({"pricecharting_id": str(prod["id"])} if prod.get("id") else {}),
+            },
+            "raw": prod,
+        }
+        cache.set(cache_key, res, timeout=21600)
+        return res
+    except Exception as exc:
+        logger.warning("PriceCharting lookup failed for %r: %s", title, exc)
+        return None
 

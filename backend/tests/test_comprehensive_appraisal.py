@@ -296,3 +296,63 @@ def test_title_cleanup_during_appraisal_and_user_lock(mock_ai):
     updated.save()
     updated2 = appraise_item(updated, ws)
     assert updated2.title == "My Custom 1893-S Morgan"
+
+
+@pytest.mark.django_db
+def test_appraise_trading_card_skips_numismatic_and_uses_card_providers(user_a, monkeypatch):
+    _, ws, _ = user_a
+    item = CollectionItem.objects.create(
+        workspace=ws,
+        category=CollectionItem.Category.CARD,
+        title="Charizard",
+        metal_type=CollectionItem.MetalType.NONE,
+        attributes={
+            "card_game": "Pokémon",
+            "set_name": "Base Set",
+            "card_number": "4/102",
+            "card_finish": "Holo",
+        },
+    )
+
+    monkeypatch.setattr(
+        "apps.valuation.services.lookup_greysheet",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("Should skip Greysheet for cards")),
+    )
+    monkeypatch.setattr(
+        "apps.valuation.services.lookup_numista_specs",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("Should skip Numista for cards")),
+    )
+    monkeypatch.setattr(
+        "apps.valuation.services.lookup_pokemon_tcg_card",
+        lambda *a, **kw: {
+            "source": "POKEMON_TCG",
+            "market_value": "345.00",
+            "low_usd": "250.00",
+            "high_usd": "490.00",
+            "specs": {"set_code": "BS", "rarity": "Rare Holo"},
+            "catalog_numbers": {"pokemon_tcg_id": "base1-4"},
+        },
+    )
+    monkeypatch.setattr(
+        "apps.vision.services.estimate_item_value_with_ai",
+        lambda *a, **kw: (
+            Decimal("340.00"),
+            {
+                "low_usd": "300.00",
+                "mid_usd": "340.00",
+                "high_usd": "390.00",
+                "estimated_grade": "8",
+                "raw_condition": "NM",
+                "photo_inspected": True,
+            },
+        ),
+    )
+
+    appraised = appraise_item(item, ws)
+    assert appraised.market_value_unit == Decimal("345.00")
+    assert appraised.catalog_numbers["pokemon_tcg_id"] == "base1-4"
+    assert appraised.attributes["set_code"] == "BS"
+    assert appraised.attributes["raw_condition"] == "NM"
+    hist = ValuationHistory.objects.filter(item=appraised).first()
+    assert "SPOT_MELT" not in hist.raw_payload["sources"]
+    assert hist.raw_payload["sources"]["POKEMON_TCG"]["value"] == "345.00"

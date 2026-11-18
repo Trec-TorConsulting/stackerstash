@@ -23,6 +23,9 @@ from .providers import (
     lookup_greysheet,
     lookup_numismedia,
     lookup_numista_specs,
+    lookup_pokemon_tcg_card,
+    lookup_pricecharting_card,
+    lookup_scryfall_card,
 )
 
 logger = logging.getLogger(__name__)
@@ -187,6 +190,9 @@ def appraise_item(
     refresh_item_melt_from_latest_spot(item, spots)
     _update_job_step(job, "melt", "DONE")
 
+    is_card = item.is_card_item
+    attrs = dict(item.attributes or {})
+
     pcgs_token = _get_workspace_secret(workspace, ProviderCredential.Provider.PCGS)
     gs_key = _get_workspace_secret(workspace, ProviderCredential.Provider.GREYSHEET_KEY)
     gs_tok = _get_workspace_secret(workspace, ProviderCredential.Provider.GREYSHEET_TOKEN)
@@ -194,6 +200,9 @@ def appraise_item(
     numista_key = _get_workspace_secret(workspace, ProviderCredential.Provider.NUMISTA_KEY)
     ebay_id = _get_workspace_secret(workspace, ProviderCredential.Provider.EBAY_CLIENT_ID)
     ebay_secret = _get_workspace_secret(workspace, ProviderCredential.Provider.EBAY_CLIENT_SECRET)
+    pricecharting_key = _get_workspace_secret(workspace, ProviderCredential.Provider.PRICECHARTING_API_KEY)
+    psa_token = _get_workspace_secret(workspace, ProviderCredential.Provider.PSA_API_TOKEN)
+    pokemon_tcg_key = _get_workspace_secret(workspace, ProviderCredential.Provider.POKEMON_TCG_API_KEY)
 
     from apps.vision.services import estimate_item_value_with_ai
 
@@ -202,16 +211,21 @@ def appraise_item(
 
     def _run_cert():
         if item.grading_service != CollectionItem.GradingService.NONE and item.cert_number:
-            return lookup_cert_metadata(item.grading_service, item.cert_number, pcgs_token)
+            return lookup_cert_metadata(
+                item.grading_service,
+                item.cert_number,
+                pcgs_token=pcgs_token,
+                psa_token=psa_token,
+            )
         return None
 
     def _run_greysheet():
-        if gs_key and gs_tok:
+        if not is_card and gs_key and gs_tok:
             return lookup_greysheet(item.title, gs_key, gs_tok)
         return None
 
     def _run_numismedia():
-        if numismedia_key:
+        if not is_card and numismedia_key:
             return lookup_numismedia(
                 item.title,
                 year=item.year,
@@ -223,7 +237,7 @@ def appraise_item(
         return None
 
     def _run_numista():
-        if numista_key:
+        if not is_card and numista_key:
             return lookup_numista_specs(
                 item.title,
                 year=item.year,
@@ -233,9 +247,56 @@ def appraise_item(
             )
         return None
 
+    def _run_card_guide():
+        if not is_card:
+            return None
+        game = str(attrs.get("card_game") or "").lower()
+        set_name = str(attrs.get("set_name") or item.series or "")
+        set_code = str(attrs.get("set_code") or "")
+        card_num = str(attrs.get("card_number") or "")
+        finish = str(attrs.get("card_finish") or "")
+        if "pok" in game:
+            return lookup_pokemon_tcg_card(
+                item.title,
+                set_name=set_name,
+                card_number=card_num,
+                card_finish=finish,
+                api_key=pokemon_tcg_key,
+            )
+        if "magic" in game or "mtg" in game:
+            return lookup_scryfall_card(
+                item.title,
+                set_code=set_code,
+                card_number=card_num,
+                card_finish=finish,
+            )
+        return None
+
+    def _run_pricecharting():
+        if not is_card or not pricecharting_key:
+            return None
+        return lookup_pricecharting_card(
+            item.title,
+            set_name=str(attrs.get("set_name") or item.series or ""),
+            card_number=str(attrs.get("card_number") or ""),
+            grading_service=item.grading_service,
+            grade=item.grade,
+            api_key=pricecharting_key,
+        )
+
     def _run_comps():
         if ebay_id and ebay_secret:
-            q = " ".join(p for p in [item.year, item.mint_mark, item.title, item.grade] if p).strip()
+            if is_card:
+                q_parts = [
+                    item.title,
+                    str(attrs.get("set_name") or ""),
+                    str(attrs.get("card_number") or ""),
+                    item.grading_service if item.grading_service != CollectionItem.GradingService.NONE else "",
+                    item.grade,
+                ]
+            else:
+                q_parts = [item.year, item.mint_mark, item.title, item.grade]
+            q = " ".join(p for p in q_parts if p).strip()
             return lookup_ebay_sold_comps(q, ebay_id, ebay_secret)
         return None
 
@@ -247,6 +308,8 @@ def appraise_item(
         "greysheet": _run_greysheet,
         "numismedia": _run_numismedia,
         "numista": _run_numista,
+        "card_guide": _run_card_guide,
+        "pricecharting": _run_pricecharting,
         "comps": _run_comps,
         "ai": _run_ai,
     }
@@ -270,27 +333,49 @@ def appraise_item(
     gs_res = results.get("greysheet")
     nm_res = results.get("numismedia")
     numista_res = results.get("numista")
+    card_guide_res = results.get("card_guide")
+    pc_res = results.get("pricecharting")
     comps_res = results.get("comps")
     ai_tuple = results.get("ai")
     ai_val, ai_raw = ai_tuple if isinstance(ai_tuple, tuple) else (None, {})
 
-    # 1. Enrich specs in priority order: PCGS > NUMISTA > AI
+    # 1. Enrich specs in priority order: PCGS > NUMISTA > AI (or card guides for cards)
     spec_candidates: list[tuple[str, dict[str, Any]]] = []
     if cert_res and cert_res.get("specs"):
-        spec_candidates.append(("PCGS", cert_res["specs"]))
+        spec_candidates.append((cert_res.get("source", "PCGS"), cert_res["specs"]))
     if numista_res and numista_res.get("specs"):
         spec_candidates.append(("NUMISTA", numista_res["specs"]))
     if ai_raw and isinstance(ai_raw.get("inferred_specs"), dict):
         spec_candidates.append(("AI", ai_raw["inferred_specs"]))
     _merge_enriched_specs(item, spec_candidates)
 
+    if is_card:
+        prov = dict(item.specs_provenance or {})
+        updated_attrs = dict(item.attributes or {})
+        merged_cats = dict(item.catalog_numbers or {})
+        for src_res in (card_guide_res, pc_res, cert_res):
+            if not src_res:
+                continue
+            src_tag = src_res.get("source") or "CARD_GUIDE"
+            for cat_k, cat_v in (src_res.get("catalog_numbers") or {}).items():
+                if cat_v:
+                    merged_cats[str(cat_k)] = str(cat_v)
+            for card_k in ("card_game", "set_name", "set_code", "card_number", "rarity"):
+                cval = (src_res.get("specs") or {}).get(card_k)
+                if cval and prov.get(card_k) != "USER" and not updated_attrs.get(card_k):
+                    updated_attrs[card_k] = str(cval)
+                    prov[card_k] = src_tag
+        item.attributes = updated_attrs
+        item.catalog_numbers = merged_cats
+        item.specs_provenance = prov
+
     # 2. Collect all source quotes
-    sources_payload: dict[str, Any] = {
-        "SPOT_MELT": {
+    sources_payload: dict[str, Any] = {}
+    if not is_card:
+        sources_payload["SPOT_MELT"] = {
             "value": str(item.melt_value_unit),
             "status": "OK" if item.melt_value_unit > 0 else "N/A",
         }
-    }
     quotes: list[tuple[str, Decimal]] = []
 
     if cert_res and cert_res.get("market_value"):
@@ -313,6 +398,21 @@ def appraise_item(
         v = Decimal(str(nm_res["market_value"])).quantize(Decimal("0.01"))
         sources_payload["NUMISMEDIA"] = {"value": str(v), "status": "OK"}
         quotes.append((CollectionItem.ValuationSource.NUMISMEDIA, v))
+
+    if card_guide_res and card_guide_res.get("market_value"):
+        v = Decimal(str(card_guide_res["market_value"])).quantize(Decimal("0.01"))
+        sources_payload[card_guide_res.get("source") or "CARD_GUIDE"] = {
+            "value": str(v),
+            "low": card_guide_res.get("low_usd"),
+            "high": card_guide_res.get("high_usd"),
+            "status": "OK",
+        }
+        quotes.append((CollectionItem.ValuationSource.COMPS, v))
+
+    if pc_res and pc_res.get("market_value"):
+        v = Decimal(str(pc_res["market_value"])).quantize(Decimal("0.01"))
+        sources_payload["PRICECHARTING"] = {"value": str(v), "status": "OK"}
+        quotes.append((CollectionItem.ValuationSource.COMPS, v))
 
     if comps_res and comps_res.get("median"):
         v = Decimal(str(comps_res["median"])).quantize(Decimal("0.01"))
@@ -342,8 +442,12 @@ def appraise_item(
     if comps_res and comps_res.get("is_ask") and comps_res.get("median") and not quotes:
         quotes.append((CollectionItem.ValuationSource.COMPS, Decimal(str(comps_res["median"])).quantize(Decimal("0.01"))))
 
-    bullion_bench = lookup_bullion_dealer_benchmark(
-        item.title, item.metal_type, item.melt_value_unit or Decimal("0.00")
+    bullion_bench = (
+        None
+        if is_card
+        else lookup_bullion_dealer_benchmark(
+            item.title, item.metal_type, item.melt_value_unit or Decimal("0.00")
+        )
     )
     if bullion_bench:
         sources_payload["BULLION_BENCHMARK"] = {
@@ -353,8 +457,12 @@ def appraise_item(
             "status": "BENCHMARK",
         }
 
-    goldback_bench = lookup_goldback_exchange_benchmark(
-        item.title, item.series, item.denomination, item.melt_value_unit or Decimal("0.00")
+    goldback_bench = (
+        None
+        if is_card
+        else lookup_goldback_exchange_benchmark(
+            item.title, item.series, item.denomination, item.melt_value_unit or Decimal("0.00")
+        )
     )
     if goldback_bench:
         sources_payload["GOLDBACK_EXCHANGE"] = {
@@ -491,7 +599,7 @@ def appraise_item(
     # Raw / ungraded grade estimation enrichment (preserve USER override)
     if (
         item.grading_service == CollectionItem.GradingService.NONE
-        and item.category in {"COIN", "PAPER", "FLIPPER", "ROUND"}
+        and item.category in {"COIN", "PAPER", "FLIPPER", "ROUND", "CARD"}
         and ai_raw
     ):
         prov = dict(item.specs_provenance or {})
@@ -499,6 +607,13 @@ def appraise_item(
             item.estimated_grade = ai_raw["estimated_grade"]
             prov["estimated_grade"] = "AI"
             item.specs_provenance = prov
+        if ai_raw.get("raw_condition") and prov.get("raw_condition") != "USER":
+            cur_attrs = dict(item.attributes or {})
+            if not cur_attrs.get("raw_condition"):
+                cur_attrs["raw_condition"] = ai_raw["raw_condition"]
+                item.attributes = cur_attrs
+                prov["raw_condition"] = "AI"
+                item.specs_provenance = prov
         if ai_raw.get("estimated_grade_range"):
             item.estimated_grade_range = ai_raw["estimated_grade_range"]
         if ai_raw.get("estimated_grade_rationale"):

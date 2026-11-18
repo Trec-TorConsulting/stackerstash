@@ -20,6 +20,11 @@ const PROVIDER_GROUPS: { title: string; subtitle: string; providers: string[] }[
     subtitle: "Fetches eBay realized/active comps and structured coin specifications (mintage, weight, diameter).",
     providers: ["EBAY_CLIENT_ID", "EBAY_CLIENT_SECRET", "NUMISTA_KEY"],
   },
+  {
+    title: "Trading & Collectible Cards (Optional BYOK)",
+    subtitle: "Pokémon TCG API and Scryfall work without keys; add optional keys for PriceCharting, PSA Certs, and higher Pokémon TCG quotas.",
+    providers: ["PRICECHARTING_API_KEY", "PSA_API_TOKEN", "POKEMON_TCG_API_KEY"],
+  },
 ];
 
 const PROVIDER_HINTS: Record<string, string> = {
@@ -35,6 +40,9 @@ const PROVIDER_HINTS: Record<string, string> = {
   EBAY_CLIENT_ID: "eBay Developer App Client ID (Sold or Browse Active Ask)",
   EBAY_CLIENT_SECRET: "eBay Developer App Client Secret",
   NUMISTA_KEY: "Numista v3 API key (en.numista.com/api)",
+  PRICECHARTING_API_KEY: "PriceCharting API token (ungraded + PSA/BGS/CGC card prices)",
+  PSA_API_TOKEN: "PSA Public API bearer token (cert metadata & pop report)",
+  POKEMON_TCG_API_KEY: "Optional Pokémon TCG API key (pokemontcg.io — higher rate limit)",
 };
 
 export function SettingsPage() {

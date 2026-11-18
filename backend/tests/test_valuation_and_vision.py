@@ -620,6 +620,58 @@ def test_goldback_candidate_normalization_and_exchange_rate_valuation(user_a, mo
     assert any("Goldback Exchange Rate benchmark" in d for d in (appraised.valuation_drivers or []))
 
 
+def test_ocr_and_vision_card_normalization():
+    from apps.vision.ocr import parse_ocr_numismatic_hints
+    from apps.vision.services import _normalize_ai_appraisal, _normalize_candidate
+
+    hints = parse_ocr_numismatic_hints(
+        "PSA GEM MT 10\n1999 POKEMON GAME\nCHARIZARD-HOLO\n4/102\nCERT # 12345678"
+    )
+    assert hints["grading_service"] == "PSA"
+    assert hints["grade"] == "10"
+    assert hints["cert_number"] == "12345678"
+    assert hints["category"] == "SLAB"
+    assert hints["card_game"] == "Pokémon"
+    assert hints["card_number"] == "4/102"
+    assert hints["metal_type"] == "NONE"
+
+    candidate = _normalize_candidate(
+        {
+            "category": "CARD",
+            "title": "Charizard Holo",
+            "card_game": "Pokémon",
+            "set_name": "Base Set",
+            "card_number": "4/102",
+            "metal_type": "GOLD",
+            "weight_value": 1,
+        }
+    )
+    assert candidate["category"] == "CARD"
+    assert candidate["metal_type"] == "NONE"
+    assert candidate["weight_value"] == 0
+    assert candidate["card_game"] == "Pokémon"
+
+    val, normalized = _normalize_ai_appraisal(
+        {
+            "low_usd": 220,
+            "mid_usd": 260,
+            "high_usd": 310,
+            "estimated_grade": "8",
+            "estimated_grade_range": "7-8.5",
+            "raw_condition": "NM",
+            "estimated_grade_rationale": "Clean holo, slight back whitening on top-right corner.",
+            "grading_upside_usd": 140,
+            "valuation_drivers": ["Base Set holo demand"],
+        },
+        photo_inspected=True,
+        is_raw_gradeable=True,
+    )
+    assert val == Decimal("260.00")
+    assert normalized["estimated_grade"] == "8"
+    assert normalized["raw_condition"] == "NM"
+    assert normalized["grading_upside_usd"] == "140.00"
+
+
 
 
 
