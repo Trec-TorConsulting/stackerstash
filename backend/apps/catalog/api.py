@@ -699,9 +699,27 @@ def list_items(
     return [_item_to_out(i) for i in items]
 
 
+def _check_duplicate_cert_number(
+    workspace, cert_number: str, exclude_item_id: UUID | None = None
+) -> None:
+    cleaned = (cert_number or "").strip()
+    if not cleaned:
+        return
+    qs = CollectionItem.objects.filter(workspace=workspace, cert_number__iexact=cleaned)
+    if exclude_item_id is not None:
+        qs = qs.exclude(id=exclude_item_id)
+    existing = qs.first()
+    if existing is not None:
+        raise HttpError(
+            409,
+            f"A slab with cert/barcode '{cleaned}' already exists in this workspace ({existing.title}).",
+        )
+
+
 @catalog_router.post("/items", response={201: ItemOut})
 def create_item(request, payload: ItemIn):
     container = _validate_container(request.workspace, payload.container_id)
+    _check_duplicate_cert_number(request.workspace, payload.cert_number)
     item = CollectionItem(
         workspace=request.workspace,
         container=container,
@@ -944,6 +962,11 @@ def update_item(request, item_id: UUID, payload: ItemPatch):
     data = payload.dict(exclude_unset=True)
     if "quantity" in data and (data["quantity"] is None or data["quantity"] < 1):
         raise HttpError(400, "quantity must be at least 1")
+    if "cert_number" in data:
+        data["cert_number"] = (data["cert_number"] or "").strip()
+        _check_duplicate_cert_number(
+            request.workspace, data["cert_number"], exclude_item_id=item.id
+        )
     if "container_id" in data:
         item.container = _validate_container(request.workspace, data.pop("container_id"))
     provenance = dict(item.specs_provenance or {})

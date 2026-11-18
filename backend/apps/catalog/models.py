@@ -325,6 +325,13 @@ class CollectionItem(models.Model):
             models.Index(fields=["workspace", "status"]),
             models.Index(fields=["workspace", "-market_value_unit"]),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["workspace", "cert_number"],
+                condition=~models.Q(cert_number=""),
+                name="uniq_workspace_cert_number",
+            ),
+        ]
 
     def save(self, *args, **kwargs) -> None:
         eff_weight = self.weight_value

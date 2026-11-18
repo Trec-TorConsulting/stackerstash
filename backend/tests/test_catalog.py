@@ -983,3 +983,90 @@ def test_assay_upload_on_coin_crops_to_rect_card(api_client, user_a):
     assert data["height"] > data["width"]
     assert data["width"] >= 350 and data["height"] >= 550
     assert data["width"] < 600 and data["height"] < 800
+
+
+@pytest.mark.django_db
+def test_duplicate_slab_cert_number_prevented(api_client, user_a, user_b):
+    _user_a, _ws_a, token_a = user_a
+    _user_b, _ws_b, token_b = user_b
+    headers_a = {"HTTP_AUTHORIZATION": f"Bearer {token_a}"}
+    headers_b = {"HTTP_AUTHORIZATION": f"Bearer {token_b}"}
+
+    # 1. Create first slab with cert_number
+    r1 = api_client.post(
+        "/api/v1/catalog/items",
+        data=json.dumps({
+            "title": "1921 Morgan Dollar PCGS MS64",
+            "category": "SLAB",
+            "grading_service": "PCGS",
+            "cert_number": "45678901",
+        }),
+        content_type="application/json",
+        **headers_a,
+    )
+    assert r1.status_code == 201
+    item1_id = r1.json()["id"]
+
+    # 2. Duplicate cert_number in same workspace is rejected with 409
+    r_dup = api_client.post(
+        "/api/v1/catalog/items",
+        data=json.dumps({
+            "title": "Duplicate Morgan",
+            "category": "SLAB",
+            "grading_service": "PCGS",
+            "cert_number": " 45678901 ",
+        }),
+        content_type="application/json",
+        **headers_a,
+    )
+    assert r_dup.status_code == 409
+
+    # 3. Same cert_number in a different workspace is allowed
+    r_other_ws = api_client.post(
+        "/api/v1/catalog/items",
+        data=json.dumps({
+            "title": "1921 Morgan Dollar PCGS MS64",
+            "category": "SLAB",
+            "grading_service": "PCGS",
+            "cert_number": "45678901",
+        }),
+        content_type="application/json",
+        **headers_b,
+    )
+    assert r_other_ws.status_code == 201
+
+    # 4. Multiple items with empty cert_number in same workspace are allowed
+    r_empty1 = api_client.post(
+        "/api/v1/catalog/items",
+        data=json.dumps({"title": "Raw Coin 1", "category": "COIN", "cert_number": ""}),
+        content_type="application/json",
+        **headers_a,
+    )
+    r_empty2 = api_client.post(
+        "/api/v1/catalog/items",
+        data=json.dumps({"title": "Raw Coin 2", "category": "COIN", "cert_number": ""}),
+        content_type="application/json",
+        **headers_a,
+    )
+    assert r_empty1.status_code == 201
+    assert r_empty2.status_code == 201
+    item2_id = r_empty2.json()["id"]
+
+    # 5. Updating another item to a duplicate cert_number is rejected with 409
+    r_patch_dup = api_client.patch(
+        f"/api/v1/catalog/items/{item2_id}",
+        data=json.dumps({"cert_number": "45678901"}),
+        content_type="application/json",
+        **headers_a,
+    )
+    assert r_patch_dup.status_code == 409
+
+    # 6. Updating the original item with its own cert_number succeeds
+    r_patch_self = api_client.patch(
+        f"/api/v1/catalog/items/{item1_id}",
+        data=json.dumps({"cert_number": "45678901", "grade": "MS65"}),
+        content_type="application/json",
+        **headers_a,
+    )
+    assert r_patch_self.status_code == 200
+    assert r_patch_self.json()["grade"] == "MS65"
