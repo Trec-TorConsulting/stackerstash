@@ -90,6 +90,41 @@ export function CardSpecsCard({ item, onSaveSpecs, isSaving }: CardSpecsCardProp
     { key: "raw_condition", label: "Raw Condition", value: rawCondLabel },
   ];
 
+  const attrs = (item.attributes || {}) as Record<string, unknown>;
+  const psaPop = attrs.total_population ?? attrs.psa_pop;
+  const psaPopHigher = attrs.population_higher ?? attrs.psa_pop_higher;
+  if (psaPop !== undefined && psaPop !== null) {
+    rows.push({
+      key: "psa_population",
+      label: "PSA Population",
+      value: `${psaPop}${psaPopHigher !== undefined && psaPopHigher !== null ? ` (${psaPopHigher} higher)` : ""}`,
+    });
+  }
+  if (attrs.tag_score !== undefined && attrs.tag_score !== null) {
+    rows.push({
+      key: "tag_score",
+      label: "TAG Score (1000-pt)",
+      value: String(attrs.tag_score),
+    });
+  }
+  if (attrs.sub_grades && typeof attrs.sub_grades === "object") {
+    const sg = attrs.sub_grades as Record<string, unknown>;
+    const summary = ["centering", "corners", "edges", "surface"]
+      .filter((k) => sg[k] !== undefined && sg[k] !== null)
+      .map((k) => `${k[0].toUpperCase()}${k.slice(1)}: ${sg[k]}`)
+      .join(" · ");
+    if (summary) {
+      rows.push({ key: "sub_grades", label: "Sub-Grades", value: summary });
+    }
+  }
+  if (item.grading_service === "TAG" && item.cert_number) {
+    rows.push({
+      key: "tag_dig_report",
+      label: "TAG DIG Report",
+      value: `https://my.taggrading.com/card/${item.cert_number.trim()}`,
+    });
+  }
+
   function externalCatalogHref(key: string, val: string): string | null {
     if (key === "tcgplayer_url" && val.startsWith("http")) return val;
     if (key === "tcgplayer_id") return `https://www.tcgplayer.com/product/${encodeURIComponent(val)}`;

@@ -219,3 +219,147 @@ def test_lookup_pokemon_tcg_and_scryfall_and_pricecharting(mock_client_cls):
     assert pc["market_value"] == "9500.00"
     assert pc["catalog_numbers"]["pricecharting_id"] == "999"
 
+
+
+def test_lookup_psa_cert_extracts_pop_and_spec_id(monkeypatch):
+    from django.core.cache import cache
+    from apps.valuation.providers import lookup_psa_cert
+
+    cache.clear()
+
+    class MockResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "PSACert": {
+                    "CertNumber": "12345678",
+                    "Subject": "Charizard",
+                    "Brand": "Pokemon Base Set",
+                    "Year": "1999",
+                    "CardNumber": "4",
+                    "GradeDescription": "GEM MT 10",
+                    "SpecID": 998877,
+                    "TotalPopulation": 420,
+                    "PopulationHigher": 0,
+                    "LabelType": "Lighthouse",
+                }
+            }
+
+    class MockClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def get(self, *a, **kw):
+            return MockResp()
+
+    monkeypatch.setattr("apps.valuation.providers.httpx.Client", MockClient)
+    res = lookup_psa_cert("12345678", "psa-token")
+    assert res is not None
+    assert res["specs"]["psa_spec_id"] == 998877
+    assert res["specs"]["total_population"] == 420
+    assert res["specs"]["population_higher"] == 0
+    assert res["specs"]["psa_label_type"] == "Lighthouse"
+
+
+def test_lookup_pricecharting_card_multi_grade_tiers(monkeypatch):
+    from django.core.cache import cache
+    from apps.valuation.providers import lookup_pricecharting_card
+
+    cache.clear()
+
+    class MockResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "products": [
+                    {
+                        "id": "pc-123",
+                        "loose-price": 1500,
+                        "psa-9-price": 4500,
+                        "bgs-9-5-price": 8000,
+                        "tag-10-price": 12000,
+                    }
+                ]
+            }
+
+    class MockClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def get(self, *a, **kw):
+            return MockResp()
+
+    monkeypatch.setattr("apps.valuation.providers.httpx.Client", MockClient)
+    bgs = lookup_pricecharting_card("Charizard", grading_service="BGS", grade="9.5", api_key="pc-key")
+    assert bgs is not None and bgs["market_value"] == "80.00"
+
+    tag = lookup_pricecharting_card("Charizard", grading_service="TAG", grade="10", api_key="pc-key")
+    assert tag is not None and tag["market_value"] == "120.00"
+
+    raw = lookup_pricecharting_card("Charizard", grading_service="NONE", grade="", api_key="pc-key")
+    assert raw is not None and raw["market_value"] == "15.00"
+
+
+def test_lookup_tcgplayer_and_collectr_optional_byok(monkeypatch):
+    from django.core.cache import cache
+    from apps.valuation.providers import lookup_collectr_price, lookup_tcgplayer_price
+
+    cache.clear()
+    assert lookup_tcgplayer_price("Charizard", client_id="", client_secret="") is None
+    assert lookup_collectr_price("Charizard", api_key="") is None
+
+    class MockResp:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._payload
+
+    class MockClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def post(self, url, **kw):
+            return MockResp({"access_token": "tok-123", "expires_in": 3600})
+
+        def get(self, url, **kw):
+            if "catalog/products" in url:
+                return MockResp({"results": [{"productId": 555}]})
+            if "pricing/product" in url:
+                return MockResp({"results": [{"marketPrice": 99.5, "lowPrice": 85.0, "midPrice": 95.0, "highPrice": 120.0, "buylistMarketPrice": 60.0}]})
+            return MockResp({"results": [{"id": "col-1", "market_price": "105.25"}]})
+
+    monkeypatch.setattr("apps.valuation.providers.httpx.Client", MockClient)
+    tcg = lookup_tcgplayer_price("Charizard", client_id="cid", client_secret="csec")
+    assert tcg is not None
+    assert tcg["market_value"] == "99.50"
+    assert tcg["buylist_price"] == "60.00"
+
+    col = lookup_collectr_price("Charizard", api_key="col-key")
+    assert col is not None
+    assert col["market_value"] == "105.25"

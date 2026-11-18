@@ -253,6 +253,9 @@ describe("Valuation & Specs UI Components", () => {
       "TCGplayer",
       "PriceCharting",
       "130point",
+      "Beckett",
+      "Card Ladder",
+      "Collectr",
     ]);
     expect(links[1].url).toContain("tcgplayer.com");
     expect(links[2].url).toContain("pricecharting.com");

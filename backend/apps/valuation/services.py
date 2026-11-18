@@ -24,7 +24,9 @@ from .providers import (
     lookup_numismedia,
     lookup_numista_specs,
     lookup_pokemon_tcg_card,
+    lookup_collectr_price,
     lookup_pricecharting_card,
+    lookup_tcgplayer_price,
     lookup_scryfall_card,
 )
 
@@ -201,6 +203,9 @@ def appraise_item(
     ebay_id = _get_workspace_secret(workspace, ProviderCredential.Provider.EBAY_CLIENT_ID)
     ebay_secret = _get_workspace_secret(workspace, ProviderCredential.Provider.EBAY_CLIENT_SECRET)
     pricecharting_key = _get_workspace_secret(workspace, ProviderCredential.Provider.PRICECHARTING_API_KEY)
+    tcgplayer_id = _get_workspace_secret(workspace, ProviderCredential.Provider.TCGPLAYER_CLIENT_ID)
+    tcgplayer_secret = _get_workspace_secret(workspace, ProviderCredential.Provider.TCGPLAYER_CLIENT_SECRET)
+    collectr_key = _get_workspace_secret(workspace, ProviderCredential.Provider.COLLECTR_API_KEY)
     psa_token = _get_workspace_secret(workspace, ProviderCredential.Provider.PSA_API_TOKEN)
     pokemon_tcg_key = _get_workspace_secret(workspace, ProviderCredential.Provider.POKEMON_TCG_API_KEY)
 
@@ -284,6 +289,27 @@ def appraise_item(
             api_key=pricecharting_key,
         )
 
+    def _run_tcgplayer():
+        if not is_card or not tcgplayer_id or not tcgplayer_secret:
+            return None
+        return lookup_tcgplayer_price(
+            item.title,
+            set_name=str(attrs.get("set_name") or item.series or ""),
+            card_number=str(attrs.get("card_number") or ""),
+            client_id=tcgplayer_id,
+            client_secret=tcgplayer_secret,
+        )
+
+    def _run_collectr():
+        if not is_card or not collectr_key:
+            return None
+        return lookup_collectr_price(
+            item.title,
+            set_name=str(attrs.get("set_name") or item.series or ""),
+            card_number=str(attrs.get("card_number") or ""),
+            api_key=collectr_key,
+        )
+
     def _run_comps():
         if ebay_id and ebay_secret:
             if is_card:
@@ -310,6 +336,8 @@ def appraise_item(
         "numista": _run_numista,
         "card_guide": _run_card_guide,
         "pricecharting": _run_pricecharting,
+        "tcgplayer": _run_tcgplayer,
+        "collectr": _run_collectr,
         "comps": _run_comps,
         "ai": _run_ai,
     }
