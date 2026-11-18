@@ -392,6 +392,31 @@ export function ItemDetailPage() {
               : "Appraise Now"}
           </button>
           <button
+            type="button"
+            onClick={() => {
+              const nextProv = { ...(item.specs_provenance || {}) };
+              if (nextProv.market_value_unit === "USER") {
+                delete nextProv.market_value_unit;
+              } else {
+                nextProv.market_value_unit = "USER";
+              }
+              updateMut.mutate({ specs_provenance: nextProv });
+            }}
+            disabled={!isOnline || updateMut.isPending}
+            title={
+              item.specs_provenance?.market_value_unit === "USER"
+                ? "Unlock market value for scheduled re-appraisal"
+                : "Lock market value against scheduled re-appraisal"
+            }
+            className={`px-3 py-2 rounded-xl text-sm font-medium border transition ${
+              item.specs_provenance?.market_value_unit === "USER"
+                ? "bg-sky-500/20 text-sky-200 border-sky-500/40 hover:bg-sky-500/30"
+                : "bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800"
+            } disabled:opacity-50`}
+          >
+            {item.specs_provenance?.market_value_unit === "USER" ? "Value Locked" : "Lock Value"}
+          </button>
+          <button
             onClick={() => deleteMut.mutate()}
             className="p-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-rose-500/40 text-slate-400 hover:text-rose-400 transition"
             aria-label="Delete item"
@@ -506,15 +531,33 @@ export function ItemDetailPage() {
               </div>
               <div className="text-xs text-slate-500 mt-1">Source: {item.valuation_source}</div>
             </div>
-            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
-              <div className="text-xs text-slate-400">Melt Value</div>
-              <div className="text-2xl font-mono font-bold text-slate-100 mt-1">
-                {formatUsd(item.total_melt_value)}
+            {item.category === "CARD" || Boolean(item.attributes?.card_game) ? (
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+                <div className="text-xs text-slate-400">Grade / Condition</div>
+                <div className="text-2xl font-mono font-bold text-slate-100 mt-1">
+                  {item.grading_service !== "NONE" && item.grade
+                    ? `${item.grading_service} ${item.grade}`
+                    : String(item.attributes?.raw_condition || item.grade || "Raw")}
+                </div>
+                <div className="text-xs text-slate-500 mt-1">
+                  {String(
+                    item.attributes?.card_finish ||
+                      item.attributes?.rarity ||
+                      (item.serial_number ? `Serial: ${item.serial_number}` : "Trading Card")
+                  )}
+                </div>
               </div>
-              <div className="text-xs text-slate-500 mt-1">
-                Premium: {formatUsd(item.collector_premium_total)}
+            ) : (
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+                <div className="text-xs text-slate-400">Melt Value</div>
+                <div className="text-2xl font-mono font-bold text-slate-100 mt-1">
+                  {formatUsd(item.total_melt_value)}
+                </div>
+                <div className="text-xs text-slate-500 mt-1">
+                  Premium: {formatUsd(item.collector_premium_total)}
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
           <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-2.5 text-sm">
@@ -1005,7 +1048,12 @@ export function ItemDetailPage() {
       {/* Collector Intelligence: Why It's Valued Here, Collectibility & Numismatic Specs */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="space-y-6">
-          <ValuationBreakdownCard item={item} latestHistory={effectiveValuations[0] || null} />
+          <ValuationBreakdownCard
+            item={item}
+            latestHistory={effectiveValuations[0] || null}
+            onReappraise={() => appraiseMut.mutate()}
+            reappraising={appraiseMut.isPending || activeJob?.status === "PENDING" || activeJob?.status === "RUNNING"}
+          />
           <CollectibilityThesisCard item={item} />
           <EstimatedGradeCard
             item={item}

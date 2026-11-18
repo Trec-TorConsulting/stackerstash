@@ -18,6 +18,7 @@ import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ImportWizardModal } from "../components/ImportWizardModal";
 import { api, type CollectionItem, type ContainerNode } from "../lib/api";
+import { getValuationFreshness } from "../components/valuation/ValuationBreakdownCard";
 import {
   CARD_GRADING_SERVICES,
   CATEGORY_LABELS,
@@ -297,7 +298,14 @@ export function CollectionPage() {
           </div>
           <div className="flex items-end justify-between pt-2 border-t border-slate-800/80">
             <div>
-              <div className="text-[11px] text-slate-500">Market</div>
+              <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                <span>Market</span>
+                {getValuationFreshness(item.valued_at).isStale && (
+                  <span className="px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px]">
+                    Stale
+                  </span>
+                )}
+              </div>
               <div className="text-base font-mono font-bold text-amber-300">
                 {formatUsd(item.total_market_value)}
               </div>

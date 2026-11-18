@@ -577,13 +577,16 @@ def appraise_item(
     else:
         confidence = CollectionItem.ValuationConfidence.LOW
 
+    if final_source == "EBAY_ACTIVE_ASK" and confidence == CollectionItem.ValuationConfidence.HIGH:
+        confidence = CollectionItem.ValuationConfidence.MEDIUM
+
     # 6. Explainability drivers & Collectibility thesis
     drivers: list[str] = []
     if melt_val > Decimal("0.00"):
         drivers.append(f"Live metal melt floor: ${melt_val:.2f} ({item.fine_troy_oz:.4f} fine ozt).")
     if primary_val is not None and melt_val > primary_val:
         drivers.append(
-            f"Spot metal value (${melt_val:.2f}) currently exceeds numismatic guide/estimate (${primary_val:.2f})."
+            f"melt_floor_applied: Spot metal value (${melt_val:.2f}) exceeds guide/comp (${primary_val:.2f}); clamped to melt."
         )
     if cert_res and cert_res.get("market_value"):
         drivers.append(f"PCGS cert #{item.cert_number} price guide: ${cert_res['market_value']}.")

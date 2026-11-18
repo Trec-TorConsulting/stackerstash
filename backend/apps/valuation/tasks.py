@@ -1,11 +1,15 @@
 import logging
+from datetime import timedelta
 
 from celery import shared_task
+from django.conf import settings
+from django.db.models import Q
+from django.utils import timezone
 
 from apps.accounts.models import ProviderCredential
 from apps.catalog.models import CollectionItem
 
-from .services import appraise_item, refresh_spot_prices
+from .services import appraise_item, refresh_item_melt_from_latest_spot, refresh_spot_prices
 
 logger = logging.getLogger(__name__)
 
@@ -53,4 +57,52 @@ def process_deferred_ai_enrichment_task(batch_size: int = 5) -> dict[str, int]:
             deferred += 1
 
     return {"checked": len(pending), "upgraded": upgraded, "deferred": deferred}
+
+
+def reappraise_stale_items(
+    stale_days: int | None = None,
+    batch_size: int = 25,
+) -> dict[str, int]:
+    """Re-appraise stale items while preserving USER-locked market values."""
+    days = stale_days if stale_days is not None else int(getattr(settings, "VALUATION_STALE_DAYS", 7))
+    cutoff = timezone.now() - timedelta(days=days)
+    stale_qs = (
+        CollectionItem.objects.select_related("workspace")
+        .filter(Q(valued_at__isnull=True) | Q(valued_at__lt=cutoff))
+        .order_by("valued_at", "created_at")[:batch_size]
+    )
+    items = list(stale_qs)
+    reappraised = 0
+    skipped_locked = 0
+    failed = 0
+
+    for item in items:
+        prov = dict(item.specs_provenance or {})
+        if prov.get("market_value_unit") == "USER":
+            try:
+                refresh_item_melt_from_latest_spot(item)
+                skipped_locked += 1
+            except Exception as exc:
+                logger.warning("Melt refresh failed for locked item %s: %s", item.id, exc)
+                failed += 1
+            continue
+
+        try:
+            appraise_item(item, item.workspace)
+            reappraised += 1
+        except Exception as exc:
+            logger.warning("Stale re-appraisal failed for item %s: %s", item.id, exc)
+            failed += 1
+
+    return {
+        "checked": len(items),
+        "reappraised": reappraised,
+        "skipped_locked": skipped_locked,
+        "failed": failed,
+    }
+
+
+@shared_task(name="apps.valuation.tasks.reappraise_stale_items_task")
+def reappraise_stale_items_task(stale_days: int | None = None, batch_size: int = 25) -> dict[str, int]:
+    return reappraise_stale_items(stale_days=stale_days, batch_size=batch_size)
 

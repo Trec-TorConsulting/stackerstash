@@ -281,3 +281,35 @@ describe("Valuation & Specs UI Components", () => {
   });
 });
 
+
+
+describe("Valuation freshness and lock indicators", () => {
+  it("renders stale indicator and Locked badge in ValuationBreakdownCard", () => {
+    const oldDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+    const staleItem: any = {
+      id: "item-stale-1",
+      title: "1921 Morgan Dollar",
+      category: "COIN",
+      metal_type: "SILVER",
+      quantity: 1,
+      market_value_unit: "50.00",
+      total_market_value: "50.00",
+      melt_value_unit: "23.00",
+      total_melt_value: "23.00",
+      collector_premium_total: "27.00",
+      collector_premium_pct: 117.4,
+      valuation_source: "COMPS",
+      valuation_confidence: "MEDIUM",
+      valued_at: oldDate,
+      specs_provenance: { market_value_unit: "USER" },
+      valuation_drivers: [],
+    };
+    const onReappraise = vi.fn();
+    render(<ValuationBreakdownCard item={staleItem} onReappraise={onReappraise} />);
+    expect(screen.getByText(/Stale \(10d ago\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Locked/i)).toBeInTheDocument();
+    const btn = screen.getByRole("button", { name: /Re-appraise/i });
+    fireEvent.click(btn);
+    expect(onReappraise).toHaveBeenCalledTimes(1);
+  });
+});
