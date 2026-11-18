@@ -411,6 +411,9 @@ class ItemPhoto(models.Model):
     )
     item = models.ForeignKey(CollectionItem, on_delete=models.CASCADE, related_name="photos")
     image = models.ImageField(upload_to=item_photo_upload_path, max_length=255)
+    thumbnail = models.ImageField(
+        upload_to=item_photo_upload_path, max_length=255, null=True, blank=True
+    )
     label = models.CharField(max_length=16, choices=Label.choices, default=Label.OBVERSE)
     is_primary = models.BooleanField(default=False)
     sort_order = models.PositiveIntegerField(default=0)

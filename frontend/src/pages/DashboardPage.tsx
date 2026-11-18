@@ -238,10 +238,12 @@ export function DashboardPage() {
                 className="flex items-center gap-3 p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-amber-500/40 transition"
               >
                 <div className="h-14 w-14 rounded-lg bg-slate-900 border border-slate-800 overflow-hidden shrink-0 flex items-center justify-center text-xs text-slate-600">
-                  {item.primary_photo_url ? (
+                  {item.primary_thumbnail_url || item.primary_photo_url ? (
                     <img
-                      src={item.primary_photo_url}
+                      src={(item.primary_thumbnail_url || item.primary_photo_url)!}
                       alt={item.title}
+                      loading="lazy"
+                      decoding="async"
                       className="h-full w-full object-cover"
                     />
                   ) : (
