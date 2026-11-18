@@ -317,6 +317,7 @@ def appraise_item(
                     item.title,
                     str(attrs.get("set_name") or ""),
                     str(attrs.get("card_number") or ""),
+                    str(attrs.get("card_finish") or ""),
                     item.grading_service if item.grading_service != CollectionItem.GradingService.NONE else "",
                     item.grade,
                 ]

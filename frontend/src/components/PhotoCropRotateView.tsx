@@ -3,11 +3,12 @@ import Cropper, { type Area } from "react-easy-crop";
 import { Check, RefreshCw, RotateCcw, RotateCw, ZoomIn } from "lucide-react";
 import { renderCroppedRotatedImage } from "../lib/imageUtils";
 
-export type CropPresetKey = "coin" | "slab" | "note";
+export type CropPresetKey = "coin" | "slab" | "card" | "note";
 
 const ASPECT_PRESETS: Array<{ key: CropPresetKey; label: string; aspect: number; round?: boolean }> = [
   { key: "coin", label: "Coin (1:1)", aspect: 1, round: true },
-  { key: "slab", label: "Slab / Card (4:3)", aspect: 4 / 3 },
+  { key: "slab", label: "Slab (4:3)", aspect: 4 / 3 },
+  { key: "card", label: "Trading Card (3:4)", aspect: 3 / 4 },
   { key: "note", label: "Note / Bar (2:1)", aspect: 2 },
 ];
 

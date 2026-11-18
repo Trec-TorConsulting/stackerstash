@@ -17,6 +17,7 @@ dependencies = [
     "whitenoise>=6.8.0",
     "pyjwt>=2.10.0",
     "rapidocr-onnxruntime>=1.4.0",
+    "pillow-heif>=1.8.1",
 ]
 
 [dependency-groups]
