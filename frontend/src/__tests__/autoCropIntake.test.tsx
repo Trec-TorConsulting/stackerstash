@@ -8,6 +8,7 @@ import { ScanAddPage } from "../pages/ScanAddPage";
 const autoCropMock = vi.hoisted(() => ({
   autoCropImageFile: vi.fn(),
   isAutoCropSupported: vi.fn(() => true),
+  evaluateImageFileGlare: vi.fn(async () => ({ hasGlare: false, glareRatio: 0 })),
 }));
 
 vi.mock("../lib/autoCrop", async (importOriginal) => {
@@ -16,6 +17,14 @@ vi.mock("../lib/autoCrop", async (importOriginal) => {
     ...actual,
     autoCropImageFile: autoCropMock.autoCropImageFile,
     isAutoCropSupported: autoCropMock.isAutoCropSupported,
+  };
+});
+
+vi.mock("../lib/cameraMetrics", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/cameraMetrics")>();
+  return {
+    ...actual,
+    evaluateImageFileGlare: autoCropMock.evaluateImageFileGlare,
   };
 });
 
@@ -29,6 +38,7 @@ beforeEach(() => {
   localStorage.clear();
   autoCropMock.isAutoCropSupported.mockReturnValue(true);
   autoCropMock.autoCropImageFile.mockReset();
+  autoCropMock.evaluateImageFileGlare.mockResolvedValue({ hasGlare: false, glareRatio: 0 });
   vi.spyOn(api, "getContainers").mockResolvedValue([]);
 });
 
@@ -184,5 +194,26 @@ describe("ScanAddPage auto-crop", () => {
     expect(identifySpy).toHaveBeenCalledWith(expect.any(Array), undefined, "upload", "fast_local");
     expect(createSpy.mock.calls[0][0]).toMatchObject({ auto_appraise: false });
     expect(uploadSpy).toHaveBeenCalledTimes(4);
+  });
+
+  it("surfaces non-blocking clipped-edge and glare warnings on staged photos", async () => {
+    const raw = new File(["clipped"], "clipped.jpg", { type: "image/jpeg" });
+    autoCropMock.autoCropImageFile.mockResolvedValue({
+      file: raw,
+      applied: false,
+      reason: "subject_clipped",
+      durationMs: 2,
+    });
+    autoCropMock.evaluateImageFileGlare.mockResolvedValue({ hasGlare: true, glareRatio: 0.25 });
+    mockIdentify();
+
+    const { container } = renderScanAdd();
+    fireEvent.change(cameraInput(container), { target: { files: [raw] } });
+
+    expect(await screen.findByText(/Subject near edge — reframe for full border/i)).toBeInTheDocument();
+    expect(screen.getByText(/Glare detected — tilt item or diffuse light/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Quality warning for OBVERSE photo/i)).toBeInTheDocument();
+    // Save button remains available (non-blocking)
+    expect(screen.getByRole("button", { name: /Save to Collection|Save Item|Add to Collection/i })).toBeEnabled();
   });
 });

@@ -24,6 +24,7 @@ import {
   writeAutoCropPreference,
   type AutoCropResult,
 } from "../lib/autoCrop";
+import { evaluateImageFileGlare } from "../lib/cameraMetrics";
 import { CATEGORY_LABELS, GRADING_SERVICE_OPTIONS, METAL_LABELS } from "../lib/format";
 import { normalizeImageFileForUpload } from "../lib/imageUtils";
 
@@ -44,6 +45,8 @@ interface StagedPhoto {
    * (manual edit or undo), so user intent is never overridden.
    */
   serverAutoCrop: boolean;
+  /** Non-blocking capture/staging quality hints (e.g., glare, clipped edges). */
+  qualityWarnings?: string[];
 }
 
 function flattenContainers(nodes: ContainerNode[], depth = 0): Array<{ id: string; label: string }> {
@@ -178,9 +181,18 @@ export function ScanAddPage() {
     // Detect item edges and crop in the browser before staging, so the AI
     // identification and the thumbnails both use the tightly framed photo.
     setAutoCropPending((n) => n + imageFiles.length);
-    void Promise.all(imageFiles.map((file) => autoCropImageFile(file)))
-      .then(async (results) => {
+    void Promise.all(
+      imageFiles.map(async (file) => {
+        const [crop, glare] = await Promise.all([
+          autoCropImageFile(file),
+          evaluateImageFileGlare(file),
+        ]);
+        return { crop, glare };
+      })
+    )
+      .then(async (outcomes) => {
         if (!mountedRef.current) return;
+        const results = outcomes.map((o) => o.crop);
         const croppedCount = results.filter((r) => r.applied).length;
         setAutoCropNotice(
           croppedCount === 0
@@ -189,14 +201,24 @@ export function ScanAddPage() {
               ? `Auto-cropped ${croppedCount === 1 ? "photo" : `${croppedCount} photos`} to the item's edges.`
               : `Auto-cropped ${croppedCount} of ${results.length} photos. Others kept as taken (edges unclear).`
         );
-        const prepared = results.map((r, i) => ({
-          file: r.file,
-          originalFile: r.applied ? imageFiles[i] : undefined,
-          cropResult: r.applied ? r : undefined,
-          autoCropped: r.applied,
-          // Let the server try when the browser couldn't find confident edges.
-          serverAutoCrop: !r.applied,
-        }));
+        const prepared = outcomes.map(({ crop: r, glare }, i) => {
+          const qualityWarnings: string[] = [];
+          if (r.reason === "subject_clipped") {
+            qualityWarnings.push("Subject near edge — reframe for full border.");
+          }
+          if (glare.hasGlare) {
+            qualityWarnings.push("Glare detected — tilt item or diffuse light.");
+          }
+          return {
+            file: r.file,
+            originalFile: r.applied ? imageFiles[i] : undefined,
+            cropResult: r.applied ? r : undefined,
+            autoCropped: r.applied,
+            // Let the server try when the browser couldn't find confident edges.
+            serverAutoCrop: !r.applied,
+            qualityWarnings: qualityWarnings.length > 0 ? qualityWarnings : undefined,
+          };
+        });
         await commitIngestWithSymmetry(prepared, defaultLabel, source);
       })
       .finally(() => {
@@ -206,7 +228,10 @@ export function ScanAddPage() {
 
   async function commitIngestWithSymmetry(
     prepared: Array<
-      Pick<StagedPhoto, "file" | "originalFile" | "cropResult" | "autoCropped" | "serverAutoCrop">
+      Pick<
+        StagedPhoto,
+        "file" | "originalFile" | "cropResult" | "autoCropped" | "serverAutoCrop" | "qualityWarnings"
+      >
     >,
     defaultLabel: string,
     source: "CAMERA" | "UPLOAD"
@@ -783,6 +808,15 @@ export function ScanAddPage() {
                         <Undo2 className="h-2.5 w-2.5" /> Auto
                       </button>
                     )}
+                    {f.qualityWarnings && f.qualityWarnings.length > 0 && (
+                      <span
+                        title={f.qualityWarnings.join(" ")}
+                        aria-label={`Quality warning for ${f.label} photo`}
+                        className="absolute top-1 left-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-500/90 text-slate-950 ring-1 ring-amber-300"
+                      >
+                        <AlertTriangle className="h-3 w-3" />
+                      </span>
+                    )}
                   </div>
                   <select
                     value={f.label}
@@ -823,6 +857,21 @@ export function ScanAddPage() {
                 </label>
               )}
             </div>
+            {files.some((f) => f.qualityWarnings && f.qualityWarnings.length > 0) && (
+              <div
+                role="status"
+                className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200"
+              >
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+                <div className="space-y-0.5">
+                  {Array.from(
+                    new Set(files.flatMap((f) => f.qualityWarnings ?? []))
+                  ).map((warning) => (
+                    <div key={warning}>{warning}</div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {missingRequiredSides && (
               <div className="flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">

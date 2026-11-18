@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import logging
+import math
 from collections import deque
 from typing import Any
 
@@ -1193,7 +1194,18 @@ def detect_card_rectangle(img: Image.Image) -> tuple[float, float, float, float,
         smooth_edges, smooth_closed, sw, sh, scale
     )
     if smooth_rect is not None and smooth_score > best_score:
-        return smooth_rect
+        best_rect, best_score = smooth_rect, smooth_score
+
+    # Low-contrast smoothed-CLAHE pass catches dark-on-dark slab outlines while
+    # suppressing fine carbon-fiber weave texture.
+    smooth_clahe = cv2.bilateralFilter(clahe, 9, 55, 55)
+    clahe_edges = cv2.Canny(smooth_clahe, 24, 72)
+    clahe_closed = cv2.morphologyEx(clahe_edges, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
+    clahe_rect, clahe_score = _best_card_rect_from_contours(
+        clahe_edges, clahe_closed, sw, sh, scale
+    )
+    if clahe_rect is not None and clahe_score > best_score:
+        return clahe_rect
     return best_rect
 
 
@@ -1261,7 +1273,7 @@ def _is_embedded_coin_in_card(img: Image.Image, circle: tuple[int, int, int]) ->
     return lab_std >= 15.0 or luma_spread >= 65.0
 
 
-AUTO_CROP_PADDING_RATIO = 0.04
+AUTO_CROP_PADDING_RATIO = 0.06
 AUTO_CROP_MAX_KEEP_RATIO = 0.90
 AUTO_CROP_MIN_SUBJECT_RATIO = 0.03
 
@@ -1291,7 +1303,10 @@ def _detect_salient_subject_bounds(img: Image.Image) -> tuple[float, float, floa
     sw = max(16, int(round(orig_w * scale)))
     sh = max(16, int(round(orig_h * scale)))
 
-    rgb = np.array(img.convert("RGB").resize((sw, sh), Image.Resampling.BILINEAR), dtype=np.float32)
+    rgb_raw = np.array(img.convert("RGB").resize((sw, sh), Image.Resampling.BILINEAR), dtype=np.float32)
+    # Light spatial smoothing suppresses high-frequency mat weave (e.g. carbon fiber)
+    # before border palette clustering and foreground distance scoring.
+    rgb = cv2.GaussianBlur(rgb_raw, (3, 3), 0.9)
 
     band = max(2, int(round(min(sw, sh) * 0.03)))
     border_mask = np.zeros((sh, sw), dtype=bool)
@@ -1336,8 +1351,8 @@ def _detect_salient_subject_bounds(img: Image.Image) -> tuple[float, float, floa
 
     luma = cv2.GaussianBlur(
         0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2],
-        (3, 3),
-        0.8,
+        (5, 5),
+        1.2,
     )
     gx = cv2.Sobel(luma, cv2.CV_32F, 1, 0, ksize=3)
     gy = cv2.Sobel(luma, cv2.CV_32F, 0, 1, ksize=3)
@@ -1429,6 +1444,94 @@ def _detect_salient_subject_bounds(img: Image.Image) -> tuple[float, float, floa
         (max_x + 1) / scale,
         (max_y + 1) / scale,
     )
+
+
+def _is_glare_dominated_box(
+    img: Image.Image,
+    box: tuple[int, int, int, int],
+) -> bool:
+    """
+    Return True when a small candidate crop box is mostly blown-out specular glare
+    (near-white, low-saturation pixels) rather than an actual collectible subject.
+    """
+    w, h = img.size
+    crop_area = (box[2] - box[0]) * (box[3] - box[1])
+    if w < 1 or h < 1 or crop_area <= 0 or crop_area > w * h * 0.28:
+        return False
+
+    patch = img.crop(box).convert("RGB")
+    patch.thumbnail((128, 128), Image.Resampling.BILINEAR)
+    arr = np.asarray(patch, dtype=np.uint8)
+    ph, pw = arr.shape[:2]
+    if ph < 8 or pw < 8:
+        return False
+    # Check the inner 60% core so padding around the candidate doesn't dilute a glare blob.
+    inner = arr[int(ph * 0.2) : int(ph * 0.8), int(pw * 0.2) : int(pw * 0.8)]
+    if inner.size == 0:
+        return False
+    hsv = cv2.cvtColor(inner, cv2.COLOR_RGB2HSV)
+    # High value + low saturation = specular white glare
+    glare_mask = (hsv[:, :, 2] >= 240) & (hsv[:, :, 1] <= 35)
+    return float(glare_mask.mean()) >= 0.70
+
+
+def deskew_tilted_rectangle(
+    img: Image.Image,
+    *,
+    shape_hint: str | None = None,
+    min_angle_deg: float = 1.0,
+    max_angle_deg: float = 15.0,
+) -> tuple[Image.Image, float]:
+    """
+    Straighten a slightly tilted rectangular collectible (slab, note, proof set, flip)
+    so its edges align with the image axes before cropping.
+    Returns (deskewed_image, applied_angle_deg). Returns (img, 0.0) when skipped.
+    """
+    if shape_hint == "coin":
+        return img, 0.0
+    w, h = img.size
+    if w < 64 or h < 64:
+        return img, 0.0
+
+    card_rect = detect_card_rectangle(img)
+    if card_rect is None:
+        return img, 0.0
+
+    cx, cy, rw, rh, angle = card_rect
+    box = cv2.boxPoints(((float(cx), float(cy)), (float(rw), float(rh)), float(angle)))
+    edge = box[1] - box[0]
+    raw_deg = math.degrees(math.atan2(float(edge[1]), float(edge[0])))
+    tilt = ((raw_deg + 45.0) % 90.0) - 45.0
+    if abs(tilt) < min_angle_deg or abs(tilt) > max_angle_deg:
+        return img, 0.0
+
+    rgb = np.array(img.convert("RGB"))
+    # Sample border median color so expanded corners blend naturally with the mat/surface.
+    border_pixels = np.concatenate(
+        [rgb[0, :], rgb[-1, :], rgb[:, 0], rgb[:, -1]],
+        axis=0,
+    )
+    fill_color = tuple(int(v) for v in np.median(border_pixels, axis=0))
+
+    rad = math.radians(abs(tilt))
+    cos_a = math.cos(rad)
+    sin_a = math.sin(rad)
+    new_w = int(math.ceil(w * cos_a + h * sin_a))
+    new_h = int(math.ceil(w * sin_a + h * cos_a))
+
+    rot_mat = cv2.getRotationMatrix2D((w / 2.0, h / 2.0), tilt, 1.0)
+    rot_mat[0, 2] += (new_w - w) / 2.0
+    rot_mat[1, 2] += (new_h - h) / 2.0
+
+    rotated = cv2.warpAffine(
+        rgb,
+        rot_mat,
+        (new_w, new_h),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=fill_color,
+    )
+    return Image.fromarray(rotated, mode="RGB"), round(tilt, 2)
 
 
 def detect_subject_crop_box(
@@ -1535,6 +1638,8 @@ def detect_subject_crop_box(
         return None
     if (crop_w * crop_h) > (w * h * max_keep_ratio):
         return None
+    if _is_glare_dominated_box(img, box):
+        return None
     return box
 
 
@@ -1610,6 +1715,10 @@ def process_item_image(
             img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
 
         if auto_crop:
+            try:
+                img, _ = deskew_tilted_rectangle(img, shape_hint=shape_hint)
+            except Exception:  # pragma: no cover - deskew failures must never block upload
+                logger.warning("Auto-deskew failed; keeping original orientation", exc_info=True)
             try:
                 box = detect_subject_crop_box(img, shape_hint=shape_hint)
             except Exception:  # pragma: no cover - detector failures must never block upload
@@ -1741,6 +1850,37 @@ def analyze_image_quality_and_forensics(
                 warnings.append("Image is too dark / underexposed — add more light.")
             elif brightness > 235:
                 warnings.append("Image is overexposed / blown out — reduce glare or flash.")
+
+            rgb_small_q = img.convert("RGB")
+            rgb_small_q.thumbnail((256, 256), Image.Resampling.BILINEAR)
+            arr_q = np.asarray(rgb_small_q, dtype=np.uint8)
+            qh, qw = arr_q.shape[:2]
+            if qh >= 32 and qw >= 32:
+                y0, y1 = int(qh * 0.15), int(qh * 0.85)
+                x0, x1 = int(qw * 0.15), int(qw * 0.85)
+                center_hsv = cv2.cvtColor(arr_q[y0:y1, x0:x1], cv2.COLOR_RGB2HSV)
+                central_glare_ratio = float(
+                    ((center_hsv[:, :, 2] >= 242) & (center_hsv[:, :, 1] <= 30)).mean()
+                )
+                metrics["central_glare_ratio"] = round(central_glare_ratio, 4)
+                if central_glare_ratio > 0.08 and brightness <= 235:
+                    warnings.append(
+                        "Heavy specular glare detected over subject — tilt the item or diffuse lighting."
+                    )
+
+                luma_q = cv2.cvtColor(arr_q, cv2.COLOR_RGB2GRAY).astype(np.float32)
+                edge_strips = [
+                    luma_q[:3, :],
+                    luma_q[-3:, :],
+                    luma_q[:, :3],
+                    luma_q[:, -3:],
+                ]
+                clipped_edges = sum(1 for strip in edge_strips if float(strip.std()) > 22.0)
+                metrics["clipped_edges"] = clipped_edges
+                if clipped_edges >= 2:
+                    warnings.append(
+                        "Subject appears clipped near frame edges — reframe with a small border."
+                    )
 
             edges = gray.filter(ImageFilter.FIND_EDGES)
             ew, eh = edges.size

@@ -86,7 +86,7 @@ export interface AutoCropOptions {
 export const AUTO_CROP_DEFAULTS: Required<AutoCropOptions> = {
   timeoutMs: 4000,
   minConfidence: 0.55,
-  paddingRatio: 0.04,
+  paddingRatio: 0.06,
   maxKeepRatio: 0.9,
   maxOutputDimension: 4096,
   jpegQuality: 0.92,
@@ -312,6 +312,39 @@ function labelComponents(mask: Uint8Array, w: number, h: number): Component[] {
   return comps;
 }
 
+/** Lightweight 3x3 box smooth to suppress high-frequency mat weave (e.g. carbon fiber). */
+function smoothRgba3x3(rgba: Uint8ClampedArray, w: number, h: number): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(rgba.length);
+  for (let y = 0; y < h; y++) {
+    const y0 = y > 0 ? y - 1 : 0;
+    const y1 = y < h - 1 ? y + 1 : h - 1;
+    for (let x = 0; x < w; x++) {
+      const x0 = x > 0 ? x - 1 : 0;
+      const x1 = x < w - 1 ? x + 1 : w - 1;
+      let sr = 0;
+      let sg = 0;
+      let sb = 0;
+      let count = 0;
+      for (let yy = y0; yy <= y1; yy++) {
+        const row = yy * w;
+        for (let xx = x0; xx <= x1; xx++) {
+          const idx = (row + xx) * 4;
+          sr += rgba[idx];
+          sg += rgba[idx + 1];
+          sb += rgba[idx + 2];
+          count++;
+        }
+      }
+      const dst = (y * w + x) * 4;
+      out[dst] = Math.round(sr / count);
+      out[dst + 1] = Math.round(sg / count);
+      out[dst + 2] = Math.round(sb / count);
+      out[dst + 3] = rgba[dst + 3];
+    }
+  }
+  return out;
+}
+
 /**
  * Detect the primary collectible in an RGBA buffer and return its bounding box.
  * Returns null when no plausible subject is found.
@@ -323,10 +356,12 @@ export function detectSubjectInRgba(
 ): AutoCropDetection | null {
   if (w < 16 || h < 16 || rgba.length < w * h * 4) return null;
 
+  const smoothed = smoothRgba3x3(rgba, w, h);
   const band = Math.max(2, Math.round(Math.min(w, h) * 0.025));
-  const { centers, thresholds } = buildBackgroundPalette(rgba, w, h, band);
+  const { centers, thresholds } = buildBackgroundPalette(smoothed, w, h, band);
 
-  // Luma + gradient; gradient threshold adapts to border texture.
+  // Luma + gradient on original buffer so sharp background seams aren't widened;
+  // gradient threshold adapts to border texture.
   const luma = new Float32Array(w * h);
   for (let p = 0; p < w * h; p++) {
     const i = p * 4;
@@ -351,9 +386,9 @@ export function detectSubjectInRgba(
   let mask: Uint8Array = new Uint8Array(w * h);
   for (let p = 0; p < w * h; p++) {
     const i = p * 4;
-    const r = rgba[i];
-    const g = rgba[i + 1];
-    const b = rgba[i + 2];
+    const r = smoothed[i];
+    const g = smoothed[i + 1];
+    const b = smoothed[i + 2];
     let isBg = false;
     for (let c = 0; c < centers.length; c++) {
       if (colorDist(r, g, b, centers[c]) <= thresholds[c]) {

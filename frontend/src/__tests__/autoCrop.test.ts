@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  AUTO_CROP_DEFAULTS,
   AUTO_CROP_PREF_KEY,
   autoCropImageFile,
   computeAutoCropRect,
@@ -299,5 +300,42 @@ describe("Front / Back symmetry harmonization", () => {
       { cropRect: { x: 100, y: 100, width: 1000, height: 500 }, sourceSize: { width: 1500, height: 1500 }, shape: "rect" },
     );
     expect(plan).toBeNull();
+  });
+});
+
+describe("textured mat isolation and 6% default padding", () => {
+  it("uses ~6% default padding", () => {
+    expect(AUTO_CROP_DEFAULTS.paddingRatio).toBe(0.06);
+  });
+
+  it("isolates a slab/note on a patterned carbon-fiber mat", () => {
+    const w = 160;
+    const h = 160;
+    const rgba = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const idx = (y * w + x) * 4;
+        const weave = ((Math.floor(x / 2) + Math.floor(y / 2)) % 2) * 16 + 26;
+        rgba[idx] = weave;
+        rgba[idx + 1] = weave + 2;
+        rgba[idx + 2] = weave + 4;
+        rgba[idx + 3] = 255;
+      }
+    }
+    // Draw a centered goldback / slab in [48..112, 32..128]
+    for (let y = 32; y < 128; y++) {
+      for (let x = 48; x < 112; x++) {
+        const idx = (y * w + x) * 4;
+        rgba[idx] = 212;
+        rgba[idx + 1] = 190;
+        rgba[idx + 2] = 135;
+      }
+    }
+
+    const det = detectSubjectInRgba(rgba, w, h);
+    expect(det).not.toBeNull();
+    expect(det!.confidence).toBeGreaterThanOrEqual(0.55);
+    expect(det!.x).toBeGreaterThan(0.24);
+    expect(det!.x + det!.width).toBeLessThan(0.76);
   });
 });
