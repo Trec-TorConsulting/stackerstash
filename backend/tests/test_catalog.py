@@ -946,3 +946,40 @@ def test_thumbnail_generation_rotation_and_legacy_fallback(api_client, user_a):
     detail = detail_resp.json()
     assert detail["primary_thumbnail_url"] == detail["primary_photo_url"]
     assert detail["photos"][0]["thumbnail_url"] == detail["photos"][0]["url"]
+
+
+@pytest.mark.django_db
+def test_assay_upload_on_coin_crops_to_rect_card(api_client, user_a):
+    from PIL import ImageDraw
+
+    _, _, token_a = user_a
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token_a}"}
+    item = api_client.post(
+        "/api/v1/catalog/items",
+        data=json.dumps({"title": "1 oz Silver Coin", "category": "COIN"}),
+        content_type="application/json",
+        **headers,
+    ).json()
+
+    # Rectangular assay card (360x560) with an embedded coin circle on a dark mat (600x800)
+    img = Image.new("RGB", (600, 800), color=(35, 35, 38))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((120, 120, 480, 680), fill=(240, 238, 232), outline=(180, 175, 165), width=3)
+    draw.ellipse((220, 320, 380, 480), fill=(205, 208, 214), outline=(130, 132, 138), width=3)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=95)
+
+    resp = api_client.post(
+        f"/api/v1/catalog/items/{item['id']}/photos",
+        data={
+            "file": SimpleUploadedFile("assay.jpg", buf.getvalue(), content_type="image/jpeg"),
+            "label": "ASSAY",
+        },
+        **headers,
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    # Must frame the rectangular assay card (height > width), not collapse onto the square coin
+    assert data["height"] > data["width"]
+    assert data["width"] >= 350 and data["height"] >= 550
+    assert data["width"] < 600 and data["height"] < 800

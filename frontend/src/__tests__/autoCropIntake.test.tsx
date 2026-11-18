@@ -114,7 +114,9 @@ describe("ScanAddPage auto-crop", () => {
     expect(screen.queryByRole("button", { name: /Undo auto-crop/i })).not.toBeInTheDocument();
   });
 
-  it("sends auto_crop=false for client-cropped photos and true for uncropped ones on save", async () => {
+  it("uploads original uncropped file with autoCrop=true even when client preview auto-crop applied", async () => {
+    const origA = new File(["a"], "a.jpg", { type: "image/jpeg" });
+    const origB = new File(["b"], "b.jpg", { type: "image/jpeg" });
     const cropped = new File(["crop"], "a-autocrop.jpg", { type: "image/jpeg" });
     const plain = new File(["plain"], "b.jpg", { type: "image/jpeg" });
     autoCropMock.autoCropImageFile
@@ -127,7 +129,7 @@ describe("ScanAddPage auto-crop", () => {
     const { container } = renderScanAdd();
     const uploadInput = container.querySelector('input[type="file"][multiple]') as HTMLInputElement;
     fireEvent.change(uploadInput, {
-      target: { files: [new File(["a"], "a.jpg", { type: "image/jpeg" }), new File(["b"], "b.jpg", { type: "image/jpeg" })] },
+      target: { files: [origA, origB] },
     });
 
     await screen.findByText(/Auto-cropped 1 of 2 photos/i);
@@ -135,8 +137,73 @@ describe("ScanAddPage auto-crop", () => {
     fireEvent.click(saveButton);
 
     await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(2));
+    expect(uploadSpy.mock.calls[0][1]).toBe(origA);
+    expect(uploadSpy.mock.calls[0][4]).toEqual({ autoCrop: true });
+    expect(uploadSpy.mock.calls[1][4]).toEqual({ autoCrop: true });
+  });
+
+  it("uploads original with autoCrop=false when user clicks Undo Auto", async () => {
+    const origA = new File(["a"], "a.jpg", { type: "image/jpeg" });
+    const origB = new File(["b"], "b.jpg", { type: "image/jpeg" });
+    const croppedA = new File(["cropA"], "a-autocrop.jpg", { type: "image/jpeg" });
+    autoCropMock.autoCropImageFile
+      .mockResolvedValueOnce({ file: croppedA, applied: true, reason: "cropped", durationMs: 1 })
+      .mockResolvedValueOnce({ file: origB, applied: false, reason: "no_subject", durationMs: 1 });
+    mockIdentify();
+    vi.spyOn(api, "createItem").mockResolvedValue({ id: "item-undo", appraisal_job_id: null } as never);
+    const uploadSpy = vi.spyOn(api, "uploadPhoto").mockResolvedValue({} as never);
+
+    const { container } = renderScanAdd();
+    const uploadInput = container.querySelector('input[type="file"][multiple]') as HTMLInputElement;
+    fireEvent.change(uploadInput, { target: { files: [origA, origB] } });
+
+    const undoBtn = await screen.findByRole("button", { name: /Undo auto-crop for OBVERSE photo/i });
+    fireEvent.click(undoBtn);
+
+    const saveButton = await screen.findByRole("button", { name: /Save to Collection|Save Item|Add to Collection/i });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(2));
+    expect(uploadSpy.mock.calls[0][1]).toBe(origA);
     expect(uploadSpy.mock.calls[0][4]).toEqual({ autoCrop: false });
     expect(uploadSpy.mock.calls[1][4]).toEqual({ autoCrop: true });
+  });
+
+  it("batch mode identifies with preview-cropped files and uploads originals sequentially with autoCrop=true", async () => {
+    const f1 = new File(["f1"], "f1.jpg", { type: "image/jpeg" });
+    const b1 = new File(["b1"], "b1.jpg", { type: "image/jpeg" });
+    const f2 = new File(["f2"], "f2.jpg", { type: "image/jpeg" });
+    const b2 = new File(["b2"], "b2.jpg", { type: "image/jpeg" });
+    const f1Crop = new File(["f1c"], "f1-crop.jpg", { type: "image/jpeg" });
+    const b1Crop = new File(["b1c"], "b1-crop.jpg", { type: "image/jpeg" });
+
+    autoCropMock.autoCropImageFile
+      .mockResolvedValueOnce({ file: f1Crop, applied: true, reason: "cropped", durationMs: 1 })
+      .mockResolvedValueOnce({ file: b1Crop, applied: true, reason: "cropped", durationMs: 1 })
+      .mockResolvedValueOnce({ file: f2, applied: false, reason: "no_subject", durationMs: 1 })
+      .mockResolvedValueOnce({ file: b2, applied: false, reason: "no_subject", durationMs: 1 });
+
+    const identifySpy = mockIdentify();
+    vi.spyOn(api, "createItem").mockResolvedValue({ id: "batch-1", appraisal_job_id: null } as never);
+    const uploadOrder: string[] = [];
+    const uploadSpy = vi.spyOn(api, "uploadPhoto").mockImplementation(async (_id, _file, label) => {
+      uploadOrder.push(label ?? "");
+      return {} as never;
+    });
+
+    const { container } = renderScanAdd();
+    const uploadInput = container.querySelector('input[type="file"][multiple]') as HTMLInputElement;
+    fireEvent.change(uploadInput, { target: { files: [f1, b1, f2, b2] } });
+
+    fireEvent.click(await screen.findByRole("button", { name: /Catalog All 2 Items/i }));
+
+    await waitFor(() => expect(uploadSpy).toHaveBeenCalledTimes(4));
+    expect(identifySpy.mock.calls[0][0]).toEqual([f1Crop, b1Crop]);
+    expect(uploadSpy.mock.calls[0][1]).toBe(f1);
+    expect(uploadSpy.mock.calls[0][4]).toEqual({ autoCrop: true });
+    expect(uploadSpy.mock.calls[1][1]).toBe(b1);
+    expect(uploadSpy.mock.calls[1][4]).toEqual({ autoCrop: true });
+    expect(uploadOrder).toEqual(["OBVERSE", "REVERSE", "OBVERSE", "REVERSE"]);
   });
 
   it("skips client auto-crop and disables server crop when the toggle is off, and remembers it", async () => {

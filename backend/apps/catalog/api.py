@@ -1013,7 +1013,7 @@ _RECTANGULAR_DOCUMENT_LABELS = frozenset(
 
 def _item_shape_hint(item: CollectionItem, label: str) -> str | None:
     """Return 'bar', 'note', 'rect', or 'coin' so cropping/masking snaps cleanly to item edges."""
-    if label in (ItemPhoto.Label.RECEIPT, ItemPhoto.Label.SLAB_LABEL):
+    if label in _RECTANGULAR_DOCUMENT_LABELS:
         return None
     if item.category == CollectionItem.Category.BAR:
         return "bar"
