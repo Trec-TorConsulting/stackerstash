@@ -553,3 +553,79 @@ export function evaluateFrameMetrics(
     recommendedZoom,
   };
 }
+
+/**
+ * Evaluate localized specular glare over the central 70% of an RGBA buffer.
+ * Returns `{ hasGlare, glareRatio }`.
+ */
+export function evaluateRgbaGlare(
+  rgba: Uint8ClampedArray,
+  w: number,
+  h: number,
+  threshold = 0.12,
+): { hasGlare: boolean; glareRatio: number } {
+  if (w < 8 || h < 8 || rgba.length < w * h * 4) {
+    return { hasGlare: false, glareRatio: 0 };
+  }
+  const x0 = Math.floor(w * 0.15);
+  const x1 = Math.ceil(w * 0.85);
+  const y0 = Math.floor(h * 0.15);
+  const y1 = Math.ceil(h * 0.85);
+  let glareCount = 0;
+  let total = 0;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * w + x) * 4;
+      const r = rgba[i];
+      const g = rgba[i + 1];
+      const b = rgba[i + 2];
+      const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+      const spread = Math.max(r, g, b) - Math.min(r, g, b);
+      if (luma >= 242 && spread <= 30) {
+        glareCount++;
+      }
+      total++;
+    }
+  }
+  const glareRatio = total > 0 ? glareCount / total : 0;
+  return { hasGlare: glareRatio > threshold, glareRatio };
+}
+
+/**
+ * Decode an image File onto a small offscreen canvas and check for localized specular glare.
+ * Never throws; returns `{ hasGlare: false, glareRatio: 0 }` when decoding is unsupported.
+ */
+export async function evaluateImageFileGlare(
+  file: File,
+): Promise<{ hasGlare: boolean; glareRatio: number }> {
+  if (typeof document === "undefined" || !file.type.startsWith("image/")) {
+    return { hasGlare: false, glareRatio: 0 };
+  }
+  try {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error("decode failed"));
+        el.src = url;
+      });
+      const maxDim = 160;
+      const scale = Math.min(1, maxDim / Math.max(1, img.naturalWidth, img.naturalHeight));
+      const w = Math.max(1, Math.round(img.naturalWidth * scale));
+      const h = Math.max(1, Math.round(img.naturalHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return { hasGlare: false, glareRatio: 0 };
+      ctx.drawImage(img, 0, 0, w, h);
+      const { data } = ctx.getImageData(0, 0, w, h);
+      return evaluateRgbaGlare(data, w, h);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  } catch {
+    return { hasGlare: false, glareRatio: 0 };
+  }
+}

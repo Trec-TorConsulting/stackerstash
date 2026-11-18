@@ -123,3 +123,35 @@ def test_analyze_image_allows_dark_desk_with_readable_subject_highlights():
     assert any("too dark" in w.lower() for w in dark_res["warnings"])
 
 
+def test_analyze_image_flags_localized_specular_glare():
+    # Dark mat overall (mean brightness well below 235), but bright white glare obscuring center coin
+    img = Image.new("RGB", (600, 600), (30, 32, 36))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((150, 150, 450, 450), fill=(170, 172, 178), outline=(90, 92, 96), width=4)
+    # Large blown-out white glare blob covering >15% of central region
+    draw.ellipse((210, 190, 410, 390), fill=(252, 252, 252))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=95)
+
+    res = analyze_image_quality_and_forensics(buf.getvalue(), mode="upload")
+    assert res["status"] == "FLAGGED"
+    assert res["metrics"]["central_glare_ratio"] > 0.08
+    assert any("glare" in w.lower() for w in res["warnings"])
+
+
+def test_analyze_image_flags_clipped_subject_edges():
+    # Bright subject extending all the way across top and bottom edges (clipped note/coin)
+    img = Image.new("RGB", (600, 600), (25, 25, 28))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((140, 0, 460, 600), fill=(205, 195, 155), outline=(60, 50, 30), width=6)
+    for y in range(20, 580, 40):
+        draw.line((180, y, 420, y), fill=(80, 70, 45), width=3)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=95)
+
+    res = analyze_image_quality_and_forensics(buf.getvalue(), mode="upload")
+    assert res["status"] == "FLAGGED"
+    assert res["metrics"]["clipped_edges"] >= 2
+    assert any("clipped" in w.lower() for w in res["warnings"])
+
+
