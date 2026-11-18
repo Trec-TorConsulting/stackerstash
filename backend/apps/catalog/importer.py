@@ -16,7 +16,7 @@ from PIL import Image
 from apps.accounts.models import Workspace
 from apps.valuation.services import refresh_item_melt_from_latest_spot
 
-from .image_processing import process_item_image
+from .image_processing import generate_image_thumbnail, process_item_image
 from .models import CollectionItem, Container, ItemPhoto
 
 logger = logging.getLogger(__name__)
@@ -722,6 +722,15 @@ def import_mapped_csv(
                 width=width,
                 height=height,
             )
+            try:
+                thumb_bytes, _, _, thumb_ext = generate_image_thumbnail(content)
+                photo.thumbnail.save(
+                    f"thumb-import-{label.lower()}.{thumb_ext}",
+                    ContentFile(thumb_bytes),
+                    save=False,
+                )
+            except Exception:
+                pass
             photo.image.save(f"import-{label.lower()}.{ext}", ContentFile(content), save=True)
 
     if auto_appraise and created_item_ids:

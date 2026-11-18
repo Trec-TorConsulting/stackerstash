@@ -14,7 +14,7 @@
  *    machine-readable `reason`.
  *  - Zero runtime dependencies and no background removal (rectangle crop only).
  */
-import { decodeImageBitmapUpright } from "./imageUtils";
+import { canvasToOptimizedBlob, decodeImageBitmapUpright } from "./imageUtils";
 
 export type AutoCropShape = "coin" | "rect";
 
@@ -88,8 +88,8 @@ export const AUTO_CROP_DEFAULTS: Required<AutoCropOptions> = {
   minConfidence: 0.55,
   paddingRatio: 0.06,
   maxKeepRatio: 0.9,
-  maxOutputDimension: 4096,
-  jpegQuality: 0.92,
+  maxOutputDimension: 1600,
+  jpegQuality: 0.83,
 };
 
 export const ANALYSIS_MAX_DIM = 256;
@@ -640,17 +640,18 @@ async function runAutoCrop(
     octx.imageSmoothingQuality = "high";
     octx.drawImage(bitmap, cropRect.x, cropRect.y, cropRect.width, cropRect.height, 0, 0, outW, outH);
 
-    const blob = await new Promise<Blob | null>((resolve) =>
-      out.toBlob((b) => resolve(b), "image/jpeg", opts.jpegQuality),
-    );
+    const encoded = await canvasToOptimizedBlob(out, opts.jpegQuality);
     // Release the large backing store promptly on memory-constrained devices.
     out.width = 0;
     out.height = 0;
-    if (!blob || blob.size === 0) return keep("error", detection);
+    if (!encoded || encoded.blob.size === 0) return keep("error", detection);
 
     const baseName = file.name.replace(/\.[^.]+$/, "") || "photo";
     return {
-      file: new File([blob], `${baseName}-autocrop.jpg`, { type: "image/jpeg", lastModified: file.lastModified }),
+      file: new File([encoded.blob], `${baseName}-autocrop.${encoded.ext}`, {
+        type: encoded.mimeType,
+        lastModified: file.lastModified,
+      }),
       applied: true,
       reason: "cropped",
       detection,
@@ -782,15 +783,13 @@ async function renderRectToSize(
     octx.imageSmoothingEnabled = true;
     octx.imageSmoothingQuality = "high";
     octx.drawImage(bitmap, rect.x, rect.y, rect.width, rect.height, 0, 0, outW, outH);
-    const blob = await new Promise<Blob | null>((resolve) =>
-      out.toBlob((b) => resolve(b), "image/jpeg", quality),
-    );
+    const encoded = await canvasToOptimizedBlob(out, quality);
     out.width = 0;
     out.height = 0;
-    if (!blob || blob.size === 0) return null;
+    if (!encoded || encoded.blob.size === 0) return null;
     const baseName = originalFile.name.replace(/\.[^.]+$/, "") || "photo";
-    return new File([blob], `${baseName}-autocrop.jpg`, {
-      type: "image/jpeg",
+    return new File([encoded.blob], `${baseName}-autocrop.${encoded.ext}`, {
+      type: encoded.mimeType,
       lastModified: originalFile.lastModified,
     });
   } catch {

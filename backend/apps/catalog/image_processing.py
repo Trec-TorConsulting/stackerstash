@@ -12,7 +12,7 @@ from PIL import ExifTags, Image, ImageEnhance, ImageFilter, ImageOps, ImageStat
 
 logger = logging.getLogger(__name__)
 
-MAX_IMAGE_DIMENSION = 2400
+MAX_IMAGE_DIMENSION = 1600
 CROP_PADDING_RATIO = 0.015
 
 
@@ -1058,21 +1058,34 @@ def _encode_processed_image(
     orig_format: str = "PNG",
     force_png: bool = False,
 ) -> tuple[bytes, int, int, str]:
+    del orig_format
     out = io.BytesIO()
     if img.mode == "RGBA" or force_png:
         img.save(out, format="PNG", optimize=True)
         ext = "png"
-    elif orig_format in {"JPEG", "JPG"}:
-        img.convert("RGB").save(out, format="JPEG", quality=95, optimize=True)
-        ext = "jpg"
-    elif orig_format == "WEBP":
-        img.save(out, format="WEBP", quality=95, method=4)
-        ext = "webp"
     else:
-        img.save(out, format="PNG", optimize=True)
-        ext = "png"
+        img.convert("RGB").save(out, format="WEBP", quality=82, method=5)
+        ext = "webp"
     width, height = img.size
     return out.getvalue(), width, height, ext
+
+
+def generate_image_thumbnail(
+    raw_or_processed_bytes: bytes,
+    *,
+    max_dimension: int = 480,
+    quality: int = 78,
+) -> tuple[bytes, int, int, str]:
+    """Generate a compact WebP thumbnail (longest edge <= max_dimension)."""
+    with Image.open(io.BytesIO(raw_or_processed_bytes)) as opened:
+        img = ImageOps.exif_transpose(opened)
+        if max(img.size) > max_dimension:
+            img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+        out = io.BytesIO()
+        target = img.convert("RGBA") if img.mode in ("RGBA", "LA") else img.convert("RGB")
+        target.save(out, format="WEBP", quality=quality, method=5)
+        width, height = target.size
+        return out.getvalue(), width, height, "webp"
 
 
 _RECT_CORNER_RATIOS = {

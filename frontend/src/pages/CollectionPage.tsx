@@ -228,10 +228,12 @@ export function CollectionPage() {
         }`}
       >
         <div className="aspect-[4/3] bg-slate-950 relative overflow-hidden flex items-center justify-center">
-          {item.primary_photo_url ? (
+          {item.primary_thumbnail_url || item.primary_photo_url ? (
             <img
-              src={item.primary_photo_url}
+              src={(item.primary_thumbnail_url || item.primary_photo_url)!}
               alt={item.title}
+              loading="lazy"
+              decoding="async"
               className="h-full w-full object-contain p-2 group-hover:scale-105 transition duration-300"
             />
           ) : (

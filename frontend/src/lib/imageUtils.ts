@@ -102,8 +102,34 @@ export function computeSubjectCropRect(
   return { sx, sy, sw, sh };
 }
 
+export interface OptimizedBlobResult {
+  blob: Blob;
+  mimeType: "image/webp" | "image/jpeg";
+  ext: "webp" | "jpg";
+}
+
 /**
- * Render a cropped and rotated JPEG File from an image URL or Blob,
+ * Encode a canvas as WebP when supported by the browser, falling back to JPEG.
+ */
+export async function canvasToOptimizedBlob(
+  canvas: HTMLCanvasElement,
+  quality = 0.82,
+): Promise<OptimizedBlobResult | null> {
+  const webpBlob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob((b) => resolve(b), "image/webp", quality)
+  );
+  if (webpBlob && webpBlob.type === "image/webp") {
+    return { blob: webpBlob, mimeType: "image/webp", ext: "webp" };
+  }
+  const jpegBlob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob((b) => resolve(b), "image/jpeg", quality)
+  );
+  if (!jpegBlob) return null;
+  return { blob: jpegBlob, mimeType: "image/jpeg", ext: "jpg" };
+}
+
+/**
+ * Render a cropped and rotated File (WebP or JPEG fallback) from an image URL or Blob,
  * respecting EXIF orientation and bounding output dimensions.
  */
 export async function renderCroppedRotatedImage(
@@ -112,7 +138,7 @@ export async function renderCroppedRotatedImage(
   rotationDeg: number,
   filename: string,
   maxDimension = 1600,
-  quality = 0.94,
+  quality = 0.82,
 ): Promise<File | null> {
   if (typeof document === "undefined") return null;
 
@@ -182,11 +208,10 @@ export async function renderCroppedRotatedImage(
     outCtx.imageSmoothingQuality = "high";
     outCtx.drawImage(rotCanvas, cropX, cropY, cropW, cropH, 0, 0, outW, outH);
 
-    const blob = await new Promise<Blob | null>((resolve) =>
-      outCanvas.toBlob((b) => resolve(b), "image/jpeg", quality)
-    );
-    if (!blob) return null;
-    return new File([blob], filename, { type: "image/jpeg" });
+    const encoded = await canvasToOptimizedBlob(outCanvas, quality);
+    if (!encoded) return null;
+    const baseName = filename.replace(/\.[^.]+$/, "") || "cropped";
+    return new File([encoded.blob], `${baseName}.${encoded.ext}`, { type: encoded.mimeType });
   } catch {
     return null;
   } finally {
@@ -202,7 +227,7 @@ export async function renderCroppedRotatedImage(
 export async function normalizeImageFileForUpload(
   file: File,
   maxDimension = 1600,
-  quality = 0.88
+  quality = 0.82
 ): Promise<File> {
   if (typeof document === "undefined" || typeof URL === "undefined" || !URL.createObjectURL) {
     return file;
@@ -211,7 +236,7 @@ export async function normalizeImageFileForUpload(
   const isStandardSmallImage =
     (file.type === "image/jpeg" || file.type === "image/png" || file.type === "image/webp") &&
     file.size > 0 &&
-    file.size <= 1_200_000;
+    file.size <= 350_000;
   if (isStandardSmallImage) {
     return file;
   }
@@ -261,15 +286,13 @@ export async function normalizeImageFileForUpload(
     ctx.drawImage(drawSource, 0, 0, targetW, targetH);
     bitmap?.close();
 
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob((b) => resolve(b), "image/jpeg", quality)
-    );
-    if (!blob) {
+    const encoded = await canvasToOptimizedBlob(canvas, quality);
+    if (!encoded) {
       return file;
     }
 
     const baseName = file.name.replace(/\.[^.]+$/, "") || "photo";
-    return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
+    return new File([encoded.blob], `${baseName}.${encoded.ext}`, { type: encoded.mimeType });
   } catch {
     return file;
   } finally {
@@ -282,7 +305,7 @@ export async function normalizeImageFileForUpload(
 /**
  * Rotate an image File 90 degrees clockwise and return a new JPEG File.
  */
-export async function rotateImageFile90(file: File, quality = 0.94): Promise<File> {
+export async function rotateImageFile90(file: File, quality = 0.82): Promise<File> {
   if (typeof document === "undefined") return file;
 
   let bitmap: ImageBitmap | null = null;
@@ -324,13 +347,11 @@ export async function rotateImageFile90(file: File, quality = 0.94): Promise<Fil
     ctx.rotate(Math.PI / 2);
     ctx.drawImage(drawSource, -srcW / 2, -srcH / 2);
 
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob((b) => resolve(b), "image/jpeg", quality)
-    );
-    if (!blob) return file;
+    const encoded = await canvasToOptimizedBlob(canvas, quality);
+    if (!encoded) return file;
 
     const baseName = file.name.replace(/\.[^.]+$/, "") || "photo";
-    return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
+    return new File([encoded.blob], `${baseName}.${encoded.ext}`, { type: encoded.mimeType });
   } catch {
     return file;
   } finally {

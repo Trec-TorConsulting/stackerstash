@@ -18,7 +18,7 @@ from PIL import Image
 
 from apps.accounts.auth import WorkspaceAuth
 
-from .image_processing import process_item_image, rotate_item_image
+from .image_processing import generate_image_thumbnail, process_item_image, rotate_item_image
 from .importer import TARGET_FIELDS, import_mapped_csv, preview_csv
 from .models import CollectionItem, Container, ItemPhoto
 from .presets import ITEM_PRESETS
@@ -57,6 +57,7 @@ ContainerOut.model_rebuild()
 class PhotoOut(Schema):
     id: UUID
     url: str
+    thumbnail_url: str | None = None
     label: str
     is_primary: bool
     sort_order: int
@@ -268,6 +269,7 @@ class ItemOut(Schema):
     attributes: dict[str, Any]
     notes: str
     primary_photo_url: str | None
+    primary_thumbnail_url: str | None = None
     photos: list[PhotoOut]
     created_at: datetime
     updated_at: datetime
@@ -331,9 +333,12 @@ class BulkUpdateOut(Schema):
 
 
 def _photo_to_out(photo: ItemPhoto) -> PhotoOut:
+    url = photo.image.url if photo.image else ""
+    thumb_url = photo.thumbnail.url if photo.thumbnail else (url or None)
     return PhotoOut(
         id=photo.id,
-        url=photo.image.url if photo.image else "",
+        url=url,
+        thumbnail_url=thumb_url,
         label=photo.label,
         is_primary=photo.is_primary,
         sort_order=photo.sort_order,
@@ -474,6 +479,11 @@ def _item_to_out(item: CollectionItem, appraisal_job_id: UUID | None = None) -> 
         attributes=item.attributes or {},
         notes=item.notes,
         primary_photo_url=primary.image.url if primary and primary.image else None,
+        primary_thumbnail_url=(
+            primary.thumbnail.url
+            if primary and primary.thumbnail
+            else (primary.image.url if primary and primary.image else None)
+        ),
         photos=[_photo_to_out(p) for p in photos],
         created_at=item.created_at,
         updated_at=item.updated_at,
@@ -1091,6 +1101,7 @@ def upload_item_photo(
         )
         upload_content = ContentFile(processed_bytes, name=f"photo-{label.lower()}.{ext}")
     except Exception:
+        processed_bytes = None
         try:
             with Image.open(io.BytesIO(raw_bytes)) as img:
                 width, height = img.size
@@ -1098,6 +1109,14 @@ def upload_item_photo(
             pass
         file.seek(0)
         upload_content = file
+
+    thumb_content: ContentFile | None = None
+    try:
+        thumb_source = processed_bytes if processed_bytes is not None else raw_bytes
+        thumb_bytes, _, _, thumb_ext = generate_image_thumbnail(thumb_source)
+        thumb_content = ContentFile(thumb_bytes, name=f"thumb-{label.lower()}.{thumb_ext}")
+    except Exception:
+        thumb_content = None
 
     has_existing = item.photos.exists()
     make_primary = is_primary or not has_existing
@@ -1109,6 +1128,7 @@ def upload_item_photo(
         workspace=request.workspace,
         item=item,
         image=upload_content,
+        thumbnail=thumb_content,
         label=label,
         is_primary=make_primary,
         sort_order=next_order,
@@ -1137,12 +1157,24 @@ def rotate_item_photo(request, item_id: UUID, photo_id: UUID, payload: RotatePho
 
     processed_bytes, width, height, ext = rotate_item_image(raw_bytes, degrees=degrees)
     old_name = photo.image.name
+    old_thumb_name = photo.thumbnail.name if photo.thumbnail else ""
     photo.image.save(f"rotated-{photo.label.lower()}.{ext}", ContentFile(processed_bytes), save=False)
+    try:
+        thumb_bytes, _, _, thumb_ext = generate_image_thumbnail(processed_bytes)
+        photo.thumbnail.save(
+            f"thumb-rotated-{photo.label.lower()}.{thumb_ext}",
+            ContentFile(thumb_bytes),
+            save=False,
+        )
+    except Exception:
+        pass
     photo.width = width
     photo.height = height
-    photo.save(update_fields=["image", "width", "height"])
+    photo.save(update_fields=["image", "thumbnail", "width", "height"])
     if old_name and old_name != photo.image.name:
         photo.image.storage.delete(old_name)
+    if old_thumb_name and old_thumb_name != (photo.thumbnail.name if photo.thumbnail else ""):
+        photo.thumbnail.storage.delete(old_thumb_name)
 
     return _photo_to_out(photo)
 

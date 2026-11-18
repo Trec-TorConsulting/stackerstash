@@ -241,7 +241,7 @@ def test_image_background_removal_and_tight_crop(api_client, user_a):
     processed_bytes, width, height, ext = process_item_image(
         buf.getvalue(), remove_background=True, enhance=True
     )
-    assert ext == "jpg"
+    assert ext == "webp"
     assert (width, height) == (200, 200)
 
     out_img = Image.open(io.BytesIO(processed_bytes))
@@ -268,7 +268,7 @@ def test_image_background_removal_and_tight_crop(api_client, user_a):
     # Server auto-crop (default on) frames the 100px coin as a padded square.
     assert photo_data["width"] == photo_data["height"]
     assert 100 <= photo_data["width"] <= 125
-    assert photo_data["url"].endswith(".jpg")
+    assert photo_data["url"].endswith(".webp")
 
     # Clients that already cropped (or users who kept the original) opt out.
     upload_raw = SimpleUploadedFile("coin.jpg", buf.getvalue(), content_type="image/jpeg")
@@ -310,7 +310,7 @@ def test_media_files_served_when_debug_false(api_client, user_a, settings):
 
     media_resp = api_client.get(photo_url)
     assert media_resp.status_code == 200
-    assert media_resp["Content-Type"] == "image/png"
+    assert media_resp["Content-Type"] == "image/webp"
 
 
 @pytest.mark.django_db
@@ -341,7 +341,7 @@ def test_patterned_background_removal_and_slab_coin_extraction(api_client, user_
 
     # 1. process_item_image preserves the full image without background removal
     cleaned_bytes, cw, ch, cext = process_item_image(buf.getvalue(), remove_background=True, enhance=True)
-    assert cext == "jpg"
+    assert cext == "webp"
     cleaned_img = Image.open(io.BytesIO(cleaned_bytes))
     assert (cw, ch) == img.size
     assert cleaned_img.size == img.size
@@ -414,7 +414,7 @@ def test_bar_and_note_cropping_on_textured_dark_mat(api_client, user_a):
     bar_bytes, bw, bh, bext = process_item_image(
         bar_buf.getvalue(), remove_background=True, enhance=True, shape_hint="bar"
     )
-    assert bext == "jpg"
+    assert bext == "webp"
     assert (bw, bh) == bar_img.size
 
     # 2. Banknote (PAPER) on dark woven mat via API upload + remove-background
@@ -524,7 +524,7 @@ def test_proof_coin_and_sleeved_note_background_removal():
     note_bytes, nw, nh, next_ = process_item_image(
         note_buf.getvalue(), remove_background=True, enhance=True, shape_hint="note"
     )
-    assert next_ == "jpg"
+    assert next_ == "webp"
     assert (nw, nh) == note_img.size
 
 
@@ -686,7 +686,7 @@ def test_assay_card_with_mixed_border_and_small_coin_preserves_full_card():
     out_bytes, out_w, out_h, out_ext = process_item_image(
         buf.getvalue(), remove_background=True, enhance=True, shape_hint="coin"
     )
-    assert out_ext == "jpg"
+    assert out_ext == "webp"
     assert (out_w, out_h) == (600, 800)
 
 
@@ -889,3 +889,60 @@ def test_symmetrical_obverse_and_reverse_cropping(api_client, user_a):
 
     assert (d2["width"], d2["height"]) == (d1["width"], d1["height"])
     assert d1["width"] < 600 and d1["height"] < 800
+
+
+@pytest.mark.django_db
+def test_thumbnail_generation_rotation_and_legacy_fallback(api_client, user_a):
+    from apps.catalog.models import ItemPhoto
+
+    _, _, token_a = user_a
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token_a}"}
+    item = api_client.post(
+        "/api/v1/catalog/items",
+        data=json.dumps({"title": "Thumbnail Test Coin", "category": "COIN"}),
+        content_type="application/json",
+        **headers,
+    ).json()
+
+    img = Image.new("RGB", (900, 700), color=(180, 140, 60))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=92)
+
+    up_resp = api_client.post(
+        f"/api/v1/catalog/items/{item['id']}/photos",
+        data={"file": SimpleUploadedFile("coin.jpg", buf.getvalue(), content_type="image/jpeg"), "label": "OBVERSE"},
+        **headers,
+    )
+    assert up_resp.status_code == 201
+    up_data = up_resp.json()
+    assert up_data["thumbnail_url"] is not None
+    assert up_data["thumbnail_url"].endswith(".webp")
+    assert up_data["thumbnail_url"] != up_data["url"]
+
+    list_resp = api_client.get("/api/v1/catalog/items", **headers)
+    assert list_resp.status_code == 200
+    assert list_resp.json()[0]["primary_thumbnail_url"] == up_data["thumbnail_url"]
+
+    photo_obj = ItemPhoto.objects.get(id=up_data["id"])
+    old_thumb_name = photo_obj.thumbnail.name
+
+    rot_resp = api_client.post(
+        f"/api/v1/catalog/items/{item['id']}/photos/{up_data['id']}/rotate",
+        data=json.dumps({"degrees": 90}),
+        content_type="application/json",
+        **headers,
+    )
+    assert rot_resp.status_code == 200
+    rot_data = rot_resp.json()
+    assert rot_data["thumbnail_url"] != up_data["thumbnail_url"]
+    assert not photo_obj.thumbnail.storage.exists(old_thumb_name)
+
+    # Legacy fallback when thumbnail is null
+    photo_obj.refresh_from_db()
+    photo_obj.thumbnail = None
+    photo_obj.save(update_fields=["thumbnail"])
+    detail_resp = api_client.get(f"/api/v1/catalog/items/{item['id']}", **headers)
+    assert detail_resp.status_code == 200
+    detail = detail_resp.json()
+    assert detail["primary_thumbnail_url"] == detail["primary_photo_url"]
+    assert detail["photos"][0]["thumbnail_url"] == detail["photos"][0]["url"]

@@ -304,8 +304,10 @@ describe("Front / Back symmetry harmonization", () => {
 });
 
 describe("textured mat isolation and 6% default padding", () => {
-  it("uses ~6% default padding", () => {
+  it("uses ~6% default padding and mobile-bounded output defaults", () => {
     expect(AUTO_CROP_DEFAULTS.paddingRatio).toBe(0.06);
+    expect(AUTO_CROP_DEFAULTS.maxOutputDimension).toBe(1600);
+    expect(AUTO_CROP_DEFAULTS.jpegQuality).toBe(0.83);
   });
 
   it("isolates a slab/note on a patterned carbon-fiber mat", () => {

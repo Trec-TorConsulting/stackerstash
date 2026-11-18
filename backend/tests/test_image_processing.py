@@ -5,9 +5,12 @@ from PIL import Image, ImageDraw
 
 from apps.catalog.image_processing import (
     AUTO_CROP_PADDING_RATIO,
+    MAX_IMAGE_DIMENSION,
     deskew_tilted_rectangle,
     detect_subject_crop_box,
+    generate_image_thumbnail,
     process_item_image,
+    rotate_item_image,
 )
 
 
@@ -97,3 +100,32 @@ def test_deskew_tilted_rectangle_straightens_without_clipping_and_skips_coins():
     # Circular coin must never be rotated
     _, coin_deg = deskew_tilted_rectangle(img, shape_hint="coin")
     assert coin_deg == 0.0
+
+
+def test_webp_encoding_dimension_cap_thumbnail_and_rgba_preservation():
+    assert MAX_IMAGE_DIMENSION == 1600
+
+    # Large opaque PNG (>1600px) -> WebP <= 1600px
+    big = Image.new("RGB", (2400, 1800), (140, 120, 90))
+    buf = io.BytesIO()
+    big.save(buf, format="PNG")
+    out_bytes, out_w, out_h, out_ext = process_item_image(buf.getvalue(), enhance=False)
+    assert out_ext == "webp"
+    assert max(out_w, out_h) == 1600
+
+    # Thumbnail <= 480px WebP
+    t_bytes, tw, th, t_ext = generate_image_thumbnail(out_bytes)
+    assert t_ext == "webp"
+    assert max(tw, th) == 480
+    assert len(t_bytes) > 0
+
+    # RGBA cutout preserves alpha as PNG
+    rgba = Image.new("RGBA", (400, 400), (0, 0, 0, 0))
+    rdraw = ImageDraw.Draw(rgba)
+    rdraw.ellipse((60, 60, 340, 340), fill=(210, 210, 210, 255))
+    rbuf = io.BytesIO()
+    rgba.save(rbuf, format="PNG")
+    rot_bytes, _, _, rot_ext = rotate_item_image(rbuf.getvalue(), degrees=90)
+    assert rot_ext == "png"
+    with Image.open(io.BytesIO(rot_bytes)) as checked:
+        assert checked.mode == "RGBA"

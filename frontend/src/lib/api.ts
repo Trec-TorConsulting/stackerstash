@@ -76,6 +76,7 @@ export interface AdminWorkspaceRecord {
 export interface ItemPhoto {
   id: string;
   url: string;
+  thumbnail_url?: string | null;
   label: string;
   is_primary: boolean;
   sort_order: number;
@@ -148,6 +149,7 @@ export interface CollectionItem {
   attributes: Record<string, unknown>;
   notes: string;
   primary_photo_url: string | null;
+  primary_thumbnail_url?: string | null;
   photos: ItemPhoto[];
   intake_source?: string;
   photo_verification_status?: string;

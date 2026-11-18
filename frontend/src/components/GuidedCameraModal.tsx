@@ -22,6 +22,7 @@ import {
   type SubjectBox,
 } from '../lib/cameraMetrics';
 import {
+  canvasToOptimizedBlob,
   computeCoverCropRect,
   computeSubjectCropRect,
   decodeImageBitmapUpright,
@@ -30,7 +31,7 @@ import {
 } from '../lib/imageUtils';
 import { PhotoCropRotateView } from './PhotoCropRotateView';
 
-const MAX_CAPTURE_DIM = 2048;
+const MAX_CAPTURE_DIM = 1600;
 const VIEWFINDER_ASPECT = 4 / 3;
 const BURST_FRAMES = 5;
 const BURST_INTERVAL_MS = 50;
@@ -65,19 +66,10 @@ function resolveInitialMode(
 }
 
 async function canvasToJpegFile(canvas: HTMLCanvasElement, filename: string): Promise<File | null> {
-  return new Promise((resolve) => {
-    canvas.toBlob(
-      (blob) => {
-        if (!blob) {
-          resolve(null);
-          return;
-        }
-        resolve(new File([blob], filename, { type: 'image/jpeg' }));
-      },
-      'image/jpeg',
-      0.94,
-    );
-  });
+  const encoded = await canvasToOptimizedBlob(canvas, 0.83);
+  if (!encoded) return null;
+  const baseName = filename.replace(/\.[^.]+$/, '') || 'capture';
+  return new File([encoded.blob], `${baseName}.${encoded.ext}`, { type: encoded.mimeType });
 }
 
 function drawNormalizedSource(
@@ -681,7 +673,7 @@ export function GuidedCameraModal({
     const rawFile = e.target.files?.[0];
     e.target.value = '';
     if (!rawFile) return;
-    const normalized = await normalizeImageFileForUpload(rawFile, 2048, 0.94);
+    const normalized = await normalizeImageFileForUpload(rawFile, 1600, 0.82);
     setShowCropper(false);
     setPendingReviewFile(normalized);
   };

@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  canvasToOptimizedBlob,
   computeCoverCropRect,
   computeSubjectCropRect,
   decodeImageBitmapUpright,
+  normalizeImageFileForUpload,
 } from "../lib/imageUtils";
 
 describe("imageUtils", () => {
@@ -60,5 +62,33 @@ describe("imageUtils", () => {
     } finally {
       window.createImageBitmap = orig;
     }
+  });
+
+  it("encodes WebP via canvasToOptimizedBlob and falls back to JPEG when unsupported", async () => {
+    const webpCanvas = {
+      toBlob: (cb: (b: Blob | null) => void, type: string) =>
+        cb(new Blob(["webp-data"], { type: type === "image/webp" ? "image/webp" : "image/png" })),
+    } as unknown as HTMLCanvasElement;
+    const webpRes = await canvasToOptimizedBlob(webpCanvas, 0.82);
+    expect(webpRes?.mimeType).toBe("image/webp");
+    expect(webpRes?.ext).toBe("webp");
+
+    const fallbackCanvas = {
+      toBlob: (cb: (b: Blob | null) => void, type: string) =>
+        cb(
+          type === "image/webp"
+            ? new Blob(["png-fallback"], { type: "image/png" })
+            : new Blob(["jpeg-data"], { type: "image/jpeg" }),
+        ),
+    } as unknown as HTMLCanvasElement;
+    const jpegRes = await canvasToOptimizedBlob(fallbackCanvas, 0.82);
+    expect(jpegRes?.mimeType).toBe("image/jpeg");
+    expect(jpegRes?.ext).toBe("jpg");
+  });
+
+  it("passes through small <= 350 KB standard images unchanged in normalizeImageFileForUpload", async () => {
+    const small = new File([new Uint8Array(100_000)], "small.jpg", { type: "image/jpeg" });
+    const out = await normalizeImageFileForUpload(small);
+    expect(out).toBe(small);
   });
 });
