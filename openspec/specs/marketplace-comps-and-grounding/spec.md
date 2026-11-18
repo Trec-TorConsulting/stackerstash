@@ -13,11 +13,15 @@ The system SHALL fall back to the eBay Browse API (`item_summary/search`) when t
 - **THEN** the system queries active eBay listings, trims extreme outliers, and records Low, Median, and High active ask prices under `EBAY_ACTIVE_ASK`
 
 ### Requirement: Zero-key comp verification links
-The system SHALL generate pre-filled search URLs for eBay Sold & Completed, Heritage Auctions, GreatCollections, and Stack's Bowers Archive from item metadata and display them in the Valuation Breakdown UI without requiring API keys.
+The system SHALL generate category-appropriate pre-filled search URLs without requiring API keys and display them in the Valuation Breakdown UI: eBay Sold & Completed, Heritage Auctions, GreatCollections, and Stack's Bowers Archive for numismatic/bullion items, and eBay Sold & Completed, TCGplayer, PriceCharting, and 130point for `CARD` and card-slabbed `SLAB` items.
 
 #### Scenario: Viewing comp links for an item with no BYOK keys
-- **WHEN** a collector opens an item's Valuation Breakdown card
+- **WHEN** a collector opens a coin or bullion item's Valuation Breakdown card
 - **THEN** clickable "Verify Comps" links for eBay Sold, Heritage Auctions, GreatCollections, and Stack's Bowers open pre-filled searches for that item's year, mint mark, title, and grade
+
+#### Scenario: Viewing comp links for a trading or Pokémon card with no BYOK keys
+- **WHEN** a collector opens a `CARD` or card-slabbed `SLAB` item's Valuation Breakdown card
+- **THEN** clickable "Verify Comps" links for eBay Sold, TCGplayer, PriceCharting, and 130point open pre-filled searches using the card's title, set name, card number, grading service, and grade
 
 ### Requirement: Gemini Search grounding for live market citations
 The system SHALL support optional `google_search` tool grounding in Gemini AI appraisals so returned market ranges and drivers can reference live auction and dealer listings.
