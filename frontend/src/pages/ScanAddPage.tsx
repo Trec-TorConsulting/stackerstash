@@ -91,6 +91,93 @@ export function ScanAddPage() {
   }, []);
   const [editingPhotoIndex, setEditingPhotoIndex] = useState<number | null>(null);
   const [intakeSource, setIntakeSource] = useState<"CAMERA" | "UPLOAD" | "MANUAL">("MANUAL");
+  const [cameraOpen, setCameraOpen] = useState(
+    () => typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia)
+  );
+  const [cameraReady, setCameraReady] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  useEffect(() => {
+    if (!cameraOpen) {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      setCameraReady(false);
+      return;
+    }
+
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setCameraOpen(false);
+      return;
+    }
+
+    let cancelled = false;
+    setCameraError(null);
+    setCameraReady(false);
+
+    navigator.mediaDevices
+      .getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+        audio: false,
+      })
+      .then((stream) => {
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const msg = err instanceof Error ? err.message : "Camera unavailable";
+        setCameraError(msg);
+        setCameraOpen(false);
+      });
+
+    return () => {
+      cancelled = true;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+    };
+  }, [cameraOpen]);
+
+  function captureFromViewfinder() {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth || !video.videoHeight) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) return;
+        const targetLabel = hasObverse && !hasReverse ? "REVERSE" : "OBVERSE";
+        const file = new File([blob], `scan-${targetLabel.toLowerCase()}-${Date.now()}.jpg`, {
+          type: "image/jpeg",
+        });
+        ingestFiles([file], targetLabel, "CAMERA");
+        if (targetLabel === "REVERSE") {
+          setCameraOpen(false);
+        }
+      },
+      "image/jpeg",
+      0.92
+    );
+  }
   const [verificationStatus, setVerificationStatus] = useState<"NONE" | "VERIFIED" | "FLAGGED" | "OVERRIDDEN">("NONE");
   const [verificationWarnings, setVerificationWarnings] = useState<string[]>([]);
   const [overrideConfirmed, setOverrideConfirmed] = useState(false);
@@ -650,8 +737,69 @@ export function ScanAddPage() {
           isDragging ? "border-amber-400 bg-amber-500/5" : "border-slate-800"
         }`}
       >
+        {cameraOpen && (
+          <div className="relative rounded-xl overflow-hidden bg-black border border-slate-700 aspect-[4/3] sm:aspect-video">
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              onLoadedMetadata={() => setCameraReady(true)}
+              className="w-full h-full object-cover"
+            />
+            {/* Centering guide overlay */}
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <div className="relative w-56 h-56 sm:w-64 sm:h-64 rounded-2xl border-2 border-dashed border-amber-400/85 shadow-[0_0_0_9999px_rgba(2,6,23,0.45)] flex items-center justify-center">
+                <div className="w-3 h-3 rounded-full border border-amber-300/90 bg-amber-400/20" />
+              </div>
+            </div>
+            <div className="pointer-events-none absolute top-3 inset-x-0 flex justify-center">
+              <span className="px-3 py-1 rounded-full bg-slate-950/80 border border-slate-700 text-xs font-medium text-amber-300">
+                {hasObverse && !hasReverse
+                  ? "Center Back (Reverse) in frame"
+                  : "Center Front (Obverse) in frame"}
+              </span>
+            </div>
+            <div className="absolute bottom-3 inset-x-3 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setCameraOpen(false)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-950/85 hover:bg-slate-900 border border-slate-700 text-slate-200 text-xs font-medium transition"
+              >
+                <X className="h-3.5 w-3.5" />
+                Close Camera
+              </button>
+              <button
+                type="button"
+                disabled={!cameraReady}
+                onClick={captureFromViewfinder}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-semibold text-sm shadow-lg transition"
+              >
+                <Camera className="h-4 w-4" />
+                {hasObverse && !hasReverse ? "Snap Back Photo" : "Snap Front Photo"}
+              </button>
+            </div>
+          </div>
+        )}
+        {cameraError && !cameraOpen && (
+          <p className="text-xs text-amber-300/90">
+            Live camera unavailable ({cameraError}). Use Take Photo or Upload below.
+          </p>
+        )}
         <div className="flex flex-wrap gap-2.5">
-          <label className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-sm cursor-pointer transition">
+          {!cameraOpen &&
+            typeof navigator !== "undefined" &&
+            Boolean(navigator.mediaDevices?.getUserMedia) && (
+              <button
+                type="button"
+                onClick={() => setCameraOpen(true)}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-sm cursor-pointer transition"
+              >
+                <Camera className="h-4 w-4" />
+                Open Camera
+              </button>
+            )}
+          <label className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-700 hover:border-slate-500 text-slate-200 font-medium text-sm cursor-pointer transition">
             <Camera className="h-4 w-4" />
             {hasObverse && !hasReverse ? "Snap Back Photo" : "Take Photo"}
             <input
