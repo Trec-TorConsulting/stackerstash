@@ -214,8 +214,8 @@ export function ScanAddPage() {
             originalFile: r.applied ? imageFiles[i] : undefined,
             cropResult: r.applied ? r : undefined,
             autoCropped: r.applied,
-            // Let the server try when the browser couldn't find confident edges.
-            serverAutoCrop: !r.applied,
+            // Server performs authoritative vault trim/deskew/symmetry unless user overrides.
+            serverAutoCrop: true,
             qualityWarnings: qualityWarnings.length > 0 ? qualityWarnings : undefined,
           };
         });
@@ -524,7 +524,8 @@ export function ScanAddPage() {
       });
 
       for (let i = 0; i < files.length; i++) {
-        const uploadFile = await normalizeImageFileForUpload(files[i].file, 2048, 0.92);
+        const sourceFile = files[i].originalFile ?? files[i].file;
+        const uploadFile = await normalizeImageFileForUpload(sourceFile, 2048, 0.92);
         await api.uploadPhoto(created.id, uploadFile, files[i].label, i === 0, {
           autoCrop: files[i].serverAutoCrop,
         });
@@ -602,13 +603,13 @@ export function ScanAddPage() {
           auto_appraise: !fastBulkMode,
         });
 
-        await Promise.all(
-          normalized.map((normFile, i) =>
-            api.uploadPhoto(created.id, normFile, i === 0 ? "OBVERSE" : "REVERSE", i === 0, {
-              autoCrop: pair[i].serverAutoCrop,
-            })
-          )
-        );
+        for (let i = 0; i < pair.length; i++) {
+          const uploadSource = pair[i].originalFile ?? pair[i].file;
+          const uploadFile = await normalizeImageFileForUpload(uploadSource, 2048, 0.92);
+          await api.uploadPhoto(created.id, uploadFile, i === 0 ? "OBVERSE" : "REVERSE", i === 0, {
+            autoCrop: pair[i].serverAutoCrop,
+          });
+        }
       }
       qc.invalidateQueries({ queryKey: ["items"] });
       qc.invalidateQueries({ queryKey: ["portfolio-summary"] });
@@ -962,7 +963,7 @@ export function ScanAddPage() {
               </button>
             </div>
             <PhotoCropRotateView
-              imageFile={files[editingPhotoIndex].file}
+              imageFile={files[editingPhotoIndex].originalFile ?? files[editingPhotoIndex].file}
               title={`Adjust ${files[editingPhotoIndex].label}`}
               initialPreset={
                 form.category === "COIN"
