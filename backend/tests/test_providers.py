@@ -132,7 +132,7 @@ def test_lookup_ebay_falls_back_to_browse_active_ask_on_403(mock_client_cls):
     assert res is not None
     assert res["source"] == "EBAY_ACTIVE_ASK"
     assert res["is_ask"] is True
-    assert res["median"] == Decimal("45.00")
+    assert res["median"] == Decimal("38.25")
 
 
 def test_lookup_bullion_dealer_benchmark():
@@ -363,3 +363,18 @@ def test_lookup_tcgplayer_and_collectr_optional_byok(monkeypatch):
     col = lookup_collectr_price("Charizard", api_key="col-key")
     assert col is not None
     assert col["market_value"] == "105.25"
+
+
+def test_filter_comp_listings_excludes_lots_replicas_and_empty_boxes():
+    from decimal import Decimal
+    from apps.valuation.providers import _filter_comp_listings
+
+    listings = [
+        {"title": "1921 Morgan Silver Dollar MS63", "price": {"value": "65.00"}},
+        {"title": "Lot of 5 1921 Morgan Silver Dollars", "price": {"value": "200.00"}},
+        {"title": "1921 Morgan Silver Dollar Replica Copy", "price": {"value": "12.00"}},
+        {"title": "Empty Box for Morgan Silver Dollar", "price": {"value": "15.00"}},
+        {"title": "1921 Morgan Silver Dollar BU", "price": {"value": "55.00"}},
+    ]
+    prices = _filter_comp_listings(listings, query="1921 Morgan Silver Dollar")
+    assert prices == [Decimal("65.00"), Decimal("55.00")]

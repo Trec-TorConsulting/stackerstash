@@ -349,6 +349,46 @@ def lookup_numista_specs(
     return None
 
 
+_COMP_EXCLUDE_TERMS = (
+    "lot of",
+    "bulk",
+    "replica",
+    "reproduction",
+    "copy",
+    "fake",
+    "counterfeit",
+    "empty box",
+    "empty slab",
+    "empty holder",
+    "box only",
+    "proxy",
+)
+
+
+def _filter_comp_listings(
+    listings: list[dict[str, Any]],
+    query: str = "",
+    price_key: str = "price",
+) -> list[Decimal]:
+    """Filter out noisy comp listings (lots, replicas, empty boxes) and extract positive prices."""
+    q_lower = (query or "").lower()
+    active_excludes = [term for term in _COMP_EXCLUDE_TERMS if term not in q_lower]
+    prices: list[Decimal] = []
+    for entry in listings:
+        title = str(entry.get("title") or "").lower()
+        if title and any(term in title for term in active_excludes):
+            continue
+        val = (entry.get(price_key) or {}).get("value")
+        if val is not None:
+            try:
+                p = Decimal(str(val))
+                if p > 0:
+                    prices.append(p)
+            except Exception:
+                continue
+    return prices
+
+
 def _trim_outliers(prices: list[Decimal]) -> list[Decimal]:
     """Remove top/bottom 10% extreme outliers when enough samples exist."""
     if len(prices) < 5:
@@ -386,30 +426,28 @@ def _lookup_ebay_browse_active(
     if search_resp.status_code != 200:
         return None
     summaries = search_resp.json().get("itemSummaries") or []
-    raw_prices: list[Decimal] = []
-    for item in summaries:
-        val = (item.get("price") or {}).get("value")
-        if val is not None:
-            try:
-                p = Decimal(str(val))
-                if p > 0:
-                    raw_prices.append(p)
-            except Exception:
-                continue
+    raw_prices = _filter_comp_listings(summaries, query=query, price_key="price")
     trimmed = _trim_outliers(raw_prices)
     if not trimmed:
         return None
-    med = Decimal(str(median([float(p) for p in trimmed]))).quantize(
-        Decimal("0.01"), rounding=ROUND_HALF_UP
-    )
+    from django.conf import settings
+
+    discount = Decimal(str(getattr(settings, "EBAY_ACTIVE_ASK_DISCOUNT", "0.85")))
+    med = (
+        Decimal(str(median([float(p) for p in trimmed]))) * discount
+    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return {
         "source": "EBAY_ACTIVE_ASK",
         "is_ask": True,
-        "low": min(trimmed).quantize(Decimal("0.01")),
+        "low": (min(trimmed) * discount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         "median": med,
-        "high": max(trimmed).quantize(Decimal("0.01")),
+        "high": (max(trimmed) * discount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         "count": len(trimmed),
-        "raw": {"sample_count": len(trimmed), "prices": [str(p) for p in trimmed[:10]]},
+        "raw": {
+            "sample_count": len(trimmed),
+            "ask_discount_factor": str(discount),
+            "prices": [str(p) for p in trimmed[:10]],
+        },
     }
 
 
@@ -450,16 +488,7 @@ def lookup_ebay_sold_comps(
                 return None
             data = search_resp.json()
             sales = data.get("itemSales") or []
-            raw_prices: list[Decimal] = []
-            for sale in sales:
-                val = (sale.get("lastSoldPrice") or {}).get("value")
-                if val is not None:
-                    try:
-                        p = Decimal(str(val))
-                        if p > 0:
-                            raw_prices.append(p)
-                    except Exception:
-                        continue
+            raw_prices = _filter_comp_listings(sales, query=query, price_key="lastSoldPrice")
             trimmed = _trim_outliers(raw_prices)
             if not trimmed:
                 return None

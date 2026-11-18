@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronUp, ShieldCheck, Info, Sparkles, ExternalLink, Search } from "lucide-react";
+import { ChevronDown, ChevronUp, ShieldCheck, Info, Sparkles, ExternalLink, Search, Clock, Lock, RefreshCw } from "lucide-react";
 import type { CollectionItem, ValuationHistoryEntry } from "../../lib/api";
 import { buildCompLinks } from "../../lib/compLinks";
 import { formatUsd } from "../../lib/format";
@@ -34,14 +34,37 @@ const SOURCE_LABELS: Record<string, string> = {
   ANACS: "ANACS Cert Lookup",
 };
 
+export function getValuationFreshness(
+  valuedAt?: string | null,
+  staleDays = 7
+): { label: string; isStale: boolean; ageDays: number | null } {
+  if (!valuedAt) {
+    return { label: "Unvalued", isStale: true, ageDays: null };
+  }
+  const ts = Date.parse(valuedAt);
+  if (Number.isNaN(ts)) {
+    return { label: "Unvalued", isStale: true, ageDays: null };
+  }
+  const ageDays = Math.max(0, Math.floor((Date.now() - ts) / (1000 * 60 * 60 * 24)));
+  const isStale = ageDays >= staleDays;
+  const label = ageDays === 0 ? "Valued today" : `Valued ${ageDays}d ago`;
+  return { label: isStale ? `Stale (${ageDays}d ago)` : label, isStale, ageDays };
+}
+
 export function ValuationBreakdownCard({
   item,
   latestHistory,
+  onReappraise,
+  reappraising = false,
 }: {
   item: CollectionItem;
   latestHistory?: ValuationHistoryEntry | null;
+  onReappraise?: () => void;
+  reappraising?: boolean;
 }) {
   const [showSources, setShowSources] = useState(false);
+  const freshness = getValuationFreshness(item.valued_at);
+  const isLocked = item.specs_provenance?.market_value_unit === "USER";
 
   const marketUnit = Number(item.market_value_unit || 0);
   const meltUnit = Number(item.melt_value_unit || 0);
@@ -77,7 +100,34 @@ export function ValuationBreakdownCard({
             Why It&apos;s Valued Here
           </h2>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {isLocked && (
+            <span className="px-2 py-0.5 rounded-full text-xs font-medium border bg-sky-500/15 text-sky-300 border-sky-500/30">
+              <Lock className="h-3 w-3 inline mr-1 -mt-0.5" />
+              Locked
+            </span>
+          )}
+          <span
+            className={`px-2 py-0.5 rounded-full text-xs font-medium border ${
+              freshness.isStale
+                ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
+                : "bg-slate-800 text-slate-300 border-slate-700"
+            }`}
+          >
+            <Clock className="h-3 w-3 inline mr-1 -mt-0.5" />
+            {freshness.label}
+          </span>
+          {onReappraise && freshness.isStale && (
+            <button
+              type="button"
+              onClick={onReappraise}
+              disabled={reappraising}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3 w-3 ${reappraising ? "animate-spin" : ""}`} />
+              Re-appraise
+            </button>
+          )}
           <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium border ${conf.cls}`}>
             <ShieldCheck className="h-3 w-3 inline mr-1 -mt-0.5" />
             {conf.label}

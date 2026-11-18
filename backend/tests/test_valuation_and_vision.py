@@ -675,3 +675,43 @@ def test_ocr_and_vision_card_normalization():
 
 
 
+
+
+@pytest.mark.django_db
+def test_reappraise_stale_items_preserves_user_locked_value(monkeypatch):
+    from datetime import timedelta
+    from decimal import Decimal
+    from django.contrib.auth import get_user_model
+    from django.utils import timezone
+    from apps.accounts.models import Workspace
+    from apps.catalog.models import CollectionItem
+    from apps.valuation.models import SpotPriceSnapshot
+    from apps.valuation.tasks import reappraise_stale_items
+
+    owner = get_user_model().objects.create_user(email="stale_owner@example.com")
+    ws = Workspace.objects.create(name="Stale Test WS", slug="stale-test-ws", owner=owner)
+    SpotPriceSnapshot.objects.create(
+        metal_type=CollectionItem.MetalType.SILVER,
+        price_usd_per_troy_oz=Decimal("30.00"),
+        source="test",
+    )
+    stale_time = timezone.now() - timedelta(days=10)
+    locked_item = CollectionItem.objects.create(
+        workspace=ws,
+        title="Locked Silver Eagle",
+        category=CollectionItem.Category.COIN,
+        metal_type=CollectionItem.MetalType.SILVER,
+        weight_value=Decimal("1.0000"),
+        weight_unit="OZT",
+        purity=Decimal("1.0000"),
+        market_value_unit=Decimal("99.00"),
+        specs_provenance={"market_value_unit": "USER"},
+        valued_at=stale_time,
+    )
+    CollectionItem.objects.filter(id=locked_item.id).update(fine_troy_oz=Decimal("1.0000"))
+
+    result = reappraise_stale_items(stale_days=7, batch_size=10)
+    locked_item.refresh_from_db()
+    assert result["skipped_locked"] == 1
+    assert locked_item.market_value_unit == Decimal("99.00")
+    assert locked_item.melt_value_unit == Decimal("30.00")
