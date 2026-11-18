@@ -116,6 +116,9 @@ class ProviderCredential(models.Model):
         PRICECHARTING_API_KEY = "PRICECHARTING_API_KEY", "PriceCharting API Key"
         PSA_API_TOKEN = "PSA_API_TOKEN", "PSA Cert API Token"
         POKEMON_TCG_API_KEY = "POKEMON_TCG_API_KEY", "Pokémon TCG API Key"
+        TCGPLAYER_CLIENT_ID = "TCGPLAYER_CLIENT_ID", "TCGplayer API Client ID"
+        TCGPLAYER_CLIENT_SECRET = "TCGPLAYER_CLIENT_SECRET", "TCGplayer API Client Secret"
+        COLLECTR_API_KEY = "COLLECTR_API_KEY", "Collectr API Key"
         OLLAMA_URL = "OLLAMA_URL", "Self-Hosted Ollama URL"
         OLLAMA_MODEL = "OLLAMA_MODEL", "Self-Hosted Ollama Vision Model"
 

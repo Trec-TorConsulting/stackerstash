@@ -62,6 +62,21 @@ export function buildCompLinks(
         label: "130point",
         url: `https://130point.com/sales/?search=${encoded}`,
       },
+      {
+        id: "beckett",
+        label: "Beckett",
+        url: `https://www.beckett.com/search/?term=${encoded}`,
+      },
+      {
+        id: "cardladder",
+        label: "Card Ladder",
+        url: `https://www.cardladder.com/sales-history?q=${encoded}`,
+      },
+      {
+        id: "collectr",
+        label: "Collectr",
+        url: `https://app.getcollectr.com/?q=${encoded}`,
+      },
     ];
   }
 

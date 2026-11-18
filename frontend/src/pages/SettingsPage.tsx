@@ -23,7 +23,14 @@ const PROVIDER_GROUPS: { title: string; subtitle: string; providers: string[] }[
   {
     title: "Trading & Collectible Cards (Optional BYOK)",
     subtitle: "Pokémon TCG API and Scryfall work without keys; add optional keys for PriceCharting, PSA Certs, and higher Pokémon TCG quotas.",
-    providers: ["PRICECHARTING_API_KEY", "PSA_API_TOKEN", "POKEMON_TCG_API_KEY"],
+    providers: [
+      "PRICECHARTING_API_KEY",
+      "PSA_API_TOKEN",
+      "POKEMON_TCG_API_KEY",
+      "TCGPLAYER_CLIENT_ID",
+      "TCGPLAYER_CLIENT_SECRET",
+      "COLLECTR_API_KEY",
+    ],
   },
 ];
 
@@ -40,7 +47,10 @@ const PROVIDER_HINTS: Record<string, string> = {
   EBAY_CLIENT_ID: "eBay Developer App Client ID (Sold or Browse Active Ask)",
   EBAY_CLIENT_SECRET: "eBay Developer App Client Secret",
   NUMISTA_KEY: "Numista v3 API key (en.numista.com/api)",
-  PRICECHARTING_API_KEY: "PriceCharting API token (ungraded + PSA/BGS/CGC card prices)",
+  PRICECHARTING_API_KEY: "PriceCharting API token (ungraded + PSA/BGS/CGC/SGC/TAG card prices)",
+  TCGPLAYER_CLIENT_ID: "Optional TCGplayer OAuth2 Client ID (for existing keyholders)",
+  TCGPLAYER_CLIENT_SECRET: "Optional TCGplayer OAuth2 Client Secret",
+  COLLECTR_API_KEY: "Optional Collectr Partner API Key",
   PSA_API_TOKEN: "PSA Public API bearer token (cert metadata & pop report)",
   POKEMON_TCG_API_KEY: "Optional Pokémon TCG API key (pokemontcg.io — higher rate limit)",
 };
@@ -59,6 +69,9 @@ const PROVIDER_LINKS: Record<string, { label: string; url: string }> = {
   EBAY_CLIENT_SECRET: { label: "eBay Developer App Keys", url: "https://developer.ebay.com/my/keys" },
   NUMISTA_KEY: { label: "Get key on Numista API", url: "https://en.numista.com/api/" },
   PRICECHARTING_API_KEY: { label: "PriceCharting API & token", url: "https://www.pricecharting.com/api-documentation" },
+  TCGPLAYER_CLIENT_ID: { label: "TCGplayer Developer Portal", url: "https://docs.tcgplayer.com/docs" },
+  TCGPLAYER_CLIENT_SECRET: { label: "TCGplayer Developer Portal", url: "https://docs.tcgplayer.com/docs" },
+  COLLECTR_API_KEY: { label: "Collectr API Portal", url: "https://www.getcollectr.com/api" },
   PSA_API_TOKEN: { label: "Get token in PSA Public API", url: "https://www.psacard.com/publicapi" },
   POKEMON_TCG_API_KEY: { label: "Pokémon TCG Dev Portal", url: "https://dev.pokemontcg.io/" },
 };

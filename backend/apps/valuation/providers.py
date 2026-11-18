@@ -581,6 +581,9 @@ def lookup_psa_cert(
         grade_desc = str(psa_cert.get("GradeDescription") or psa_cert.get("CardGrade") or "").strip()
         pop = psa_cert.get("TotalPopulation")
         pop_higher = psa_cert.get("PopulationHigher")
+        spec_id = psa_cert.get("SpecID")
+        label_type = str(psa_cert.get("LabelType") or "").strip()
+        qualifier = str(psa_cert.get("Qualifier") or "").strip()
         res = {
             "source": "PSA",
             "cert_number": cert,
@@ -592,8 +595,13 @@ def lookup_psa_cert(
                 "card_number": card_num,
                 "year": year,
                 "title": " ".join(p for p in [year, brand, subject, f"#{card_num}" if card_num else ""] if p),
+                "psa_spec_id": spec_id,
+                "total_population": pop,
+                "population_higher": pop_higher,
                 "psa_pop": pop,
                 "psa_pop_higher": pop_higher,
+                **({"psa_label_type": label_type} if label_type else {}),
+                **({"psa_qualifier": qualifier} if qualifier else {}),
             },
             "raw": psa_cert,
         }
@@ -849,11 +857,19 @@ def lookup_pricecharting_card(
         # PriceCharting returns prices in integer cents
         price_cents = None
         if svc == "PSA" and grade_str == "10":
-            price_cents = prod.get("manual-only-price") or prod.get("graded-price")
-        elif svc == "BGS" and grade_str in {"9.5", "10"}:
+            price_cents = prod.get("psa-10-price") or prod.get("manual-only-price") or prod.get("graded-price")
+        elif svc == "PSA" and grade_str in {"9", "8", "7"}:
+            price_cents = prod.get(f"psa-{grade_str}-price") or prod.get("graded-price")
+        elif svc == "BGS" and grade_str == "10":
             price_cents = prod.get("bgs-10-price") or prod.get("graded-price")
+        elif svc == "BGS" and grade_str == "9.5":
+            price_cents = prod.get("bgs-9-5-price") or prod.get("bgs-10-price") or prod.get("graded-price")
         elif svc == "CGC" and grade_str in {"9.5", "10"}:
             price_cents = prod.get("cgc-10-price") or prod.get("graded-price")
+        elif svc == "SGC" and grade_str == "10":
+            price_cents = prod.get("sgc-10-price") or prod.get("graded-price")
+        elif svc == "TAG" and grade_str == "10":
+            price_cents = prod.get("tag-10-price") or prod.get("graded-price")
         elif svc not in {"", "NONE"}:
             price_cents = prod.get("graded-price") or prod.get("cib-price")
         else:
@@ -875,5 +891,163 @@ def lookup_pricecharting_card(
         return res
     except Exception as exc:
         logger.warning("PriceCharting lookup failed for %r: %s", title, exc)
+        return None
+
+
+def _get_tcgplayer_token(client_id: str, client_secret: str, timeout: float = 8.0) -> str | None:
+    """Obtain and cache a TCGplayer OAuth2 bearer token."""
+    from django.core.cache import cache
+
+    token_key = _card_cache_key("tcgplayer_token", client_id)
+    cached_token = cache.get(token_key)
+    if cached_token:
+        return str(cached_token)
+
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(
+                "https://api.tcgplayer.com/token",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        token = data.get("access_token")
+        if token:
+            expires_in = max(60, int(data.get("expires_in") or 3600) - 60)
+            cache.set(token_key, token, timeout=expires_in)
+            return str(token)
+    except Exception as exc:
+        logger.warning("TCGplayer OAuth token request failed: %s", exc)
+    return None
+
+
+def lookup_tcgplayer_price(
+    title: str,
+    set_name: str = "",
+    card_number: str = "",
+    client_id: str = "",
+    client_secret: str = "",
+    timeout: float = 8.0,
+) -> dict[str, Any] | None:
+    """Query TCGplayer API (BYOK OAuth2) for Market, Low, Mid, High, and Buylist pricing."""
+    if not title or not client_id or not client_secret:
+        return None
+    from django.core.cache import cache
+
+    cache_key = _card_cache_key("tcgplayer", title, set_name, card_number)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached or None
+
+    token = _get_tcgplayer_token(client_id, client_secret, timeout=timeout)
+    if not token:
+        return None
+
+    query = " ".join(p for p in [title.strip(), set_name.strip(), card_number.strip()] if p)
+    headers = {"Authorization": f"bearer {token}", "Accept": "application/json"}
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            search_resp = client.get(
+                "https://api.tcgplayer.com/catalog/products",
+                params={"productName": query, "limit": 1},
+                headers=headers,
+            )
+            search_resp.raise_for_status()
+            products = (search_resp.json().get("results") or [])
+            if not products:
+                cache.set(cache_key, False, timeout=3600)
+                return None
+
+            product_id = products[0].get("productId")
+            if not product_id:
+                return None
+
+            price_resp = client.get(
+                f"https://api.tcgplayer.com/pricing/product/{product_id}",
+                headers=headers,
+            )
+            price_resp.raise_for_status()
+            price_results = price_resp.json().get("results") or []
+
+        best = next(
+            (r for r in price_results if r.get("marketPrice") is not None),
+            price_results[0] if price_results else None,
+        )
+        if not best:
+            return None
+
+        market_raw = best.get("marketPrice") or best.get("midPrice") or best.get("lowPrice")
+        if market_raw is None:
+            return None
+
+        res = {
+            "source": "TCGPLAYER",
+            "market_value": str(Decimal(str(market_raw)).quantize(Decimal("0.01"))),
+            "low_price": str(Decimal(str(best["lowPrice"])).quantize(Decimal("0.01"))) if best.get("lowPrice") is not None else None,
+            "mid_price": str(Decimal(str(best["midPrice"])).quantize(Decimal("0.01"))) if best.get("midPrice") is not None else None,
+            "high_price": str(Decimal(str(best["highPrice"])).quantize(Decimal("0.01"))) if best.get("highPrice") is not None else None,
+            "buylist_price": str(Decimal(str(best["buylistMarketPrice"])).quantize(Decimal("0.01"))) if best.get("buylistMarketPrice") is not None else None,
+            "catalog_numbers": {"tcgplayer_id": str(product_id)},
+            "raw": best,
+        }
+        cache.set(cache_key, res, timeout=21600)
+        return res
+    except Exception as exc:
+        logger.warning("TCGplayer lookup failed for %r: %s", title, exc)
+        return None
+
+
+def lookup_collectr_price(
+    title: str,
+    set_name: str = "",
+    card_number: str = "",
+    api_key: str = "",
+    timeout: float = 8.0,
+) -> dict[str, Any] | None:
+    """Query Collectr Partner API when BYOK COLLECTR_API_KEY is configured."""
+    if not title or not api_key:
+        return None
+    from django.core.cache import cache
+
+    cache_key = _card_cache_key("collectr", title, set_name, card_number)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached or None
+
+    query = " ".join(p for p in [title.strip(), set_name.strip(), card_number.strip()] if p)
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.get(
+                "https://api.getcollectr.com/v1/cards/search",
+                params={"q": query, "limit": 1},
+                headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        items = data.get("results") or data.get("data") or []
+        if not items:
+            cache.set(cache_key, False, timeout=3600)
+            return None
+        card = items[0]
+        raw_price = card.get("market_price") or card.get("price")
+        if raw_price is None:
+            return None
+        res = {
+            "source": "COLLECTR",
+            "market_value": str(Decimal(str(raw_price)).quantize(Decimal("0.01"))),
+            "catalog_numbers": {
+                **({"collectr_id": str(card["id"])} if card.get("id") else {}),
+            },
+            "raw": card,
+        }
+        cache.set(cache_key, res, timeout=21600)
+        return res
+    except Exception as exc:
+        logger.warning("Collectr lookup failed for %r: %s", title, exc)
         return None
 
