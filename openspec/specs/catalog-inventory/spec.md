@@ -24,6 +24,10 @@ The system SHALL support creating, editing, and deleting collection items across
 - **WHEN** a user creates a Graded Slab item with grading service (PCGS, NGC, PMG, CACG, ANACS, PSA, BGS, CGC, SGC, TAG, etc.), certification number, and numeric or adjectival grade
 - **THEN** the system stores the certification tuple and enables cert verification links and lookups
 
+#### Scenario: Prevent duplicate slab certification/barcode numbers per workspace
+- **WHEN** a user creates or updates an item with a non-empty `cert_number` that already exists in the same workspace (case-insensitive, trimmed)
+- **THEN** the system rejects the request with `409 Conflict` and enforces uniqueness at the database level via `uniq_workspace_cert_number` (while allowing empty `cert_number` values and identical `cert_number` values across different workspaces)
+
 ### Requirement: Hierarchical containers and storage locations
 The system SHALL allow users to organize items inside nested containers such as Safes, Boxes, Tubes, and Binders of Flippers, tracking quantity and aggregate container value.
 
