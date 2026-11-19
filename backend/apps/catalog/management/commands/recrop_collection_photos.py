@@ -123,10 +123,10 @@ class Command(BaseCommand):
                     )
                     continue
 
-                assert backup_dir is not None
-                orig_name = os.path.basename(photo.image.name) or f"{photo.id}.jpg"
-                backup_path = backup_dir / f"{photo.id}_{orig_name}"
-                backup_path.write_bytes(raw_bytes)
+                if backup_dir is not None:
+                    orig_name = os.path.basename(photo.image.name) or f"{photo.id}.jpg"
+                    backup_path = backup_dir / f"{photo.id}_{orig_name}"
+                    backup_path.write_bytes(raw_bytes)
 
                 processed_bytes, new_w, new_h, ext = process_item_image(
                     raw_bytes,
@@ -145,8 +145,8 @@ class Command(BaseCommand):
                 if old_name and old_name != photo.image.name:
                     try:
                         photo.image.storage.delete(old_name)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        self.stderr.write(f"WARN delete old {old_name}: {exc}")
 
                 updated += 1
                 self.stdout.write(

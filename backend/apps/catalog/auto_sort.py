@@ -504,8 +504,8 @@ def _dispatch_background(fn, *args) -> None:
             # In local dev without Redis running, fall back cleanly to thread
             fn.delay(*args)
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Celery dispatch unavailable, falling back to thread: %s", exc)
 
     t = threading.Thread(target=fn, args=args, daemon=True)
     t.start()

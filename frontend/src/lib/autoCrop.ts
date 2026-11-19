@@ -111,7 +111,6 @@ interface Rgb {
 }
 
 function percentile(values: number[], q: number): number {
-  if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
   const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * q)));
   return sorted[idx];
@@ -189,7 +188,6 @@ function buildBackgroundPalette(
   for (let c = 0; c < centers.length; c++) {
     if (counts[c] >= samples.length * 0.08) keep.push(c);
   }
-  if (keep.length === 0) keep.push(counts.indexOf(Math.max(...counts)));
 
   return {
     centers: keep.map((c) => centers[c]),
@@ -409,7 +407,7 @@ export function detectSubjectInRgba(
   if (comps.length === 0) return null;
 
   // Score: area weighted toward the frame centre; penalise border-hugging blobs.
-  let best: Component | null = null;
+  let best = comps[0];
   let bestScore = -Infinity;
   for (const c of comps) {
     const cx = c.sumX / c.area / w;
@@ -423,7 +421,6 @@ export function detectSubjectInRgba(
       best = c;
     }
   }
-  if (!best) return null;
 
   // Merge satellite components (e.g. a slab label separated by a gap) that sit
   // inside a slightly expanded box around the winner.

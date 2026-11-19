@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 
 import pytest
@@ -235,3 +236,135 @@ def test_admin_subscription_overrides_and_dedicated_instances(client):
     assert clr_resp.status_code == 200
     assert clr_resp.json()["tier"] == "FREE"
     assert clr_resp.json()["subscription_source"] == "DEFAULT"
+
+
+@pytest.mark.django_db
+def test_admin_filters_validation_and_edge_branches(client):
+    from apps.accounts.models import AccountSubscription, DedicatedServerInstance, PlanTier
+
+    su = User.objects.create_superuser(
+        email="su-edge@stackerstash.com", password="password123", display_name="SU"
+    )
+    staff = User.objects.create_user(
+        email="staff-edge@stackerstash.com", password="password123", is_staff=True
+    )
+    inactive = User.objects.create_user(
+        email="inactive-edge@example.com", password="password123", is_active=False
+    )
+    create_default_workspace_for_user(su, name="SU Vault")
+    create_default_workspace_for_user(staff, name="Staff Vault")
+
+    su_headers = {"HTTP_AUTHORIZATION": f"Bearer {issue_access_token(su)}"}
+    staff_headers = {"HTTP_AUTHORIZATION": f"Bearer {issue_access_token(staff)}"}
+    bad_headers = {"HTTP_AUTHORIZATION": "Bearer invalid.jwt.token"}
+
+    # Invalid JWT hits GlobalAdminAuth None return (line 39)
+    assert client.get("/api/v1/admin/overview", **bad_headers).status_code == 401
+
+    # Filter status branches (active, inactive, admins) + user with no workspaces (lines 173, 186)
+    assert any(
+        u["email"] == "inactive-edge@example.com" and u["primary_workspace"] is None
+        for u in client.get("/api/v1/admin/users?status=inactive", **su_headers).json()
+    )
+    assert len(client.get("/api/v1/admin/users?status=active", **su_headers).json()) >= 2
+    assert len(client.get("/api/v1/admin/users?status=admins", **su_headers).json()) >= 2
+
+    # Workspaces query filter (line 303)
+    assert len(client.get("/api/v1/admin/workspaces?q=Staff", **su_headers).json()) == 1
+
+    # Missing user & permission guards on PATCH /users/{id}
+    missing_id = "00000000-0000-0000-0000-000000000077"
+    assert (
+        client.patch(
+            f"/api/v1/admin/users/{missing_id}",
+            data=json.dumps({"display_name": "Nope"}),
+            content_type="application/json",
+            **su_headers,
+        ).status_code
+        == 404
+    )
+    # Non-superuser staff cannot strip own staff flag (lines 275-276)
+    assert (
+        client.patch(
+            f"/api/v1/admin/users/{staff.id}",
+            data=json.dumps({"is_staff": False}),
+            content_type="application/json",
+            **staff_headers,
+        ).status_code
+        == 400
+    )
+    # Non-superuser staff cannot deactivate superuser (line 279)
+    assert (
+        client.patch(
+            f"/api/v1/admin/users/{su.id}",
+            data=json.dumps({"is_active": False}),
+            content_type="application/json",
+            **staff_headers,
+        ).status_code
+        == 403
+    )
+    # Update display_name (lines 289-290)
+    dn_resp = client.patch(
+        f"/api/v1/admin/users/{inactive.id}",
+        data=json.dumps({"display_name": "  Renamed Collector  "}),
+        content_type="application/json",
+        **su_headers,
+    )
+    assert dn_resp.status_code == 200 and dn_resp.json()["display_name"] == "Renamed Collector"
+
+    # Subscription patch: 404, invalid tier 400, clear_override preserving Stripe subscription_id (line 366)
+    assert (
+        client.patch(
+            f"/api/v1/admin/users/{missing_id}/subscription",
+            data=json.dumps({"tier": "PLUS"}),
+            content_type="application/json",
+            **su_headers,
+        ).status_code
+        == 404
+    )
+    assert (
+        client.patch(
+            f"/api/v1/admin/users/{staff.id}/subscription",
+            data=json.dumps({"tier": "NONEXISTENT"}),
+            content_type="application/json",
+            **su_headers,
+        ).status_code
+        == 400
+    )
+    AccountSubscription.objects.update_or_create(
+        user=staff,
+        defaults={
+            "tier": PlanTier.PLUS,
+            "source": AccountSubscription.Source.ADMIN_OVERRIDE,
+            "stripe_subscription_id": "sub_existing_123",
+        },
+    )
+    clr = client.patch(
+        f"/api/v1/admin/users/{staff.id}/subscription",
+        data=json.dumps({"clear_override": True}),
+        content_type="application/json",
+        **su_headers,
+    )
+    assert clr.status_code == 200 and clr.json()["subscription_source"] == "STRIPE"
+
+    # Dedicated instance 404 and invalid status 400
+    assert (
+        client.patch(
+            f"/api/v1/admin/dedicated-instances/{missing_id}",
+            data=json.dumps({"status": "ACTIVE"}),
+            content_type="application/json",
+            **su_headers,
+        ).status_code
+        == 404
+    )
+    inst = DedicatedServerInstance.objects.create(user=staff)
+    assert (
+        client.patch(
+            f"/api/v1/admin/dedicated-instances/{inst.id}",
+            data=json.dumps({"status": "BOGUS"}),
+            content_type="application/json",
+            **su_headers,
+        ).status_code
+        == 400
+    )
+

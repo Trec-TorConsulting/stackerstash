@@ -210,10 +210,8 @@ def _prepare_images_for_vision(
                     bg = Image.new("RGB", rgba.size, (255, 255, 255))
                     bg.paste(rgba, mask=rgba.split()[-1])
                     rgb = bg
-                elif img.mode != "RGB":
-                    rgb = img.convert("RGB")
                 else:
-                    rgb = img
+                    rgb = img if img.mode == "RGB" else img.convert("RGB")
                 out = io.BytesIO()
                 rgb.save(out, format="JPEG", quality=88, optimize=True)
                 prepared.append((out.getvalue(), "image/jpeg"))
@@ -288,12 +286,12 @@ def _call_gemini_vision(
     models: tuple[str, ...] = GEMINI_VISION_MODELS,
 ) -> dict[str, Any]:
     """Call Gemini Vision, cascading through fallback models on HTTP 429/503 quota errors."""
-    last_exc: Exception | None = None
+    if not models:
+        raise RuntimeError("No Gemini vision models configured")
     for idx, model_name in enumerate(models):
         try:
             return _call_gemini_vision_model(images, api_key, prompt, model_name, timeout=timeout)
         except Exception as exc:
-            last_exc = exc
             if _is_retryable_quota_error(exc) and idx < len(models) - 1:
                 logger.warning(
                     "Gemini model %s hit quota/rate-limit, cascading to next model: %s",
@@ -302,9 +300,7 @@ def _call_gemini_vision(
                 )
                 continue
             raise
-    if last_exc is not None:
-        raise last_exc
-    raise RuntimeError("No Gemini vision models configured")
+    raise RuntimeError("No Gemini vision models configured")  # pragma: no cover
 
 
 def _call_openai_compat_chat(
@@ -722,8 +718,6 @@ def _build_vision_composite(
         for raw, _ in images[:2]:
             with Image.open(io.BytesIO(raw)) as opened:
                 decoded.append(ImageOps.exif_transpose(opened).convert("RGB"))
-        if len(decoded) < 2:
-            return images
         target_h = min(max_side // 2, max(im.height for im in decoded))
         target_h = max(128, target_h)
         resized = []
@@ -763,8 +757,8 @@ def _record_vision_success(
             from apps.vision.cache import store_image_cache
 
             store_image_cache(workspace, images, provider_used, candidate)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Skipped vision image cache store: %s", exc)
     job = IdentificationJob.objects.create(
         workspace=workspace,
         status=IdentificationJob.Status.SUCCEEDED,
@@ -936,8 +930,8 @@ def identify_images(
                 from apps.vision.cache import store_image_cache
 
                 store_image_cache(workspace, images, "OCR_TEXT", ocr_text_res["candidate"])
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Skipped OCR text image cache store: %s", exc)
             ocr_text_res["warning"] = "Identified via OCR + text-only LLM (zero image tokens)."
             return ocr_text_res
 

@@ -1,19 +1,55 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   canvasToOptimizedBlob,
   computeCoverCropRect,
   computeSubjectCropRect,
   decodeImageBitmapUpright,
   normalizeImageFileForUpload,
+  renderCroppedRotatedImage,
+  rotateImageFile90,
 } from "../lib/imageUtils";
 
+function makeFakeCanvas(opts: {
+  ctx?: Record<string, unknown> | null;
+  webpBlob?: Blob | null;
+  jpegBlob?: Blob | null;
+} = {}) {
+  const defaultCtx = {
+    translate: vi.fn(),
+    rotate: vi.fn(),
+    drawImage: vi.fn(),
+    imageSmoothingEnabled: false,
+    imageSmoothingQuality: "low",
+  };
+  return {
+    width: 0,
+    height: 0,
+    getContext: vi.fn(() => (opts.ctx === undefined ? defaultCtx : opts.ctx)),
+    toBlob: vi.fn((cb: (b: Blob | null) => void, type: string) => {
+      if (type === "image/webp") {
+        cb(opts.webpBlob === undefined ? new Blob(["webp"], { type: "image/webp" }) : opts.webpBlob);
+      } else {
+        cb(opts.jpegBlob === undefined ? new Blob(["jpg"], { type: "image/jpeg" }) : opts.jpegBlob);
+      }
+    }),
+  } as unknown as HTMLCanvasElement;
+}
+
 describe("imageUtils", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
   it("computes WYSIWYG object-cover crop for 16:9 sensor in 4:3 viewfinder", () => {
     const rect = computeCoverCropRect(1920, 1080, 4 / 3, 1);
     expect(rect).toEqual({ sx: 240, sy: 0, sw: 1440, sh: 1080 });
 
     const zoomed = computeCoverCropRect(1920, 1080, 4 / 3, 2);
     expect(zoomed).toEqual({ sx: 600, sy: 270, sw: 720, sh: 540 });
+
+    const exact = computeCoverCropRect(1600, 1200, 4 / 3);
+    expect(exact).toEqual({ sx: 0, sy: 0, sw: 1600, sh: 1200 });
   });
 
   it("computes WYSIWYG object-cover crop for portrait 3:4 sensor in 4:3 viewfinder", () => {
@@ -28,7 +64,6 @@ describe("imageUtils", () => {
       4 / 3,
       1,
       { x: 0.3, y: 0.25, width: 0.4, height: 0.5, shape: "coin" },
-      1.25
     );
     // 1:1 square centered at (2000, 1500)
     expect(coinCrop.sw).toBe(coinCrop.sh);
@@ -49,22 +84,25 @@ describe("imageUtils", () => {
   });
 
   it("passes imageOrientation: from-image to createImageBitmap and falls back cleanly", async () => {
-    const orig = window.createImageBitmap;
     const mockBitmap = { width: 100, height: 100, close: vi.fn() } as unknown as ImageBitmap;
-    const spy = vi.fn().mockResolvedValue(mockBitmap);
-    window.createImageBitmap = spy;
+    const spy = vi
+      .fn()
+      .mockResolvedValueOnce(mockBitmap)
+      .mockRejectedValueOnce(new Error("option unsupported"))
+      .mockResolvedValueOnce(mockBitmap);
+    vi.stubGlobal("createImageBitmap", spy);
 
-    try {
-      const blob = new Blob(["test"], { type: "image/jpeg" });
-      const res = await decodeImageBitmapUpright(blob);
-      expect(res).toBe(mockBitmap);
-      expect(spy).toHaveBeenCalledWith(blob, { imageOrientation: "from-image" });
-    } finally {
-      window.createImageBitmap = orig;
-    }
+    const blob = new Blob(["test"], { type: "image/jpeg" });
+    const res = await decodeImageBitmapUpright(blob);
+    expect(res).toBe(mockBitmap);
+    expect(spy).toHaveBeenCalledWith(blob, { imageOrientation: "from-image" });
+
+    const fallback = await decodeImageBitmapUpright(blob);
+    expect(fallback).toBe(mockBitmap);
+    expect(spy).toHaveBeenLastCalledWith(blob);
   });
 
-  it("encodes WebP via canvasToOptimizedBlob and falls back to JPEG when unsupported", async () => {
+  it("encodes WebP via canvasToOptimizedBlob, falls back to JPEG, or returns null", async () => {
     const webpCanvas = {
       toBlob: (cb: (b: Blob | null) => void, type: string) =>
         cb(new Blob(["webp-data"], { type: type === "image/webp" ? "image/webp" : "image/png" })),
@@ -84,11 +122,200 @@ describe("imageUtils", () => {
     const jpegRes = await canvasToOptimizedBlob(fallbackCanvas, 0.82);
     expect(jpegRes?.mimeType).toBe("image/jpeg");
     expect(jpegRes?.ext).toBe("jpg");
+
+    const nullCanvas = {
+      toBlob: (cb: (b: Blob | null) => void) => cb(null),
+    } as unknown as HTMLCanvasElement;
+    expect(await canvasToOptimizedBlob(nullCanvas)).toBeNull();
   });
 
   it("passes through small <= 350 KB standard images unchanged in normalizeImageFileForUpload", async () => {
     const small = new File([new Uint8Array(100_000)], "small.jpg", { type: "image/jpeg" });
     const out = await normalizeImageFileForUpload(small);
     expect(out).toBe(small);
+  });
+
+  it("covers renderCroppedRotatedImage across bitmap, URL, Image fallback, null guards, and errors", async () => {
+    const blob = new Blob(["img"], { type: "image/jpeg" });
+    const crop = { x: 10, y: 10, width: 100, height: 80 };
+
+    // 1. No document
+    const origDoc = globalThis.document;
+    vi.stubGlobal("document", undefined);
+    expect(await renderCroppedRotatedImage(blob, crop, 90, "c.jpg")).toBeNull();
+    vi.stubGlobal("document", origDoc);
+
+    // 2. Bitmap path + fallback basename when filename is "."
+    const closeSpy = vi.fn();
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn().mockResolvedValue({ width: 400, height: 200, close: closeSpy }),
+    );
+    const origCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation(((tag: string) =>
+      tag === "canvas" ? makeFakeCanvas() : origCreateElement(tag)) as typeof document.createElement);
+
+    const out1 = await renderCroppedRotatedImage(blob, crop, 90, ".png");
+    expect(out1?.name).toBe("cropped.webp");
+    expect(closeSpy).toHaveBeenCalled();
+
+    // 3. String URL path using Image (naturalWidth: 0 -> falls back to width)
+    const fakeImgLoad = vi.fn(function (this: Record<string, unknown>) {
+      const img: Record<string, unknown> = {
+        naturalWidth: 0,
+        naturalHeight: 0,
+        width: 200,
+        height: 120,
+      };
+      Object.defineProperty(img, "src", {
+        set: () => queueMicrotask(() => (img.onload as () => void)()),
+      });
+      return img;
+    });
+    vi.stubGlobal("Image", fakeImgLoad);
+    const out2 = await renderCroppedRotatedImage("https://cdn.example/c.jpg", crop, 0, "coin.png");
+    expect(out2?.name).toBe("coin.webp");
+
+    // 4. Blob path without createImageBitmap uses URL.createObjectURL + revokeObjectURL
+    vi.stubGlobal("createImageBitmap", undefined);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:crop-src");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const out3 = await renderCroppedRotatedImage(blob, crop, 0, "raw.jpg");
+    expect(out3?.name).toBe("raw.webp");
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:crop-src");
+
+    // 5. Image onerror catch -> null
+    vi.stubGlobal(
+      "Image",
+      vi.fn(function () {
+        const img: Record<string, unknown> = {};
+        Object.defineProperty(img, "src", {
+          set: () => queueMicrotask(() => (img.onerror as () => void)()),
+        });
+        return img;
+      }),
+    );
+    expect(await renderCroppedRotatedImage(blob, crop, 0, "err.jpg")).toBeNull();
+
+    // 6. Zero dimensions -> null
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn().mockResolvedValue({ width: 0, height: 0, close: vi.fn() }),
+    );
+    expect(await renderCroppedRotatedImage(blob, crop, 0, "zero.jpg")).toBeNull();
+
+    // 7. Missing rotCtx -> null
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn().mockResolvedValue({ width: 200, height: 100, close: vi.fn() }),
+    );
+    vi.spyOn(document, "createElement").mockImplementation(((tag: string) =>
+      tag === "canvas" ? makeFakeCanvas({ ctx: null }) : origCreateElement(tag)) as typeof document.createElement);
+    expect(await renderCroppedRotatedImage(blob, crop, 0, "norot.jpg")).toBeNull();
+
+    // 8. Missing outCtx -> null
+    let calls = 0;
+    vi.spyOn(document, "createElement").mockImplementation(((tag: string) => {
+      if (tag !== "canvas") return origCreateElement(tag);
+      calls += 1;
+      return makeFakeCanvas({ ctx: calls === 1 ? undefined : null });
+    }) as typeof document.createElement);
+    expect(await renderCroppedRotatedImage(blob, crop, 0, "noout.jpg")).toBeNull();
+
+    // 9. Encoding returns null -> null
+    vi.spyOn(document, "createElement").mockImplementation(((tag: string) =>
+      tag === "canvas"
+        ? makeFakeCanvas({ webpBlob: null, jpegBlob: null })
+        : origCreateElement(tag)) as typeof document.createElement);
+    expect(await renderCroppedRotatedImage(blob, crop, 0, "noenc.jpg")).toBeNull();
+  });
+
+  it("covers normalizeImageFileForUpload and rotateImageFile90 full paths and fallbacks", async () => {
+    const bigFile = new File([new Uint8Array(400_000)], ".heic", { type: "image/heic" });
+    const origDoc = globalThis.document;
+    const origCreateElement = document.createElement.bind(document);
+
+    // 1. No document fallback
+    vi.stubGlobal("document", undefined);
+    expect(await normalizeImageFileForUpload(bigFile)).toBe(bigFile);
+    expect(await rotateImageFile90(bigFile)).toBe(bigFile);
+    vi.stubGlobal("document", origDoc);
+
+    // 2. createImageBitmap path for normalize + rotate
+    const closeSpy = vi.fn();
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn().mockResolvedValue({ width: 800, height: 400, close: closeSpy }),
+    );
+    vi.spyOn(document, "createElement").mockImplementation(((tag: string) =>
+      tag === "canvas" ? makeFakeCanvas() : origCreateElement(tag)) as typeof document.createElement);
+
+    const normRes = await normalizeImageFileForUpload(bigFile, 400);
+    expect(normRes.name).toBe("photo.webp");
+    const rotRes = await rotateImageFile90(bigFile);
+    expect(rotRes.name).toBe("photo.webp");
+
+    // 3. No createImageBitmap -> Image onload & URL.revokeObjectURL in finally
+    vi.stubGlobal("createImageBitmap", undefined);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:norm-rot");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    vi.stubGlobal(
+      "Image",
+      vi.fn(function () {
+        const img: Record<string, unknown> = {
+          naturalWidth: 0,
+          naturalHeight: 0,
+          width: 240,
+          height: 120,
+        };
+        Object.defineProperty(img, "src", {
+          set: () => queueMicrotask(() => (img.onload as () => void)()),
+        });
+        return img;
+      }),
+    );
+    expect((await normalizeImageFileForUpload(bigFile)).name).toBe("photo.webp");
+    expect((await rotateImageFile90(bigFile)).name).toBe("photo.webp");
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:norm-rot");
+
+    // 4. Image onerror catch -> returns original file
+    vi.stubGlobal(
+      "Image",
+      vi.fn(function () {
+        const img: Record<string, unknown> = {};
+        Object.defineProperty(img, "src", {
+          set: () => queueMicrotask(() => (img.onerror as () => void)()),
+        });
+        return img;
+      }),
+    );
+    expect(await normalizeImageFileForUpload(bigFile)).toBe(bigFile);
+    expect(await rotateImageFile90(bigFile)).toBe(bigFile);
+
+    // 5. Zero dimensions -> returns original file
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn().mockResolvedValue({ width: 0, height: 0, close: vi.fn() }),
+    );
+    expect(await normalizeImageFileForUpload(bigFile)).toBe(bigFile);
+    expect(await rotateImageFile90(bigFile)).toBe(bigFile);
+
+    // 6. Missing ctx -> returns original file
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn().mockResolvedValue({ width: 200, height: 100, close: vi.fn() }),
+    );
+    vi.spyOn(document, "createElement").mockImplementation(((tag: string) =>
+      tag === "canvas" ? makeFakeCanvas({ ctx: null }) : origCreateElement(tag)) as typeof document.createElement);
+    expect(await normalizeImageFileForUpload(bigFile)).toBe(bigFile);
+    expect(await rotateImageFile90(bigFile)).toBe(bigFile);
+
+    // 7. Null encoding -> returns original file
+    vi.spyOn(document, "createElement").mockImplementation(((tag: string) =>
+      tag === "canvas"
+        ? makeFakeCanvas({ webpBlob: null, jpegBlob: null })
+        : origCreateElement(tag)) as typeof document.createElement);
+    expect(await normalizeImageFileForUpload(bigFile)).toBe(bigFile);
+    expect(await rotateImageFile90(bigFile)).toBe(bigFile);
   });
 });

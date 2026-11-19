@@ -57,8 +57,7 @@ export function CardSpecsCard({ item, onSaveSpecs, isSaving }: CardSpecsCardProp
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!onSaveSpecs) return;
-    await onSaveSpecs({
+    await onSaveSpecs!({
       card_game: form.card_game.trim(),
       set_name: form.set_name.trim(),
       set_code: form.set_code.trim(),

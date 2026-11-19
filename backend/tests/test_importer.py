@@ -95,7 +95,17 @@ def test_preview_and_mapped_import_coinsnap_and_custom(api_client, user_a):
 
 @pytest.mark.django_db
 @respx.mock
-def test_mapped_import_with_remote_photos_and_nonfatal_failures(api_client, user_a):
+def test_mapped_import_with_remote_photos_and_nonfatal_failures(
+    api_client, user_a, monkeypatch
+):
+    import socket
+
+    monkeypatch.setattr(
+        "apps.catalog.importer.socket.getaddrinfo",
+        lambda host, port, *a, **kw: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.215.14", port))
+        ],
+    )
     _, ws, token = user_a
     headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
 
@@ -132,7 +142,15 @@ def test_mapped_import_with_remote_photos_and_nonfatal_failures(api_client, user
 
 @pytest.mark.django_db
 @respx.mock
-def test_coinsnap_real_export_headers_and_webp_photos(api_client, user_a):
+def test_coinsnap_real_export_headers_and_webp_photos(api_client, user_a, monkeypatch):
+    import socket
+
+    monkeypatch.setattr(
+        "apps.catalog.importer.socket.getaddrinfo",
+        lambda host, port, *a, **kw: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.215.14", port))
+        ],
+    )
     _, ws, token = user_a
     headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
 
@@ -229,4 +247,250 @@ def test_slabbed_and_graded_csv_import_fields(api_client, user_a):
     assert morgan.cert_number == "44556677"
     assert morgan.attributes.get("slab_designation") == "First Strike"
     assert morgan.container_id == note.container_id
+
+
+@pytest.mark.django_db
+def test_importer_helpers_photo_limits_redirects_and_appraisals(user_a, monkeypatch):
+    import socket
+    from unittest.mock import patch
+
+    import httpx
+    import respx
+
+    from apps.accounts.models import AccountSubscription, PlanTier
+    from apps.catalog.importer import (
+        _enqueue_csv_batch_appraisals,
+        _resolve_container_by_name,
+        _validate_public_http_url,
+        import_mapped_csv,
+        normalize_category,
+        normalize_grading_service,
+        normalize_metal_type,
+        normalize_status,
+        normalize_weight_unit,
+        parse_decimal_currency,
+        synthesize_title,
+    )
+    from apps.catalog.models import CollectionItem, Container, ItemPhoto
+
+    owner, ws, _ = user_a
+
+    # Preset detection & field parsing helpers
+    from apps.catalog.importer import detect_preset_and_mapping
+
+    p1, _ = detect_preset_and_mapping(["Title", "Metal_Type", "Weight_Unit"])
+    assert p1 == "stackerstash"
+    assert parse_decimal_currency(".") is None
+    assert normalize_metal_type("   ") == CollectionItem.MetalType.NONE
+    assert normalize_metal_type("Au gold") == CollectionItem.MetalType.GOLD
+    assert normalize_metal_type("Sterling silver") == CollectionItem.MetalType.SILVER
+    assert normalize_metal_type("Pt") == CollectionItem.MetalType.PLATINUM
+    assert normalize_metal_type("Pd") == CollectionItem.MetalType.PALLADIUM
+    assert normalize_metal_type("Cu") == CollectionItem.MetalType.COPPER
+    assert normalize_metal_type("Aluminium") == CollectionItem.MetalType.NONE
+    assert normalize_weight_unit("grams") == CollectionItem.WeightUnit.G
+    assert normalize_weight_unit("kg") == CollectionItem.WeightUnit.KG
+    assert normalize_weight_unit("oz_avdp") == CollectionItem.WeightUnit.OZ_AVDP
+    assert normalize_weight_unit("ozt") == CollectionItem.WeightUnit.OZ_T
+    for raw_cat, expected_cat in [
+        ("Banknote", "PAPER"),
+        ("Ingot Bar", "BAR"),
+        ("Silver Round", "ROUND"),
+        ("Pokemon Card", "CARD"),
+        ("NGC Slab", "SLAB"),
+        ("2x2 Flip", "FLIPPER"),
+        ("Token Coin", "COIN"),
+        ("Medallion", "OTHER"),
+    ]:
+        assert normalize_category(raw_cat) == expected_cat
+    for raw_gr, expected_gr in [
+        ("PCGS-Banknote", "PCGS_BANKNOTE"),
+        ("PCGS MS65", "PCGS"),
+        ("NGC MS70", "NGC"),
+        ("PMG 66", "PMG"),
+        ("CAC Approved", "CACG"),
+        ("ANACS Soapbox", "ANACS"),
+        ("ICG Holder", "ICG"),
+        ("PSA 10", "PSA"),
+        ("Beckett", "BGS"),
+        ("CGC 9.8", "CGC"),
+        ("SGC 9", "SGC"),
+        ("TAG Slab", "TAG"),
+        ("ungraded", "NONE"),
+        ("SelfSlab", "OTHER"),
+    ]:
+        assert normalize_grading_service(raw_gr) == expected_gr
+    for raw_st, expected_st in [
+        ("SOLD", "SOLD"),
+        ("For Sale Pending", "FOR_SALE"),
+        ("Item Sold", "SOLD"),
+        ("On Wishlist", "WISHLIST"),
+        ("Vaulted", "IN_COLLECTION"),
+    ]:
+        assert normalize_status(raw_st) == expected_st
+
+    assert synthesize_title({"cert_number": "123456"}) == "123456"
+    assert synthesize_title({}) == "Imported Item"
+
+    # Cover pcgs_ngc auto-PCGS default (427) and card category inference without category column (461)
+    from apps.catalog.importer import _normalize_item_kwargs
+
+    pcgs_kw = _normalize_item_kwargs({"cert_number": "998877", "title": "Slab"}, preset="pcgs_ngc")
+    assert pcgs_kw["grading_service"] == CollectionItem.GradingService.PCGS
+    card_kw = _normalize_item_kwargs({"title": "Mew", "card_game": "Pokemon"}, preset="custom")
+    assert card_kw["category"] == CollectionItem.Category.CARD
+
+    # Container cache hit
+    c_cache: dict[str, Container] = {}
+    existing_box = Container.objects.create(workspace=ws, name="Existing Box")
+    assert _resolve_container_by_name(ws, "existing box", c_cache) == existing_box
+
+    # DNS failure / empty addrinfo in _validate_public_http_url
+    with patch("apps.catalog.importer.socket.getaddrinfo", side_effect=OSError("dns error")):
+        with pytest.raises(ValueError, match="Could not resolve"):
+            _validate_public_http_url("https://unresolvable.example.com/a.jpg")
+    with patch("apps.catalog.importer.socket.getaddrinfo", return_value=[]):
+        with pytest.raises(ValueError, match="No IP addresses resolved"):
+            _validate_public_http_url("https://empty-dns.example.com/a.jpg")
+
+    monkeypatch.setattr(
+        "apps.catalog.importer.socket.getaddrinfo",
+        lambda host, port, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.215.14", port or 443))
+        ],
+    )
+
+    # Mapped CSV covering: blank row, bad decimal row error, invalid/redirect/oversized/empty photos, slab URL, card fields, millesimal purity, bar shape, thumb failure
+    img = Image.new("RGB", (60, 60), color=(200, 170, 80))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    valid_png = buf.getvalue()
+
+    csv_bytes = (
+        b"Cert #,Denomination,Purity,Quantity,Market Value,Metal Type,Category,Obverse URL,Reverse URL,Slab Label URL,Card Game,Set Name,Unknown\n"
+        b",,,,,,,,,,,,Ignored\n"
+        b"111,1 Dollar,900,badqty,$12.00,Gold,Bar,https://img.example.com/bar.png,https://img.example.com/redir_missing.png,https://img.example.com/too_many.png,Pokemon,Base Set,\n"
+        b"222,Quarter,0.999,1,$50.00,Silver,Coin,https://img.example.com/coin.png,https://img.example.com/badlen.png,https://img.example.com/empty.png,,,\n"
+        b"333,Half,0.900,1,1.2.3,Silver,Coin,,,,,,,,\n"
+    )
+
+    with respx.mock(assert_all_called=False) as router:
+        router.get("https://img.example.com/bar.png").mock(return_value=httpx.Response(200, content=valid_png))
+        router.get("https://img.example.com/coin.png").mock(
+            return_value=httpx.Response(200, content=valid_png, headers={"Content-Length": "abc"})
+        )
+        router.get("https://img.example.com/redir_missing.png").mock(return_value=httpx.Response(302))
+        router.get("https://img.example.com/too_many.png").mock(
+            return_value=httpx.Response(302, headers={"Location": "https://img.example.com/too_many.png"})
+        )
+        router.get("https://img.example.com/badlen.png").mock(
+            return_value=httpx.Response(200, content=b"123456", headers={"Content-Length": "abc"})
+        )
+        router.get("https://img.example.com/empty.png").mock(return_value=httpx.Response(200, content=b""))
+
+        with patch("apps.catalog.importer.MAX_PHOTO_BYTES", len(valid_png) + 100), patch(
+            "apps.catalog.importer.generate_image_thumbnail", side_effect=RuntimeError("thumb skipped")
+        ):
+            # Also trigger chunked limit via separate call with tiny limit
+            res = import_mapped_csv(
+                csv_bytes,
+                workspace=ws,
+                mapping={
+                    "Cert #": "cert_number",
+                    "Denomination": "denomination",
+                    "Purity": "purity",
+                    "Quantity": "quantity",
+                    "Market Value": "market_value_unit",
+                    "Metal Type": "metal_type",
+                    "Category": "category",
+                    "Obverse URL": "obverse_image_url",
+                    "Reverse URL": "reverse_image_url",
+                    "Slab Label URL": "slab_label_image_url",
+                    "Card Game": "card_game",
+                    "Set Name": "set_name",
+                    "Unknown": "nonexistent_target",
+                },
+                import_photos=True,
+                auto_appraise=False,
+            )
+            assert res.created_count == 2
+            assert len(res.errors) == 2
+            assert len(res.warnings) >= 2
+            assert ItemPhoto.objects.filter(workspace=ws).count() == 2
+
+    # Hit chunked > MAX_PHOTO_BYTES (headers omit Content-Length / use non-numeric length so iter_bytes cap triggers at 624)
+    with respx.mock(assert_all_called=False) as router2:
+        router2.get("https://img.example.com/bigchunk.png").mock(
+            return_value=httpx.Response(200, content=valid_png, headers={"Content-Length": "unknown"})
+        )
+        with patch("apps.catalog.importer.MAX_PHOTO_BYTES", 8):
+            chunk_res = import_mapped_csv(
+                b"Title,Obverse URL\nChunked Bar,https://img.example.com/bigchunk.png\n",
+                workspace=ws,
+                mapping={"Title": "title", "Obverse URL": "obverse_image_url"},
+                import_photos=True,
+                auto_appraise=False,
+            )
+            assert "oversized" in chunk_res.warnings[0].lower()
+
+    # Run _enqueue_csv_batch_appraisals inline via sync thread execution
+    class _SyncThread:
+        def __init__(self, target, daemon=True):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    created_coin = CollectionItem.objects.filter(workspace=ws).first()
+    with patch("apps.valuation.services.start_appraisal_job") as mock_job, patch(
+        "threading.Thread", _SyncThread
+    ), patch("django.db.transaction.on_commit", side_effect=lambda cb: cb()):
+        _enqueue_csv_batch_appraisals([created_coin.id, "00000000-0000-0000-0000-000000000099"], ws.id)
+        assert mock_job.call_count == 1
+
+    # Non-sqlite branch (ThreadPoolExecutor) & outer exception branch (missing workspace)
+    with patch("django.db.connection.vendor", "postgresql"), patch(
+        "apps.valuation.services.start_appraisal_job"
+    ), patch("threading.Thread", _SyncThread), patch(
+        "django.db.transaction.on_commit", side_effect=lambda cb: cb()
+    ):
+        _enqueue_csv_batch_appraisals([created_coin.id], "00000000-0000-0000-0000-000000000099")
+        _enqueue_csv_batch_appraisals([created_coin.id], ws.id)
+
+    # Free tier quota skipping in import_mapped_csv (0 slots raises PlanLimitExceeded on first row)
+    AccountSubscription.objects.update_or_create(
+        user=owner,
+        defaults={
+            "tier": PlanTier.FREE,
+            "source": AccountSubscription.Source.ADMIN_OVERRIDE,
+            "status": AccountSubscription.Status.ACTIVE,
+        },
+    )
+    existing = CollectionItem.objects.filter(workspace=ws).count()
+    CollectionItem.objects.bulk_create([
+        CollectionItem(workspace=ws, title=f"Quota Fill {i}", category="COIN")
+        for i in range(99 - existing)
+    ])
+    partial = import_mapped_csv(
+        b"Title\nRow One Fits\nRow Two Skipped\n",
+        workspace=ws,
+        mapping={"Title": "title"},
+        import_photos=False,
+        auto_appraise=False,
+    )
+    assert partial.created_count == 1
+    assert "quota reached" in partial.errors[0]["error"].lower()
+
+    # Subsequent import when initial_remaining == 0 raises PlanLimitExceeded (line 745)
+    from apps.accounts.models import PlanLimitExceeded
+
+    with pytest.raises(PlanLimitExceeded):
+        import_mapped_csv(
+            b"Title\nOver Quota Item\n",
+            workspace=ws,
+            mapping={"Title": "title"},
+            import_photos=False,
+            auto_appraise=False,
+        )
+
 

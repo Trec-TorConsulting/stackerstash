@@ -1,6 +1,8 @@
 import csv
 import io
 import json
+import logging
+import re
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -28,7 +30,25 @@ from .importer import TARGET_FIELDS, import_mapped_csv, preview_csv
 from .models import CollectionItem, Container, ItemPhoto
 from .presets import ITEM_PRESETS
 
+logger = logging.getLogger(__name__)
 catalog_router = Router(tags=["Catalog"], auth=WorkspaceAuth())
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+_SIGNED_DECIMAL_RE = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)$")
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe_cell(value: Any) -> Any:
+    """Neutralize CSV formula injection payloads while keeping signed numbers intact."""
+    if value is None:
+        return ""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    text = str(value)
+    if text.startswith(_CSV_FORMULA_PREFIXES):
+        if text[0] in {"+", "-"} and _SIGNED_DECIMAL_RE.match(text):
+            return text
+        return f"'{text}"
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -1234,13 +1254,20 @@ def upload_item_photo(
     if label not in dict(ItemPhoto.Label.choices):
         raise HttpError(400, f"Invalid photo label: {label}")
 
-    file.seek(0)
-    raw_bytes = file.read()
+    file_size = getattr(file, "size", None)
+    if file_size is not None and file_size > MAX_UPLOAD_BYTES:
+        raise HttpError(400, "Uploaded photo exceeds 10 MB size limit.")
 
-    width: int | None = None
-    height: int | None = None
-    upload_content: ContentFile | UploadedFile = file
+    file.seek(0)
+    raw_bytes = file.read(MAX_UPLOAD_BYTES + 1)
+    if not raw_bytes:
+        raise HttpError(400, "Uploaded photo file is empty.")
+    if len(raw_bytes) > MAX_UPLOAD_BYTES:
+        raise HttpError(400, "Uploaded photo exceeds 10 MB size limit.")
+
     try:
+        with Image.open(io.BytesIO(raw_bytes)) as img:
+            img.verify()
         shape_hint = _item_shape_hint(item, label)
         if shape_hint is None and label in _RECTANGULAR_DOCUMENT_LABELS:
             # Receipts, slab labels and assay cards are flat documents: crop to the
@@ -1268,20 +1295,12 @@ def upload_item_photo(
             target_size=target_size,
         )
         upload_content = ContentFile(processed_bytes, name=f"photo-{label.lower()}.{ext}")
-    except Exception:
-        processed_bytes = None
-        try:
-            with Image.open(io.BytesIO(raw_bytes)) as img:
-                width, height = img.size
-        except Exception:
-            pass
-        file.seek(0)
-        upload_content = file
+    except Exception as exc:
+        raise HttpError(400, f"Invalid or unsupported image file: {exc}") from exc
 
     thumb_content: ContentFile | None = None
     try:
-        thumb_source = processed_bytes if processed_bytes is not None else raw_bytes
-        thumb_bytes, _, _, thumb_ext = generate_image_thumbnail(thumb_source)
+        thumb_bytes, _, _, thumb_ext = generate_image_thumbnail(processed_bytes)
         thumb_content = ContentFile(thumb_bytes, name=f"thumb-{label.lower()}.{thumb_ext}")
     except Exception:
         thumb_content = None
@@ -1335,8 +1354,8 @@ def rotate_item_photo(request, item_id: UUID, photo_id: UUID, payload: RotatePho
             ContentFile(thumb_bytes),
             save=False,
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Rotated thumbnail generation failed for photo %s: %s", photo.id, exc)
     photo.width = width
     photo.height = height
     photo.save(update_fields=["image", "thumbnail", "width", "height"])
@@ -1421,36 +1440,39 @@ def export_items_csv(request):
     for item in items:
         attrs = item.attributes if isinstance(item.attributes, dict) else {}
         writer.writerow([
-            str(item.id),
-            item.title,
-            item.category,
-            item.status,
-            item.container.name if item.container else "",
-            item.quantity,
-            item.metal_type,
-            str(item.weight_value),
-            item.weight_unit,
-            str(item.purity),
-            str(item.fine_troy_oz),
-            item.grading_service,
-            item.cert_number,
-            item.grade,
-            item.serial_number,
-            str(item.purchase_price or ""),
-            str(item.purchase_date or ""),
-            str(item.total_melt_value),
-            str(item.total_market_value),
-            item.valuation_source,
-            str(item.is_estimate),
-            str(attrs.get("card_game") or ""),
-            str(attrs.get("set_name") or (item.series if item.is_card_item else "") or ""),
-            str(attrs.get("set_code") or ""),
-            str(attrs.get("card_number") or ""),
-            str(attrs.get("rarity") or ""),
-            str(attrs.get("card_finish") or ""),
-            str(attrs.get("card_edition") or ""),
-            str(attrs.get("language") or ""),
-            str(attrs.get("raw_condition") or ""),
+            _csv_safe_cell(cell)
+            for cell in [
+                str(item.id),
+                item.title,
+                item.category,
+                item.status,
+                item.container.name if item.container else "",
+                item.quantity,
+                item.metal_type,
+                str(item.weight_value),
+                item.weight_unit,
+                str(item.purity),
+                str(item.fine_troy_oz),
+                item.grading_service,
+                item.cert_number,
+                item.grade,
+                item.serial_number,
+                str(item.purchase_price or ""),
+                str(item.purchase_date or ""),
+                str(item.total_melt_value),
+                str(item.total_market_value),
+                item.valuation_source,
+                str(item.is_estimate),
+                str(attrs.get("card_game") or ""),
+                str(attrs.get("set_name") or (item.series if item.is_card_item else "") or ""),
+                str(attrs.get("set_code") or ""),
+                str(attrs.get("card_number") or ""),
+                str(attrs.get("rarity") or ""),
+                str(attrs.get("card_finish") or ""),
+                str(attrs.get("card_edition") or ""),
+                str(attrs.get("language") or ""),
+                str(attrs.get("raw_condition") or ""),
+            ]
         ])
     resp = HttpResponse(buf.getvalue(), content_type="text/csv")
     resp["Content-Disposition"] = 'attachment; filename="stackerstash-collection.csv"'

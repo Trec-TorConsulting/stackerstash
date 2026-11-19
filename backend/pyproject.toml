@@ -23,7 +23,10 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "bandit>=1.8.0",
+    "pip-audit>=2.7.0",
     "pytest>=8.3.0",
+    "pytest-cov>=6.0.0",
     "pytest-django>=4.9.0",
     "respx>=0.22.0",
     "ruff>=0.9.0",
@@ -34,11 +37,28 @@ DJANGO_SETTINGS_MODULE = "config.settings"
 python_files = ["tests.py", "test_*.py", "*_tests.py"]
 addopts = "-q --tb=short"
 
+[tool.coverage.run]
+source = ["apps", "config"]
+omit = [
+    "*/migrations/*",
+    "config/wsgi.py",
+    "config/asgi.py",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = true
+
 [tool.ruff]
 line-length = 110
 target-version = "py312"
 exclude = ["**/migrations/**"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E", "F", "I", "UP", "B", "S"]
 ignore = ["B008", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S108"]

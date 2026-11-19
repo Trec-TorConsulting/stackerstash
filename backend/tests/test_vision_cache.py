@@ -103,3 +103,58 @@ def test_pcgs_and_numista_providers_use_server_cache(monkeypatch):
     assert n1 is not None and n2 is not None
     assert n2["specs"]["diameter_mm"] == Decimal("40.60")
     assert calls["numista"] == 2  # 1 search + 1 detail, 0 on second lookup
+
+
+@pytest.mark.django_db
+def test_vision_cache_error_and_fallback_branches(monkeypatch):
+    from unittest.mock import patch
+
+    from apps.accounts.models import User, create_default_workspace_for_user
+    from apps.vision.cache import (
+        dhash_hamming_distance,
+        lookup_cert_cache,
+        lookup_image_cache,
+        store_cert_cache,
+        store_image_cache,
+    )
+    from apps.vision.models import CertLookupCache, ImageIdentificationCache
+
+    assert dhash_hamming_distance("", "abc") == 64
+    assert dhash_hamming_distance("zzzzzzzzzzzzzzzz", "0000000000000000") == 64
+
+    owner = User.objects.create_user(email="cache_edge@example.com", password="pw")
+    ws = create_default_workspace_for_user(owner, name="Cache Vault")
+
+    assert lookup_image_cache(ws, []) is None
+    store_image_cache(ws, [], "MANUAL", {"title": "skip"})
+
+    # Redis cache failures handled gracefully on read and write
+    img = [(b"\x89PNG\r\n\x1a\nbadpng", "image/png")]
+    ImageIdentificationCache.objects.create(
+        workspace=ws,
+        sha256="dummy",
+        dhash="0000000000000000",
+        provider_used="GEMINI",
+        parsed_candidate={"title": "Cached"},
+    )
+    with patch("apps.vision.cache.cache.get", side_effect=RuntimeError("redis down")), patch(
+        "apps.vision.cache.cache.set", side_effect=RuntimeError("redis write down")
+    ):
+        store_image_cache(ws, img, "GEMINI", {"title": "Saved"})
+        hit = lookup_image_cache(ws, img)
+        assert hit is not None and hit["parsed_candidate"]["title"] == "Saved"
+
+    # Lookup cert cache: invalid args, redis failure, DB fallback hit + write exception
+    assert lookup_cert_cache("NONE", "123") is None
+    assert lookup_cert_cache("PCGS", "") is None
+    CertLookupCache.objects.create(
+        grading_service="PCGS", cert_number="777888", payload={"title": "1921 Morgan"}, source="PCGS"
+    )
+    with patch("apps.vision.cache.cache.get", side_effect=RuntimeError("redis down")), patch(
+        "apps.vision.cache.cache.set", side_effect=RuntimeError("redis set down")
+    ), patch("apps.vision.models.CertLookupCache.objects.update_or_create", side_effect=RuntimeError("db err")):
+        store_cert_cache("NONE", "123", {"x": 1})
+        store_cert_cache("PCGS", "777888", {"title": "Updated"})
+        cert_hit = lookup_cert_cache("PCGS", "777888")
+        assert cert_hit == {"title": "1921 Morgan"}
+

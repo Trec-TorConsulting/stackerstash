@@ -468,3 +468,316 @@ def test_multiple_vaults_crud_isolation_headers_and_byok_inheritance(api_client,
     ira_ws.refresh_from_db()
     assert ira_ws.is_default is True
 
+
+@pytest.mark.django_db
+def test_accounts_error_and_edge_branches(api_client):
+    from datetime import timedelta
+    from unittest.mock import patch
+
+    from django.utils import timezone
+
+    from apps.accounts.auth import issue_access_token
+    from apps.accounts.models import (
+        User,
+        Workspace,
+        WorkspaceInvitation,
+        WorkspaceMembership,
+    )
+
+    # Registration validation failures
+    assert (
+        api_client.post(
+            "/api/v1/auth/register",
+            data=json.dumps({"email": "invalid-email", "password": "Password123!"}),
+            content_type="application/json",
+        ).status_code
+        == 400
+    )
+    assert (
+        api_client.post(
+            "/api/v1/auth/register",
+            data=json.dumps({"email": "dup@example.com", "password": "Password123!"}),
+            content_type="application/json",
+        ).status_code
+        == 201
+    )
+    assert (
+        api_client.post(
+            "/api/v1/auth/register",
+            data=json.dumps({"email": "dup@example.com", "password": "Password123!"}),
+            content_type="application/json",
+        ).status_code
+        == 409
+    )
+
+    # _serialize_user auto-provisions a default workspace for a user without workspaces
+    orphan = User.objects.create_user(email="orphan@example.com", password="Password123!")
+    WorkspaceMembership.objects.create(
+        workspace=Workspace.objects.create(name="Orphan", slug="orphan-ws", owner=orphan),
+        user=orphan,
+        role=WorkspaceMembership.Role.OWNER,
+    )
+    orphan.owned_workspaces.all().delete()
+    # Now GET /auth/login auto-provisions default workspace on _serialize_user
+    login_resp = api_client.post(
+        "/api/v1/auth/login",
+        data=json.dumps({"email": "orphan@example.com", "password": "Password123!"}),
+        content_type="application/json",
+    )
+    assert login_resp.status_code == 200
+    token = login_resp.json()["access_token"]
+    ws_id = login_resp.json()["user"]["workspace"]["id"]
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_WORKSPACE_ID": ws_id}
+
+    # Enable PLUS tier to test PATCH /auth/workspaces/{id} & invites
+    sub_user = User.objects.get(email="orphan@example.com")
+    from apps.accounts.models import AccountSubscription, PlanTier
+
+    AccountSubscription.objects.update_or_create(
+        user=sub_user,
+        defaults={
+            "tier": PlanTier.PLUS,
+            "source": AccountSubscription.Source.ADMIN_OVERRIDE,
+            "status": AccountSubscription.Status.ACTIVE,
+        },
+    )
+
+    # _get_owned_workspace 404, PATCH validation & fields
+    missing_id = "00000000-0000-0000-0000-000000000099"
+    assert (
+        api_client.patch(
+            f"/api/v1/auth/workspaces/{missing_id}",
+            data=json.dumps({"name": "Valid"}),
+            content_type="application/json",
+            **headers,
+        ).status_code
+        == 404
+    )
+    assert (
+        api_client.patch(
+            f"/api/v1/auth/workspaces/{ws_id}",
+            data=json.dumps({"name": "   "}),
+            content_type="application/json",
+            **headers,
+        ).status_code
+        == 400
+    )
+    patched = api_client.patch(
+        f"/api/v1/auth/workspaces/{ws_id}",
+        data=json.dumps({
+            "name": "Updated Vault",
+            "description": "Long description",
+            "default_currency": "CAD",
+            "auto_sort_enabled": False,
+        }),
+        content_type="application/json",
+        **headers,
+    )
+    assert patched.status_code == 200
+    assert patched.json()["default_currency"] == "CAD"
+    assert patched.json()["auto_sort_enabled"] is False
+    # No-op PATCH with empty body
+    assert (
+        api_client.patch(
+            f"/api/v1/auth/workspaces/{ws_id}",
+            data=json.dumps({}),
+            content_type="application/json",
+            **headers,
+        ).status_code
+        == 200
+    )
+
+    # _get_member_workspace 404 and 403 via GET /members
+    other = User.objects.create_user(email="other-member@example.com", password="Password123!")
+    other_ws = Workspace.objects.create(name="Other", slug="other-ws-m", owner=other)
+    WorkspaceMembership.objects.create(
+        workspace=other_ws, user=other, role=WorkspaceMembership.Role.OWNER
+    )
+    assert api_client.get(f"/api/v1/auth/workspaces/{missing_id}/members", **headers).status_code == 404
+    assert api_client.get(f"/api/v1/auth/workspaces/{other_ws.id}/members", **headers).status_code == 403
+
+    # Settings workspace PATCH empty name, description, currency
+    assert (
+        api_client.patch(
+            "/api/v1/settings/workspace",
+            data=json.dumps({"name": " "}),
+            content_type="application/json",
+            **headers,
+        ).status_code
+        == 400
+    )
+    s_patch = api_client.patch(
+        "/api/v1/settings/workspace",
+        data=json.dumps({
+            "name": "Settings Vault",
+            "description": "Notes",
+            "default_currency": "EUR",
+            "auto_sort_enabled": False,
+        }),
+        content_type="application/json",
+        **headers,
+    )
+    assert s_patch.status_code == 200
+    assert s_patch.json()["default_currency"] == "EUR"
+    assert s_patch.json()["auto_sort_enabled"] is False
+
+    # Settings credentials error & local credential listing paths
+    assert api_client.put(
+        "/api/v1/settings/credentials/BAD_PROV",
+        data=json.dumps({"value": "abc"}),
+        content_type="application/json",
+        **headers,
+    ).status_code == 400
+    assert api_client.put(
+        "/api/v1/settings/credentials/GEMINI",
+        data=json.dumps({"value": "   "}),
+        content_type="application/json",
+        **headers,
+    ).status_code == 400
+    assert api_client.put(
+        "/api/v1/settings/credentials/GEMINI",
+        data=json.dumps({"value": "AIzaLocalKey1234"}),
+        content_type="application/json",
+        **headers,
+    ).status_code == 200
+    creds_list = api_client.get("/api/v1/settings/credentials", **headers)
+    assert creds_list.status_code == 200
+    assert any(c["provider"] == "GEMINI" and c["is_configured"] and not c["is_inherited"] for c in creds_list.json())
+    assert api_client.delete("/api/v1/settings/credentials/BAD_PROV", **headers).status_code == 400
+
+    # Invites list, invalid email, revoke 404/400, members 400/404, leave 404
+    assert api_client.get(f"/api/v1/auth/workspaces/{ws_id}/invites", **headers).status_code == 200
+    assert (
+        api_client.post(
+            f"/api/v1/auth/workspaces/{ws_id}/invites",
+            data=json.dumps({"email": "bad-email", "role": "VIEWER"}),
+            content_type="application/json",
+            **headers,
+        ).status_code
+        == 400
+    )
+    inv_resp = api_client.post(
+        f"/api/v1/auth/workspaces/{ws_id}/invites",
+        data=json.dumps({"email": "other-member@example.com", "role": "VIEWER"}),
+        content_type="application/json",
+        **headers,
+    )
+    inv_id = inv_resp.json()["id"]
+    inv_token = inv_resp.json()["token"]
+    assert len(api_client.get(f"/api/v1/auth/workspaces/{ws_id}/invites", **headers).json()) == 1
+    assert api_client.delete(f"/api/v1/auth/workspaces/{ws_id}/invites/{missing_id}", **headers).status_code == 404
+    assert (
+        api_client.patch(
+            f"/api/v1/auth/workspaces/{ws_id}/members/{missing_id}",
+            data=json.dumps({"role": "INVALID"}),
+            content_type="application/json",
+            **headers,
+        ).status_code
+        == 400
+    )
+    assert (
+        api_client.patch(
+            f"/api/v1/auth/workspaces/{ws_id}/members/{missing_id}",
+            data=json.dumps({"role": "EDITOR"}),
+            content_type="application/json",
+            **headers,
+        ).status_code
+        == 404
+    )
+    assert api_client.delete(f"/api/v1/auth/workspaces/{ws_id}/members/{missing_id}", **headers).status_code == 404
+    assert api_client.post(f"/api/v1/auth/workspaces/{missing_id}/leave", **headers).status_code == 404
+    assert api_client.post(f"/api/v1/auth/workspaces/{other_ws.id}/leave", **headers).status_code == 404
+
+    # Invite preview/accept/decline edge branches
+    other_headers = {"HTTP_AUTHORIZATION": f"Bearer {issue_access_token(other)}"}
+    assert api_client.get("/api/v1/auth/invites/nonexistent-tok").status_code == 404
+    assert api_client.post("/api/v1/auth/invites/nonexistent-tok/accept", **other_headers).status_code == 404
+    assert api_client.post("/api/v1/auth/invites/nonexistent-tok/decline", **other_headers).status_code == 404
+    assert api_client.post(f"/api/v1/auth/invites/{inv_token}/decline", **headers).status_code == 403
+
+    # Pre-create membership with VIEWER then accept EDITOR invite -> updates existing membership role (lines 820-821)
+    existing_mem = WorkspaceMembership.objects.create(
+        workspace=Workspace.objects.get(id=ws_id), user=other, role=WorkspaceMembership.Role.VIEWER
+    )
+    inv_obj = WorkspaceInvitation.objects.get(id=inv_id)
+    inv_obj.role = WorkspaceInvitation.Role.EDITOR
+    inv_obj.save()
+    assert api_client.post(f"/api/v1/auth/invites/{inv_token}/accept", **other_headers).status_code == 200
+    existing_mem.refresh_from_db()
+    assert existing_mem.role == WorkspaceMembership.Role.EDITOR
+    # Already accepted -> revoke 400, accept 400, decline 400
+    assert api_client.delete(f"/api/v1/auth/workspaces/{ws_id}/invites/{inv_id}", **headers).status_code == 400
+    assert api_client.post(f"/api/v1/auth/invites/{inv_token}/accept", **other_headers).status_code == 400
+    assert api_client.post(f"/api/v1/auth/invites/{inv_token}/decline", **other_headers).status_code == 400
+
+    # Revoked & expired decline branches
+    rev_inv = WorkspaceInvitation.objects.create(
+        workspace=Workspace.objects.get(id=ws_id),
+        invited_by=sub_user,
+        email=other.email,
+        role=WorkspaceInvitation.Role.VIEWER,
+        status=WorkspaceInvitation.Status.REVOKED,
+    )
+    assert api_client.post(f"/api/v1/auth/invites/{rev_inv.token}/decline", **other_headers).status_code == 410
+    exp_inv = WorkspaceInvitation.objects.create(
+        workspace=Workspace.objects.get(id=ws_id),
+        invited_by=sub_user,
+        email=other.email,
+        role=WorkspaceInvitation.Role.VIEWER,
+        expires_at=timezone.now() - timedelta(minutes=1),
+    )
+    assert api_client.post(f"/api/v1/auth/invites/{exp_inv.token}/decline", **other_headers).status_code == 410
+
+    # Owner self-invite edge case via DB row: accept own vault's invitation -> 400 (line 812)
+    self_inv = WorkspaceInvitation.objects.create(
+        workspace=Workspace.objects.get(id=ws_id),
+        invited_by=other,
+        email=sub_user.email,
+        role=WorkspaceInvitation.Role.EDITOR,
+    )
+    assert api_client.post(f"/api/v1/auth/invites/{self_inv.token}/accept", **headers).status_code == 400
+
+    # Create second workspace with photo, then delete workspace and account with storage.delete raising
+    sec = api_client.post(
+        "/api/v1/auth/workspaces",
+        data=json.dumps({"name": "Disposable Vault"}),
+        content_type="application/json",
+        **headers,
+    ).json()
+    import io
+
+    from django.core.files.uploadedfile import SimpleUploadedFile
+    from PIL import Image
+
+    from apps.catalog.models import CollectionItem, ItemPhoto
+
+    disp_ws = Workspace.objects.get(id=sec["id"])
+    item = CollectionItem.objects.create(workspace=disp_ws, title="Silver Round", category="ROUND")
+    buf = io.BytesIO()
+    Image.new("RGB", (20, 20), (200, 200, 200)).save(buf, format="PNG")
+    ItemPhoto.objects.create(
+        workspace=disp_ws,
+        item=item,
+        image=SimpleUploadedFile("r.png", buf.getvalue(), content_type="image/png"),
+        thumbnail=SimpleUploadedFile("r_t.png", buf.getvalue(), content_type="image/png"),
+    )
+    with patch("django.core.files.storage.FileSystemStorage.delete", side_effect=OSError("disk busy")):
+        assert api_client.delete(f"/api/v1/auth/workspaces/{sec['id']}", **headers).status_code == 204
+        # Add photo to primary vault and delete account with storage exception too (lines 398-399)
+        p_item = CollectionItem.objects.create(workspace_id=ws_id, title="Coin", category="COIN")
+        ItemPhoto.objects.create(
+            workspace_id=ws_id,
+            item=p_item,
+            image=SimpleUploadedFile("c.png", buf.getvalue(), content_type="image/png"),
+        )
+        assert (
+            api_client.delete(
+                "/api/v1/auth/me",
+                data=json.dumps({"password": "Password123!"}),
+                content_type="application/json",
+                **headers,
+            ).status_code
+            == 204
+        )
+
+

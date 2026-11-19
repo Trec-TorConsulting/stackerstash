@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import csv
 import io
+import ipaddress
 import logging
 import re
+import socket
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from django.core.files.base import ContentFile
@@ -25,7 +28,8 @@ from .models import CollectionItem, Container, ItemPhoto
 
 logger = logging.getLogger(__name__)
 
-MAX_PHOTO_BYTES = 5 * 1024 * 1024
+MAX_PHOTO_BYTES = 10 * 1024 * 1024
+MAX_PHOTO_REDIRECTS = 5
 PHOTO_FETCH_TIMEOUT = 4.0
 
 TARGET_FIELDS: list[str] = [
@@ -535,6 +539,49 @@ def preview_csv(raw_bytes: bytes, sample_limit: int = 5) -> PreviewResult:
     )
 
 
+def _is_public_ip(ip_str: str) -> bool:
+    clean = ip_str.split("%", 1)[0]
+    ip = ipaddress.ip_address(clean)
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        or not ip.is_global
+    )
+
+
+def _validate_public_http_url(url: str) -> str:
+    """Validate an external photo URL uses HTTP(S) and resolves strictly to public IPs."""
+    parsed = urlparse((url or "").strip())
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError(f"Unsupported or malformed photo URL scheme: {url}")
+
+    hostname = parsed.hostname.strip().lower()
+    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(
+        (".localhost", ".local", ".internal")
+    ):
+        raise ValueError(f"Blocked internal host for remote photo URL: {url}")
+
+    port = parsed.port or (443 if scheme == "https" else 80)
+    try:
+        addrinfo = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ValueError(f"Could not resolve photo host '{hostname}': {exc}") from exc
+
+    if not addrinfo:
+        raise ValueError(f"No IP addresses resolved for photo host '{hostname}'")
+
+    for entry in addrinfo:
+        sockaddr = entry[4]
+        if not sockaddr or not _is_public_ip(str(sockaddr[0])):
+            raise ValueError(f"Blocked non-public IP address for remote photo URL: {url}")
+    return parsed.geturl()
+
+
 def _download_and_validate_photo(
     client: httpx.Client,
     item_id: Any,
@@ -543,18 +590,53 @@ def _download_and_validate_photo(
     shape_hint: str | None = None,
 ) -> tuple[tuple[bytes, int, int, str] | None, str | None]:
     """Download, validate, and process a remote image URL. Returns ((content, width, height, ext), warning)."""
-    if not url.startswith(("http://", "https://")):
-        return None, f"Skipped invalid photo URL for '{item_title}': {url}"
     try:
-        resp = client.get(url)
-        resp.raise_for_status()
-        content = resp.content
-        if len(content) > MAX_PHOTO_BYTES:
-            return None, f"Skipped oversized photo (>5MB) for '{item_title}': {url}"
-        with Image.open(io.BytesIO(content)) as img:
+        current_url = _validate_public_http_url(url)
+        raw_content: bytes | None = None
+        for _redirect_idx in range(MAX_PHOTO_REDIRECTS + 1):
+            with client.stream(
+                "GET", current_url, follow_redirects=False
+            ) as resp:
+                if resp.is_redirect:
+                    location = resp.headers.get("location")
+                    if not location:
+                        raise ValueError("Redirect missing Location header")
+                    next_url = urljoin(current_url, location)
+                    current_url = _validate_public_http_url(next_url)
+                    continue
+
+                resp.raise_for_status()
+                content_length = resp.headers.get("content-length")
+                if content_length:
+                    try:
+                        if int(content_length) > MAX_PHOTO_BYTES:
+                            return (
+                                None,
+                                f"Skipped oversized photo (>10MB) for '{item_title}': {url}",
+                            )
+                    except ValueError:
+                        pass
+
+                buf = bytearray()
+                for chunk in resp.iter_bytes():
+                    buf.extend(chunk)
+                    if len(buf) > MAX_PHOTO_BYTES:
+                        return (
+                            None,
+                            f"Skipped oversized photo (>10MB) for '{item_title}': {url}",
+                        )
+                raw_content = bytes(buf)
+                break
+        else:
+            raise ValueError("Too many redirects while fetching photo")
+
+        if not raw_content:
+            raise ValueError("Empty remote photo response")
+
+        with Image.open(io.BytesIO(raw_content)) as img:
             img.verify()
         processed, width, height, ext = process_item_image(
-            content,
+            raw_content,
             remove_background=False,
             enhance=True,
             shape_hint=shape_hint,
@@ -562,7 +644,7 @@ def _download_and_validate_photo(
         return (processed, width, height, ext), None
     except Exception as exc:
         logger.warning("Remote photo import failed for item %s (%s): %s", item_id, url, exc)
-        return None, f"Could not fetch photo for '{item_title}' ({url}): {exc}"
+        return None, f"Skipped unsafe or invalid photo for '{item_title}' ({url}): {exc}"
 
 
 def _resolve_container_by_name(
@@ -606,8 +688,8 @@ def _enqueue_csv_batch_appraisals(item_ids: list[Any], workspace_id: Any) -> Non
                 try:
                     it = CollectionItem.objects.prefetch_related("photos").get(id=iid, workspace=ws)
                     start_appraisal_job(it, ws, sync=True)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("CSV batch appraisal failed for item %s: %s", iid, exc)
                 finally:
                     close_old_connections()
 
@@ -617,8 +699,8 @@ def _enqueue_csv_batch_appraisals(item_ids: list[Any], workspace_id: Any) -> Non
             else:
                 with ThreadPoolExecutor(max_workers=2) as pool:
                     list(pool.map(_run_one, item_ids))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("CSV batch appraisal worker failed for workspace %s: %s", workspace_id, exc)
         finally:
             close_old_connections()
 
@@ -704,7 +786,7 @@ def import_mapped_csv(
     if import_photos and pending_photos:
         with httpx.Client(
             timeout=PHOTO_FETCH_TIMEOUT,
-            follow_redirects=True,
+            follow_redirects=False,
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=20),
         ) as photo_client:
             with ThreadPoolExecutor(max_workers=16) as executor:
@@ -736,10 +818,9 @@ def import_mapped_csv(
         for (item, _url, label, is_primary), (photo_data, warn) in zip(
             pending_photos, fetched, strict=True
         ):
-            if warn:
-                result.warnings.append(warn)
-                continue
-            if photo_data is None:
+            if warn or photo_data is None:
+                if warn:
+                    result.warnings.append(warn)
                 continue
             content, width, height, ext = photo_data
             photo = ItemPhoto(
@@ -758,8 +839,8 @@ def import_mapped_csv(
                     ContentFile(thumb_bytes),
                     save=False,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Import thumbnail generation skipped for %s: %s", photo.id, exc)
             photo.image.save(f"import-{label.lower()}.{ext}", ContentFile(content), save=True)
 
     if auto_appraise and created_item_ids:

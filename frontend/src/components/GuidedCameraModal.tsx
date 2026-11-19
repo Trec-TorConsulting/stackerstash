@@ -659,10 +659,9 @@ export function GuidedCameraModal({
   };
 
   const handleQuickRotate = async () => {
-    if (!pendingReviewFile || rotating) return;
     setRotating(true);
     try {
-      const rotated = await rotateImageFile90(pendingReviewFile);
+      const rotated = await rotateImageFile90(pendingReviewFile!);
       setPendingReviewFile(rotated);
     } finally {
       setRotating(false);
@@ -679,9 +678,8 @@ export function GuidedCameraModal({
   };
 
   const handleFinishSingle = () => {
-    if (!frontFile) return;
     stopStream();
-    onComplete({ frontFile, backFile: null, detectedShape: activeShape });
+    onComplete({ frontFile: frontFile!, backFile: null, detectedShape: activeShape });
   };
 
   const confirmLabel =

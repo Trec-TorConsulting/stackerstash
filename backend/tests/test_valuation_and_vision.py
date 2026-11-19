@@ -717,3 +717,279 @@ def test_reappraise_stale_items_preserves_user_locked_value(monkeypatch):
     assert result["skipped_locked"] == 1
     assert locked_item.market_value_unit == Decimal("99.00")
     assert locked_item.melt_value_unit == Decimal("30.00")
+
+
+@pytest.mark.django_db
+def test_valuation_api_models_tasks_and_services_edges(api_client, user_a):
+    from datetime import timedelta
+    from decimal import Decimal
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from django.utils import timezone
+    from ninja.errors import HttpError
+
+    from apps.accounts.models import ProviderCredential
+    from apps.catalog.models import CollectionItem
+    from apps.valuation.models import SpotPriceSnapshot
+    from apps.valuation.services import (
+        _clean_item_title,
+        _merge_enriched_specs,
+        _run_appraisal_job_thread,
+        appraise_item,
+        compute_portfolio_summary,
+        start_appraisal_job,
+    )
+    from apps.valuation.tasks import (
+        process_deferred_ai_enrichment_task,
+        reappraise_stale_items,
+        reappraise_stale_items_task,
+        refresh_spot_prices_task,
+    )
+    from apps.vision.api import identify_item_from_photos
+
+    owner, ws, token = user_a
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    # Vision empty files 400 (apps/vision/api.py line 21)
+    with pytest.raises(HttpError) as exc_info:
+        identify_item_from_photos(SimpleNamespace(workspace=ws, user=owner, workspace_role="OWNER"), files=[])
+    assert exc_info.value.status_code == 400
+
+    # Valuation API spots + cert-url + SpotPriceSnapshot.__str__
+    snap = SpotPriceSnapshot.objects.create(
+        metal_type="GOLD", price_usd_per_troy_oz=Decimal("2650.00"), source="test"
+    )
+    assert "GOLD" in str(snap)
+    assert api_client.get("/api/v1/valuation/spots", **headers).status_code == 200
+    coin = CollectionItem.objects.create(
+        workspace=ws,
+        title="1921 Morgan Dollar",
+        category="SLAB",
+        metal_type="SILVER",
+        weight_value=Decimal("0.7734"),
+        grading_service="PCGS",
+        cert_number="44556677",
+    )
+    cert_resp = api_client.get(f"/api/v1/valuation/items/{coin.id}/cert-url", **headers)
+    assert cert_resp.status_code == 200 and "pcgs.com" in cert_resp.json()["url"]
+
+    # Helper checks: _merge_enriched_specs & _clean_item_title
+    _merge_enriched_specs(
+        coin,
+        [("NONE", {}), ("NUMISTA", {"catalog_numbers": {"KM": "110", "empty": ""}})],
+    )
+    assert coin.catalog_numbers.get("KM") == "110"
+    assert _clean_item_title("") == ""
+    assert _clean_item_title("RARE!! ms65 1889-o morgan") == "MS65 1889-O Morgan"
+
+    # Full appraise_item exercising BYOK guides + active-ask downgrade + invalid grading_upside_usd
+    for prov, val in [
+        ("PCGS", "pcgs-t"),
+        ("GREYSHEET_KEY", "gs-k"),
+        ("GREYSHEET_TOKEN", "gs-t"),
+        ("NUMISMEDIA_KEY", "nm-k"),
+        ("NUMISTA_KEY", "num-k"),
+        ("EBAY_CLIENT_ID", "eb-id"),
+        ("EBAY_CLIENT_SECRET", "eb-sec"),
+        ("PRICECHARTING_API_KEY", "pc-k"),
+        ("TCGPLAYER_CLIENT_ID", "tcg-id"),
+        ("TCGPLAYER_CLIENT_SECRET", "tcg-sec"),
+        ("COLLECTR_API_KEY", "col-k"),
+    ]:
+        c, _ = ProviderCredential.objects.get_or_create(workspace=ws, provider=prov, defaults={"encrypted_value": ""})
+        c.set_secret(val)
+        c.save()
+
+    with patch(
+        "apps.valuation.services.lookup_cert_metadata",
+        return_value={"source": "PCGS", "market_value": "250.00", "specs": {"mintage": 1000}},
+    ), patch(
+        "apps.valuation.services.lookup_greysheet",
+        return_value={"source": "GREYSHEET", "market_value": "260.00"},
+    ), patch(
+        "apps.valuation.services.lookup_numismedia",
+        return_value={"source": "NUMISMEDIA", "market_value": "255.00"},
+    ), patch(
+        "apps.valuation.services.lookup_numista_specs",
+        return_value={"specs": {"designer": "George T. Morgan"}},
+    ), patch(
+        "apps.valuation.services.lookup_ebay_sold_comps",
+        return_value={
+            "source": "EBAY_ACTIVE_ASK",
+            "is_ask": True,
+            "low": Decimal("240.00"),
+            "median": Decimal("275.00"),
+            "high": Decimal("300.00"),
+            "count": 4,
+        },
+    ), patch(
+        "apps.vision.services.estimate_item_value_with_ai",
+        return_value=(
+            Decimal("245.00"),
+            {
+                "ai_provider": "GEMINI",
+                "collectibility_tier": "NUMISMATIC",
+                "grading_upside_usd": "bad_dec",
+                "normalized_title": "1921 Morgan Silver Dollar PCGS",
+                "inferred_specs": {"variety": "VAM-1"},
+            },
+        ),
+    ):
+        updated = appraise_item(coin, ws)
+        assert updated.market_value_unit == Decimal("250.00")
+        assert updated.valuation_confidence == CollectionItem.ValuationConfidence.HIGH
+
+    # Appraise MTG card exercising card guides & EBAY_ACTIVE_ASK downgrade branch
+    mtg = CollectionItem.objects.create(
+        workspace=ws,
+        title="Black Lotus",
+        category="CARD",
+        metal_type="NONE",
+        attributes={"card_game": "Magic: The Gathering", "set_code": "LEA"},
+    )
+    with patch(
+        "apps.valuation.services.lookup_scryfall_card",
+        return_value={"source": "SCRYFALL", "market_value": "5000.00", "catalog_numbers": {"scryfall_id": "abc"}, "specs": {"rarity": "Rare"}},
+    ), patch(
+        "apps.valuation.services.lookup_pricecharting_card",
+        return_value={"source": "PRICECHARTING", "market_value": "5100.00"},
+    ), patch(
+        "apps.valuation.services.lookup_tcgplayer_price",
+        return_value={"source": "TCGPLAYER", "market_value": "4900.00"},
+    ), patch(
+        "apps.valuation.services.lookup_collectr_price",
+        return_value={"source": "COLLECTR", "market_value": "5050.00"},
+    ), patch(
+        "apps.valuation.services.lookup_ebay_sold_comps",
+        return_value={"source": "EBAY_ACTIVE_ASK", "is_ask": True, "low": Decimal("4800.00"), "median": Decimal("5200.00"), "high": Decimal("5500.00"), "count": 5},
+    ), patch(
+        "apps.vision.services.estimate_item_value_with_ai",
+        return_value=(None, {"gemini_quota_hit": True}),
+    ):
+        mtg_res = appraise_item(mtg, ws)
+        assert mtg_res.ai_enrichment_pending is True
+        assert mtg_res.market_value_unit == Decimal("5000.00")
+
+    # Quota-hit card with NO price guides at all saves ai_enrichment_pending (lines 711-719)
+    raw_coin = CollectionItem.objects.create(
+        workspace=ws, title="Mystery Token", category="OTHER", metal_type="NONE"
+    )
+    with patch("apps.valuation.services.lookup_ebay_sold_comps", return_value=None), patch(
+        "apps.vision.services.estimate_item_value_with_ai",
+        return_value=(None, {"gemini_quota_hit": True}),
+    ):
+        appraise_item(raw_coin, ws)
+        raw_coin.refresh_from_db()
+        assert raw_coin.ai_enrichment_pending is True
+
+    # Async start_appraisal_job thread launch + _run_appraisal_job_thread failure path
+    with patch("threading.Thread.start") as mock_t:
+        start_appraisal_job(raw_coin, ws, sync=False)
+        assert mock_t.called
+    _run_appraisal_job_thread("00000000-0000-0000-0000-000000000099")
+
+    # Portfolio summary includes NONE metal item skip
+    summary = compute_portfolio_summary(ws)
+    assert summary["unique_entries"] >= 2
+
+    # Tasks coverage: refresh_spot_prices_task, process_deferred_ai_enrichment_task, reappraise_stale_items_task
+    with patch("apps.valuation.tasks.refresh_spot_prices", return_value={"GOLD": Decimal("2650.00")}):
+        assert refresh_spot_prices_task()["GOLD"] == "2650.00"
+
+    # Pending deferred task skips item without GEMINI, then handles still-pending + error
+    assert process_deferred_ai_enrichment_task()["checked"] >= 1
+    gem, _ = ProviderCredential.objects.get_or_create(workspace=ws, provider="GEMINI", defaults={"encrypted_value": ""})
+    gem.set_secret("AIzaDeferredKey")
+    gem.save()
+    with patch("apps.valuation.tasks.appraise_item", side_effect=RuntimeError("boom")):
+        res_err = process_deferred_ai_enrichment_task(batch_size=5)
+        assert res_err["deferred"] >= 1
+    with patch("apps.valuation.tasks.appraise_item", return_value=raw_coin):
+        res_still = process_deferred_ai_enrichment_task(batch_size=5)
+        assert res_still["deferred"] == 1
+
+    # reappraise_stale_items error branches + reappraise_stale_items_task
+    CollectionItem.objects.filter(id=raw_coin.id).update(valued_at=timezone.now() - timedelta(days=30))
+    CollectionItem.objects.filter(id=mtg.id).update(
+        specs_provenance={"market_value_unit": "USER"},
+        valued_at=timezone.now() - timedelta(days=30),
+    )
+    with patch(
+        "apps.valuation.tasks.refresh_item_melt_from_latest_spot", side_effect=RuntimeError("melt fail")
+    ), patch("apps.valuation.tasks.appraise_item", side_effect=RuntimeError("appraise fail")):
+        stale_err = reappraise_stale_items_task(stale_days=7, batch_size=10)
+        assert stale_err["failed"] >= 2
+    CollectionItem.objects.filter(id=raw_coin.id).update(valued_at=timezone.now() - timedelta(days=30))
+    with patch("apps.valuation.tasks.appraise_item", return_value=raw_coin):
+        assert reappraise_stale_items(stale_days=7, batch_size=10)["reappraised"] >= 1
+
+    # Remaining valuation/services.py branches: 277, 414, 458, 471, 553-554, 616, 622, 655-656
+    # 1) Yu-Gi-Oh card guide returns None (277); LINK_ONLY cert (414); realized comp is_ask=False (458)
+    ygo = CollectionItem.objects.create(
+        workspace=ws,
+        title="Dark Magician",
+        category="CARD",
+        metal_type="NONE",
+        grading_service="PSA",
+        cert_number="11223344",
+        attributes={"card_game": "Yu-Gi-Oh!"},
+    )
+    with patch(
+        "apps.valuation.services.lookup_cert_metadata",
+        return_value={"source": "PSA", "market_value": None, "verification_url": "https://psacard.com/cert/11223344"},
+    ), patch("apps.valuation.services.lookup_pricecharting_card", return_value=None), patch(
+        "apps.valuation.services.lookup_tcgplayer_price", return_value=None
+    ), patch("apps.valuation.services.lookup_collectr_price", return_value=None), patch(
+        "apps.valuation.services.lookup_ebay_sold_comps",
+        return_value={"source": "COMPS", "is_ask": False, "low": "40.00", "median": "50.00", "high": "60.00", "count": 4},
+    ), patch("apps.vision.services.estimate_item_value_with_ai", return_value=(None, {})):
+        appraise_item(ygo, ws)
+
+    # 2) Active-ask only quote (471) + fallback 0.90/1.10 low/high range (553-554) + invalid grading_upside_usd on RAW coin (655-656)
+    raw_silver = CollectionItem.objects.create(
+        workspace=ws,
+        title="1921 Peace Dollar",
+        category="COIN",
+        metal_type="SILVER",
+        weight_value=Decimal("0.7734"),
+        grading_service="NONE",
+    )
+    with patch("apps.valuation.services.get_latest_spot_map", return_value={"SILVER": Decimal("30.00")}), patch(
+        "apps.valuation.services.lookup_greysheet", return_value=None
+    ), patch("apps.valuation.services.lookup_numismedia", return_value=None), patch(
+        "apps.valuation.services.lookup_numista_specs", return_value=None
+    ), patch("apps.valuation.services.lookup_ebay_sold_comps", return_value=None), patch(
+        "apps.vision.services.estimate_item_value_with_ai",
+        return_value=(Decimal("25.00"), {"grading_upside_usd": "bad_dec"}),
+    ):
+        # AI value ($25) <= melt ($23.20*1.15) -> BULLION tier (622), plus SPOT_MELT only test (616)
+        raw_silver_res = appraise_item(raw_silver, ws)
+        assert raw_silver_res.collectibility_tier == CollectionItem.CollectibilityTier.BULLION
+
+    # Active-ask only with no low/high triggers 471 and 553-554
+    ask_only = CollectionItem.objects.create(workspace=ws, title="Bronze Medal", category="OTHER", metal_type="NONE")
+    with patch(
+        "apps.valuation.services.lookup_ebay_sold_comps",
+        return_value={"source": "EBAY_ACTIVE_ASK", "is_ask": True, "low": None, "median": Decimal("40.00"), "high": None, "count": 2},
+    ), patch("apps.vision.services.estimate_item_value_with_ai", return_value=(None, {})):
+        ask_res = appraise_item(ask_only, ws)
+        assert ask_res.market_value_low == Decimal("36.00")
+        assert ask_res.market_value_high == Decimal("44.00")
+
+    # SPOT_MELT primary source hits tier=BULLION line 616
+    melt_only = CollectionItem.objects.create(
+        workspace=ws, title="Silver Bar", category="BAR", metal_type="SILVER", weight_value=Decimal("10.0000")
+    )
+    with patch("apps.valuation.services.get_latest_spot_map", return_value={"SILVER": Decimal("30.00")}), patch(
+        "apps.valuation.services.lookup_greysheet", return_value=None
+    ), patch("apps.valuation.services.lookup_numismedia", return_value=None), patch(
+        "apps.valuation.services.lookup_numista_specs", return_value=None
+    ), patch("apps.valuation.services.lookup_ebay_sold_comps", return_value=None), patch(
+        "apps.vision.services.estimate_item_value_with_ai", return_value=(None, {})
+    ):
+        melt_res = appraise_item(melt_only, ws)
+        assert melt_res.valuation_source == CollectionItem.ValuationSource.SPOT_MELT
+        assert melt_res.collectibility_tier == CollectionItem.CollectibilityTier.BULLION
+
+

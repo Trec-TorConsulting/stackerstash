@@ -323,47 +323,46 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
   }
 
   function startEditing() {
-    if (!item) return;
     setEditForm({
-      title: item.title,
-      category: item.category,
-      quantity: item.quantity || 1,
-      year: item.year || "",
-      country: item.country || "",
-      denomination: item.denomination || "",
-      series: item.series || "",
-      mint_or_refiner: item.mint_or_refiner || "",
-      sort_category: item.sort_category || "",
-      sort_subcategory: item.sort_subcategory || "",
-      status: item.status,
-      container_id: item.container_id || "",
-      metal_type: item.metal_type || "NONE",
-      weight_value: item.weight_value || "0",
-      weight_unit: item.weight_unit || "OZ_T",
-      purity: item.purity || "0.999000",
-      grading_service: item.grading_service || "NONE",
-      grade: item.grade || "",
-      cert_number: item.cert_number || "",
-      slab_designation: String(item.attributes?.slab_designation || ""),
-      estimated_grade: item.estimated_grade || "",
-      serial_number: item.serial_number || "",
-      purchase_price: item.purchase_price ?? "",
-      purchase_date: item.purchase_date || "",
-      sold_price: item.sold_price ?? "",
-      sold_date: item.sold_date || "",
-      vendor: item.vendor || "",
-      market_value_unit: item.market_value_unit || "0.00",
-      tagsText: (item.tags || []).join(", "),
-      notes: item.notes || "",
-      card_game: String(item.card_game || item.attributes?.card_game || ""),
-      set_name: String(item.set_name || item.attributes?.set_name || ""),
-      set_code: String(item.set_code || item.attributes?.set_code || ""),
-      card_number: String(item.card_number || item.attributes?.card_number || ""),
-      rarity: String(item.rarity || item.attributes?.rarity || ""),
-      card_finish: String(item.card_finish || item.attributes?.card_finish || ""),
-      card_edition: String(item.card_edition || item.attributes?.card_edition || ""),
-      language: String(item.language || item.attributes?.language || ""),
-      raw_condition: String(item.raw_condition || item.attributes?.raw_condition || ""),
+      title: item!.title,
+      category: item!.category,
+      quantity: item!.quantity || 1,
+      year: item!.year || "",
+      country: item!.country || "",
+      denomination: item!.denomination || "",
+      series: item!.series || "",
+      mint_or_refiner: item!.mint_or_refiner || "",
+      sort_category: item!.sort_category || "",
+      sort_subcategory: item!.sort_subcategory || "",
+      status: item!.status,
+      container_id: item!.container_id || "",
+      metal_type: item!.metal_type || "NONE",
+      weight_value: item!.weight_value || "0",
+      weight_unit: item!.weight_unit || "OZ_T",
+      purity: item!.purity || "0.999000",
+      grading_service: item!.grading_service || "NONE",
+      grade: item!.grade || "",
+      cert_number: item!.cert_number || "",
+      slab_designation: String(item!.attributes?.slab_designation || ""),
+      estimated_grade: item!.estimated_grade || "",
+      serial_number: item!.serial_number || "",
+      purchase_price: item!.purchase_price ?? "",
+      purchase_date: item!.purchase_date || "",
+      sold_price: item!.sold_price ?? "",
+      sold_date: item!.sold_date || "",
+      vendor: item!.vendor || "",
+      market_value_unit: item!.market_value_unit || "0.00",
+      tagsText: (item!.tags || []).join(", "),
+      notes: item!.notes || "",
+      card_game: String(item!.card_game || item!.attributes?.card_game || ""),
+      set_name: String(item!.set_name || item!.attributes?.set_name || ""),
+      set_code: String(item!.set_code || item!.attributes?.set_code || ""),
+      card_number: String(item!.card_number || item!.attributes?.card_number || ""),
+      rarity: String(item!.rarity || item!.attributes?.rarity || ""),
+      card_finish: String(item!.card_finish || item!.attributes?.card_finish || ""),
+      card_edition: String(item!.card_edition || item!.attributes?.card_edition || ""),
+      language: String(item!.language || item!.attributes?.language || ""),
+      raw_condition: String(item!.raw_condition || item!.attributes?.raw_condition || ""),
     });
     setIsEditing(true);
   }
@@ -376,11 +375,10 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
   }
 
   function handleRemoveSlab() {
-    if (!item) return;
-    const nextAttrs = { ...(item.attributes || {}) };
+    const nextAttrs = { ...(item!.attributes || {}) };
     delete nextAttrs.slab_designation;
     updateMut.mutate({
-      category: rawCategoryForClearedSlab(item.category, item.grading_service),
+      category: rawCategoryForClearedSlab(item!.category, item!.grading_service),
       grading_service: "NONE",
       grade: "",
       cert_number: "",
@@ -390,9 +388,8 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
 
   function handleSaveEdit(e: React.FormEvent) {
     e.preventDefault();
-    if (!item) return;
     const isRaw = editForm.grading_service === "NONE";
-    const nextAttrs = { ...(item.attributes || {}) };
+    const nextAttrs = { ...(item!.attributes || {}) };
     if (!isRaw && editForm.slab_designation.trim()) {
       nextAttrs.slab_designation = editForm.slab_designation.trim();
     } else {
@@ -443,8 +440,8 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
       payload.raw_condition = editForm.raw_condition.trim();
     }
     if (
-      editForm.sort_category !== (item.sort_category || "") ||
-      editForm.sort_subcategory !== (item.sort_subcategory || "")
+      editForm.sort_category !== (item!.sort_category || "") ||
+      editForm.sort_subcategory !== (item!.sort_subcategory || "")
     ) {
       payload.sort_category = editForm.sort_category;
       payload.sort_subcategory = editForm.sort_subcategory.trim() || "Uncategorized";

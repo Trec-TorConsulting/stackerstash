@@ -6,7 +6,10 @@ import { CardSpecsCard } from "../components/valuation/CardSpecsCard";
 import { CollectibilityThesisCard } from "../components/valuation/CollectibilityThesisCard";
 import { EstimatedGradeCard } from "../components/valuation/EstimatedGradeCard";
 import { NumismaticSpecsCard } from "../components/valuation/NumismaticSpecsCard";
-import { ValuationBreakdownCard } from "../components/valuation/ValuationBreakdownCard";
+import {
+  getValuationFreshness,
+  ValuationBreakdownCard,
+} from "../components/valuation/ValuationBreakdownCard";
 import { api, type AppraisalJob, type CollectionItem, type ValuationHistoryEntry } from "../lib/api";
 import { buildCompLinks } from "../lib/compLinks";
 import { cacheItemSnapshot, getCachedItemSnapshot } from "../lib/offlineCache";
@@ -311,5 +314,121 @@ describe("Valuation freshness and lock indicators", () => {
     const btn = screen.getByRole("button", { name: /Re-appraise/i });
     fireEvent.click(btn);
     expect(onReappraise).toHaveBeenCalledTimes(1);
+  });
+
+  it("covers remaining AppraisalProgressBanner, ValuationBreakdownCard, EstimatedGradeCard, NumismaticSpecsCard, and CardSpecsCard branches", async () => {
+    // 1. AppraisalProgressBanner null & FAILED
+    const { container: nullBanner } = render(<AppraisalProgressBanner job={null} />);
+    expect(nullBanner.firstChild).toBeNull();
+    render(
+      <AppraisalProgressBanner
+        job={{
+          id: "job-fail",
+          item_id: "i1",
+          status: "FAILED",
+          steps: {},
+          error_message: "Upstream timeout",
+          created_at: "2026-01-01T00:00:00Z",
+          completed_at: null,
+          item: SAMPLE_ITEM,
+        }}
+      />,
+    );
+    expect(screen.getByText(/Upstream timeout/i)).toBeInTheDocument();
+
+    // 2. getValuationFreshness null & invalid date + ValuationBreakdownCard grounded_sources
+    expect(getValuationFreshness(null)).toEqual({
+      label: "Unvalued",
+      isStale: true,
+      ageDays: null,
+    });
+    expect(getValuationFreshness("invalid-date")).toEqual({
+      label: "Unvalued",
+      isStale: true,
+      ageDays: null,
+    });
+    render(
+      <ValuationBreakdownCard
+        item={SAMPLE_ITEM}
+        latestHistory={{
+          ...SAMPLE_HISTORY,
+          raw_payload: {
+            ...SAMPLE_HISTORY.raw_payload,
+            grounded_sources: [{ title: "PCGS Facts", uri: "https://pcgs.com/facts" }],
+          },
+        }}
+      />,
+    );
+    expect(screen.getByRole("link", { name: /PCGS Facts/i })).toHaveAttribute(
+      "href",
+      "https://pcgs.com/facts",
+    );
+
+    // 3. EstimatedGradeCard null when graded + Override -> Cancel
+    const { container } = render(
+      <EstimatedGradeCard item={{ ...SAMPLE_ITEM, grading_service: "PCGS" }} />,
+    );
+    expect(container.firstChild).toBeNull();
+    render(<EstimatedGradeCard item={SAMPLE_ITEM} onSaveGrade={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /Override/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Cancel/i }));
+
+    // 4. NumismaticSpecsCard Edit -> Cancel
+    render(<NumismaticSpecsCard item={SAMPLE_ITEM} onSaveSpecs={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /Edit Specs/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Cancel/i }));
+
+    // 5. CardSpecsCard full attribute branches, TAG DIG, sub_grades, catalog URLs, Cancel, and all 9 edit fields
+    const onSaveCard = vi.fn().mockResolvedValue(undefined);
+    const fullCardItem: CollectionItem = {
+      ...SAMPLE_ITEM,
+      category: "CARD",
+      grading_service: "TAG",
+      cert_number: "TAG-999",
+      rarity: undefined,
+      attributes: {
+        rarity: "Illustration Rare",
+        total_population: 50,
+        population_higher: 5,
+        tag_score: 980,
+        sub_grades: { centering: 10, corners: 9.5, edges: 10, surface: 9.5 },
+      },
+      catalog_numbers: {
+        tcgplayer_url: "https://tcgplayer.com/item/1",
+        tcgplayer_id: "123",
+        pokemon_tcg_id: "sv1-1",
+        scryfall_id: "sf-1",
+        custom_code: "C-1",
+      },
+    };
+    const { container: cardContainer } = render(
+      <CardSpecsCard item={fullCardItem} onSaveSpecs={onSaveCard} />,
+    );
+    expect(screen.getByText(/TAG Score/i)).toBeInTheDocument();
+    expect(screen.getByText(/Sub-Grades/i)).toBeInTheDocument();
+    expect(screen.getByText(/CUSTOM_CODE: C-1/i)).toBeInTheDocument();
+
+    // Edit -> Cancel -> Edit again -> modify every field -> Submit
+    const editBtn = cardContainer.querySelector("button")!;
+    fireEvent.click(editBtn);
+    fireEvent.click(cardContainer.querySelector("button")!);
+    fireEvent.click(cardContainer.querySelector("button")!);
+
+    const inputs = cardContainer.querySelectorAll("input");
+    inputs.forEach((inp, idx) => {
+      fireEvent.change(inp, { target: { value: `val-${idx}` } });
+    });
+    const select = cardContainer.querySelector("select")!;
+    fireEvent.change(select, { target: { value: "NM" } });
+    fireEvent.submit(cardContainer.querySelector("form")!);
+
+    await waitFor(() =>
+      expect(onSaveCard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          card_game: "val-0",
+          raw_condition: "NM",
+        }),
+      ),
+    );
   });
 });

@@ -100,3 +100,63 @@ def test_recrop_collection_photos_dry_run_apply_backup_and_idempotency(tmp_path,
     second_out = io.StringIO()
     call_command("recrop_collection_photos", "--workspace", "recrop-vault", stdout=second_out)
     assert "Updated: 0, Skipped: 2, Errors: 0" in second_out.getvalue()
+
+    # 4. UUID workspace filter, --item-id, --limit, empty image skip, document label shape hint,
+    # deskew-only path (box=None), old_name delete failure, and image open error path
+    from unittest.mock import patch
+
+    no_file_photo = ItemPhoto.objects.create(
+        workspace=ws, item=item, label=ItemPhoto.Label.OTHER, is_primary=False
+    )
+    doc_item = CollectionItem.objects.create(workspace=ws, title="Misc Box", category="OTHER")
+    doc_photo = ItemPhoto.objects.create(
+        workspace=ws, item=doc_item, label=ItemPhoto.Label.SLAB_LABEL, is_primary=True
+    )
+    doc_photo.image.save("label.jpg", ContentFile(_blank_mat_bytes()), save=True)
+    bad_file_photo = ItemPhoto.objects.create(
+        workspace=ws, item=doc_item, label=ItemPhoto.Label.OBVERSE, is_primary=False
+    )
+    bad_file_photo.image.name = "missing/does_not_exist.jpg"
+    bad_file_photo.save(update_fields=["image"])
+
+    # Hit UUID filter (68), missing-image skip (94-95), and --limit (74)
+    limit_out = io.StringIO()
+    call_command(
+        "recrop_collection_photos",
+        "--dry-run",
+        "--workspace",
+        str(ws.id),
+        "--limit",
+        "10",
+        stdout=limit_out,
+    )
+    assert "Inspected:" in limit_out.getvalue()
+    assert no_file_photo.id is not None
+
+    # Hit --item-id (72), SLAB_LABEL shape_hint='rect' (106), deskew-only box=None (127),
+    # storage.delete warning (149-150), and missing-file ERROR (157-159)
+    item_out = io.StringIO()
+    item_err = io.StringIO()
+    with patch(
+        "apps.catalog.management.commands.recrop_collection_photos.deskew_tilted_rectangle",
+        return_value=(Image.new("RGB", (200, 120), (220, 220, 220)), 4.0),
+    ), patch(
+        "apps.catalog.management.commands.recrop_collection_photos.detect_subject_crop_box",
+        return_value=None,
+    ), patch(
+        "django.core.files.storage.FileSystemStorage.delete",
+        side_effect=OSError("delete blocked"),
+    ):
+        call_command(
+            "recrop_collection_photos",
+            "--item-id",
+            str(doc_item.id),
+            "--backup-dir",
+            str(tmp_path / "b2"),
+            stdout=item_out,
+            stderr=item_err,
+        )
+    assert "Updated: 1, Skipped: 0, Errors: 1" in item_out.getvalue()
+    assert "WARN delete old" in item_err.getvalue()
+    assert "ERROR" in item_err.getvalue()
+

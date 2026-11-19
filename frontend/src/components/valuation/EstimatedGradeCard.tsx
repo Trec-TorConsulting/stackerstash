@@ -28,8 +28,7 @@ export function EstimatedGradeCard({ item, onSaveGrade, isSaving }: EstimatedGra
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
-    if (!onSaveGrade) return;
-    await onSaveGrade(draft.trim());
+    await onSaveGrade!(draft.trim());
     setEditing(false);
   }
 
