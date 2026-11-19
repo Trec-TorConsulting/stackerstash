@@ -333,3 +333,37 @@ def test_trading_card_manual_override_preserved(workspace):
     assert classify_and_save_item(card.id, use_ollama=False) is False
     card.refresh_from_db()
     assert card.sort_subcategory == "WOTC Vintage"
+
+
+@pytest.mark.django_db
+def test_secondary_vault_inherits_owner_ollama_config_and_supports_override():
+    from apps.accounts.models import WorkspaceMembership
+    from apps.catalog.auto_sort import _get_workspace_ollama_config
+
+    owner = User.objects.create_user(email="ollama_owner@example.com", password="pw")
+    default_ws = Workspace.objects.create(
+        name="Primary Vault", slug="primary-ollama", owner=owner, is_default=True
+    )
+    secondary_ws = Workspace.objects.create(
+        name="Secondary Vault", slug="secondary-ollama", owner=owner, is_default=False
+    )
+    WorkspaceMembership.objects.create(workspace=default_ws, user=owner)
+    WorkspaceMembership.objects.create(workspace=secondary_ws, user=owner)
+
+    url_cred = ProviderCredential(workspace=default_ws, provider=ProviderCredential.Provider.OLLAMA_URL)
+    url_cred.set_secret("http://ollama.local:11434/")
+    url_cred.save()
+    model_cred = ProviderCredential(workspace=default_ws, provider=ProviderCredential.Provider.OLLAMA_MODEL)
+    model_cred.set_secret("qwen2.5:7b")
+    model_cred.save()
+
+    url, model = _get_workspace_ollama_config(secondary_ws.id)
+    assert url == "http://ollama.local:11434"
+    assert model == "qwen2.5:7b"
+
+    override = ProviderCredential(workspace=secondary_ws, provider=ProviderCredential.Provider.OLLAMA_MODEL)
+    override.set_secret("llama3.2:latest")
+    override.save()
+    url2, model2 = _get_workspace_ollama_config(secondary_ws.id)
+    assert url2 == "http://ollama.local:11434"
+    assert model2 == "llama3.2:latest"

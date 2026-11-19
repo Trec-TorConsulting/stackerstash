@@ -15,7 +15,13 @@ from apps.vision.models import IdentificationJob
 from config.health import check_db_health, check_redis_health
 
 from .auth import WorkspaceAuth, resolve_user_workspace
-from .models import ProviderCredential, User, Workspace, WorkspaceMembership
+from .models import (
+    ProviderCredential,
+    User,
+    Workspace,
+    WorkspaceMembership,
+    get_owner_default_workspace,
+)
 
 
 class GlobalAdminAuth(WorkspaceAuth):
@@ -118,14 +124,28 @@ def _workspace_totals(workspace_id: UUID) -> tuple[int, int, Decimal, Decimal]:
 
 
 def _serialize_admin_user(user: User) -> AdminUserOut:
-    ws = resolve_user_workspace(user)
-    ws_count = WorkspaceMembership.objects.filter(user=user).count()
+    ws = get_owner_default_workspace(user) or resolve_user_workspace(user)
+    ws_ids = list(
+        WorkspaceMembership.objects.filter(user=user).values_list("workspace_id", flat=True)
+    )
+    ws_count = len(ws_ids)
     if ws is not None:
-        item_count, container_count, market_val, _ = _workspace_totals(ws.id)
         primary_ws = AdminUserWorkspaceOut(id=ws.id, name=ws.name, slug=ws.slug)
     else:
-        item_count, container_count, market_val = 0, 0, Decimal("0.00")
         primary_ws = None
+
+    if ws_ids:
+        agg = CollectionItem.objects.filter(
+            workspace_id__in=ws_ids, status=CollectionItem.Status.IN_COLLECTION
+        ).aggregate(
+            item_count=Count("id"),
+            market=Sum(F("market_value_unit") * F("quantity")),
+        )
+        item_count = agg["item_count"] or 0
+        container_count = Container.objects.filter(workspace_id__in=ws_ids).count()
+        market_val = agg["market"] or Decimal("0.00")
+    else:
+        item_count, container_count, market_val = 0, 0, Decimal("0.00")
 
     return AdminUserOut(
         id=user.id,

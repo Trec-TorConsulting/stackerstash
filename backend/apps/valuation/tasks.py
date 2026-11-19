@@ -6,7 +6,7 @@ from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
 
-from apps.accounts.models import ProviderCredential
+from apps.accounts.models import ProviderCredential, resolve_workspace_credential
 from apps.catalog.models import CollectionItem
 
 from .services import appraise_item, refresh_item_melt_from_latest_spot, refresh_spot_prices
@@ -24,7 +24,7 @@ def refresh_spot_prices_task() -> dict[str, str]:
 def process_deferred_ai_enrichment_task(batch_size: int = 5) -> dict[str, int]:
     """Batch-process items queued after Gemini 429 quota limits once quota recovers."""
     pending = list(
-        CollectionItem.objects.select_related("workspace")
+        CollectionItem.objects.select_related("workspace", "workspace__owner")
         .filter(ai_enrichment_pending=True, ai_enrichment_attempts__lt=10)
         .order_by("ai_enqueued_at", "created_at")[:batch_size]
     )
@@ -32,11 +32,10 @@ def process_deferred_ai_enrichment_task(batch_size: int = 5) -> dict[str, int]:
     deferred = 0
 
     for item in pending:
-        has_gemini = ProviderCredential.objects.filter(
-            workspace=item.workspace,
-            provider=ProviderCredential.Provider.GEMINI,
-        ).exists()
-        if not has_gemini:
+        gemini_cred, _ = resolve_workspace_credential(
+            item.workspace, ProviderCredential.Provider.GEMINI
+        )
+        if gemini_cred is None:
             continue
 
         try:

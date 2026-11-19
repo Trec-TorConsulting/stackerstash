@@ -60,15 +60,17 @@ class Workspace(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=120)
     slug = models.SlugField(max_length=140, unique=True)
+    description = models.CharField(max_length=240, blank=True, default="")
     owner = models.ForeignKey(
         User, on_delete=models.CASCADE, related_name="owned_workspaces"
     )
     default_currency = models.CharField(max_length=3, default="USD")
     auto_sort_enabled = models.BooleanField(default=True)
+    is_default = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ["created_at"]
+        ordering = ["-is_default", "created_at"]
 
     def __str__(self) -> str:
         return f"{self.name} ({self.slug})"
@@ -148,13 +150,63 @@ class ProviderCredential(models.Model):
         return f"{self.workspace.slug}:{self.provider}"
 
 
-def create_default_workspace_for_user(user: User, name: str | None = None) -> Workspace:
+def get_owner_default_workspace(user: User) -> Workspace | None:
+    """Return the user's designated default owned workspace, falling back to earliest."""
+    return (
+        Workspace.objects.filter(owner=user)
+        .order_by("-is_default", "created_at")
+        .first()
+    )
+
+
+def resolve_workspace_credential(
+    workspace: Workspace, provider: str
+) -> tuple[ProviderCredential | None, bool]:
+    """
+    Resolve a BYOK credential for ``workspace`` checking vault-level overrides first
+    and falling back to the vault owner's default vault credential.
+
+    Returns ``(credential_or_none, is_inherited)``.
+    """
+    override = ProviderCredential.objects.filter(
+        workspace=workspace, provider=provider
+    ).first()
+    if override is not None:
+        return override, False
+
+    default_ws = get_owner_default_workspace(workspace.owner)
+    if default_ws is not None and default_ws.id != workspace.id:
+        inherited = ProviderCredential.objects.filter(
+            workspace=default_ws, provider=provider
+        ).first()
+        if inherited is not None:
+            return inherited, True
+
+    return None, False
+
+
+def resolve_workspace_secret(workspace: Workspace, provider: str) -> str:
+    """Decrypt a provider credential using vault-override -> owner-default inheritance."""
+    cred, _ = resolve_workspace_credential(workspace, provider)
+    return cred.get_secret() if cred is not None else ""
+
+
+def create_default_workspace_for_user(
+    user: User, name: str | None = None, description: str = ""
+) -> Workspace:
     """Create a default workspace and owner membership for a newly registered user."""
     base_name = name or (user.display_name or user.email.split("@")[0])
-    ws_name = f"{base_name}'s Vault"
+    ws_name = f"{base_name}'s Vault" if not name else name.strip()[:120]
     base_slug = slugify(base_name) or "vault"
     slug = f"{base_slug}-{str(uuid.uuid4())[:6]}"
-    workspace = Workspace.objects.create(name=ws_name, slug=slug, owner=user)
+    has_default = Workspace.objects.filter(owner=user, is_default=True).exists()
+    workspace = Workspace.objects.create(
+        name=ws_name,
+        slug=slug,
+        description=(description or "").strip()[:240],
+        owner=user,
+        is_default=not has_default,
+    )
     WorkspaceMembership.objects.create(
         workspace=workspace,
         user=user,

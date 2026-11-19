@@ -1,0 +1,38 @@
+# Tasks
+
+## 1. Accounts Data Model, Migration & BYOK Inheritance Helper
+
+- [x] 1.1 Update `Workspace` in `backend/apps/accounts/models.py` to add `description = models.CharField(max_length=240, blank=True, default="")` and `is_default = models.BooleanField(default=False)`, update `create_default_workspace_for_user` to set `is_default=True` (and accept optional `description`), and register `is_default` in `WorkspaceAdmin.list_display` (`backend/apps/accounts/admin.py`). Verify schema compiles cleanly with `cd backend && .venv/bin/python manage.py check`.
+- [x] 1.2 Generate and add reversible migration `backend/apps/accounts/migrations/0007_workspace_description_is_default.py` (including a `RunPython` backfill marking each existing user's earliest workspace `is_default=True`). Verify with `cd backend && .venv/bin/python manage.py migrate` and a migration check in `backend/tests/test_accounts.py`.
+- [x] 1.3 Add `get_owner_default_workspace`, `resolve_workspace_credential`, and `resolve_workspace_secret` in `backend/apps/accounts/models.py` implementing vault-override-first lookup with fallback to the vault owner's default vault, and update `resolve_user_workspace` (`backend/apps/accounts/auth.py`) to order/prefer `is_default=True` when `workspace_id` is omitted. Add unit tests in `backend/tests/test_accounts.py` covering default fallback, secondary-vault inheritance, and per-vault overrides, and verify with `.venv/bin/pytest tests/test_accounts.py`.
+
+## 2. Hardened `X-Workspace-Id` Auth & Multi-Vault API Endpoints
+
+- [x] 2.1 Harden `WorkspaceAuth.authenticate` (`backend/apps/accounts/auth.py`) to validate `X-Workspace-Id` as a UUID (`HttpError(400, ...)` on malformed values) and raise `HttpError(403, ...)` when the requested vault does not exist or the user lacks membership (avoiding `401` session invalidation), and add `"x-workspace-id"` to `CORS_ALLOW_HEADERS` in `backend/config/settings.py`. Verify with pytest cases in `backend/tests/test_accounts.py`.
+- [x] 2.2 Extend `WorkspaceOut`, `WorkspaceSettingsOut`, `WorkspaceSettingsPatchIn`, `UserOut`, and `CredentialOut` in `backend/apps/accounts/api.py` (`is_default`, `description`, `workspaces` summary list on `UserOut`, and `is_inherited` / `inherited_from_workspace_name` on `CredentialOut`), and update `list_credentials` and `delete_credential` so secondary vaults surface inherited status and deleting an override restores inheritance without deleting the default vault's key. Verify with pytest in `backend/tests/test_accounts.py`.
+- [x] 2.3 Add Vault CRUD endpoints on `auth_router` (`backend/apps/accounts/api.py`): `GET /workspaces` (list accessible vaults with `item_count` and `total_market_value`), `POST /workspaces` (create secondary vault, rejecting blank names with `400`), `PATCH /workspaces/{workspace_id}` (owner-only metadata/settings edit), `POST /workspaces/{workspace_id}/set-default` (atomic default swap), and `DELETE /workspaces/{workspace_id}` (owner-only, rejecting deletion of last owned vault with `400`, promoting earliest remaining vault + migrating non-overridden credentials when deleting the default vault, and deleting `ItemPhoto` files on commit). Add full API tests in `backend/tests/test_accounts.py` (CRUD, cross-user 403/404, tenant isolation between two vaults owned by the same user including `cert_number` independence, default promotion, last-vault guard) and verify with `.venv/bin/pytest tests/test_accounts.py`.
+
+## 3. Consistent BYOK Inheritance Across Vision, Valuation & Auto-Sort + Admin Aggregation
+
+- [x] 3.1 Update all remaining `ProviderCredential` readers to use `resolve_workspace_secret` / `resolve_workspace_credential`: `_get_workspace_secret` in `backend/apps/valuation/services.py`, `process_deferred_ai_enrichment_task` in `backend/apps/valuation/tasks.py`, `_get_secret` in `backend/apps/vision/services.py`, and `_get_workspace_ollama_config` in `backend/apps/catalog/auto_sort.py`. Add tests verifying secondary vaults inherit primary Gemini/PCGS/Ollama keys (and respect overrides) in `backend/tests/test_accounts.py` and `backend/tests/test_auto_sort.py` and run those test files.
+- [x] 3.2 Update `_serialize_admin_user` in `backend/apps/accounts/admin_api.py` to prefer the user's `is_default=True` workspace for `primary_workspace` and aggregate `item_count`, `container_count`, and `total_market_value` across all workspaces the user belongs to. Update/expand `backend/tests/test_admin_api.py` with a multi-vault collector test and run `.venv/bin/pytest tests/test_admin_api.py`.
+
+## 4. Frontend API Client, Cache Isolation & Navigation Vault Switcher
+
+- [x] 4.1 Update `frontend/src/lib/api.ts` (keeping new fields on `UserWorkspace`, `AuthUser`, and `CredentialStatus` optional for existing test mock compatibility): store `activeWorkspaceId` in `localStorage` (`stackerstash_workspace_id`), send `X-Workspace-Id` in `apiFetch`, recover cleanly when a stale vault returns `403` (clearing `activeWorkspaceId` and falling back without wiping the JWT token), and add `getWorkspaces`, `createWorkspace`, `updateWorkspace`, `setDefaultWorkspace`, and `deleteWorkspace` client methods. Add unit tests in `frontend/src/__tests__/vaults.test.tsx` and run `cd frontend && npm test -- vaults`.
+- [x] 4.2 Partition Workbox runtime caching in `frontend/vite.config.ts` (`api-items-valuation-cache`) by incorporating `request.headers.get("X-Workspace-Id") || "default"` via a Workbox `cacheKeyWillBeUsed` plugin (and clearing runtime cache if needed on switch), and wire active vault switching in `frontend/src/App.tsx` (`switchWorkspace`, canceling in-flight queries, clearing `queryClient`, refreshing `me`, and navigating away from `/items/:id` when switching or deleting an active vault). Verify build succeeds with `cd frontend && npm run build`.
+- [x] 4.3 Create `frontend/src/components/VaultSwitcher.tsx` (active vault selector dropdown with quick "+ New Vault" modal/form) and integrate it into both the desktop sidebar and mobile top header of `frontend/src/components/Layout.tsx`. Add tests in `frontend/src/__tests__/vaults.test.tsx` and update `frontend/src/__tests__/app.test.tsx` if needed, verifying switcher behavior via `cd frontend && npm test`.
+
+## 5. Settings "My Vaults" Management, Inherited Key UX & User Documentation
+
+- [x] 5.1 Update `frontend/src/pages/SettingsPage.tsx` to add a **My Vaults** section (list vaults with `Default` / `Active` badges, item count & value; create vault form; inline rename/description/currency/auto-sort edit; **Set Default** action; **Delete Vault** action disabled on last vault with confirmation) and update the BYOK credentials cards to distinguish **Inherited from `<Default Vault>`** vs. **Vault Override Configured** and reflect override removal returning to inherited state. Add Vitest coverage in `frontend/src/__tests__/vaults.test.tsx` and verify with `cd frontend && npm test`.
+- [x] 5.2 Document creating, switching, renaming, setting default, deleting vaults, and BYOK key inheritance/overrides in `docs/USER_GUIDE.md`. Verify markdown links/sections match implemented UI labels and routes.
+
+## 6. Full Regression Verification
+
+- [x] 6.1 Run the complete backend test suite (`cd backend && .venv/bin/pytest`), frontend TypeScript & test suite (`cd frontend && npx tsc --noEmit && npm test`), and frontend production build (`cd frontend && npm run build`) and confirm zero errors or regressions across all suites.
+
+## Workflow follow-up
+
+- Create a feature branch, commit, push, open a PR, and merge into `main` per repository workflow.
+- Run `/opsx-archive` on `multiple-vaults` after implementation and verification complete.

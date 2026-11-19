@@ -122,3 +122,35 @@ def test_admin_overview_reports_background_job_and_dependency_health(client):
     assert body["recent_identifications_24h"] == 1
     assert body["db_healthy"] is True
     assert isinstance(body["redis_healthy"], bool)
+
+
+@pytest.mark.django_db
+def test_admin_user_aggregates_metrics_across_multiple_vaults(client):
+    from apps.accounts.models import Workspace, WorkspaceMembership
+    from apps.catalog.models import Container
+
+    admin = User.objects.create_superuser(email="multi_admin@stackerstash.com", password="password123")
+    create_default_workspace_for_user(admin, name="Ops Vault")
+
+    collector = User.objects.create_user(email="multivault@example.com", password="password123")
+    v1 = create_default_workspace_for_user(collector, name="Personal")
+    v2 = Workspace.objects.create(name="IRA Bullion", slug="ira-bullion", owner=collector, is_default=False)
+    v3 = Workspace.objects.create(name="Trading Cards", slug="trading-cards", owner=collector, is_default=False)
+    WorkspaceMembership.objects.create(workspace=v2, user=collector, role=WorkspaceMembership.Role.OWNER)
+    WorkspaceMembership.objects.create(workspace=v3, user=collector, role=WorkspaceMembership.Role.OWNER)
+
+    Container.objects.create(workspace=v1, name="Safe 1")
+    Container.objects.create(workspace=v2, name="Safe 2")
+    CollectionItem.objects.create(workspace=v1, title="Eagle", quantity=2, market_value_unit=Decimal("35.00"))
+    CollectionItem.objects.create(workspace=v2, title="Buffalo", quantity=1, market_value_unit=Decimal("2600.00"))
+    CollectionItem.objects.create(workspace=v3, title="Charizard", quantity=1, market_value_unit=Decimal("300.00"))
+
+    token = issue_access_token(admin)
+    resp = client.get("/api/v1/admin/users?q=multivault", HTTP_AUTHORIZATION=f"Bearer {token}")
+    assert resp.status_code == 200
+    row = resp.json()[0]
+    assert row["workspace_count"] == 3
+    assert row["primary_workspace"]["id"] == str(v1.id)
+    assert row["item_count"] == 3
+    assert row["container_count"] == 2
+    assert row["total_market_value"] == "2970.00"

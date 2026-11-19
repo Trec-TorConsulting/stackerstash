@@ -1,4 +1,5 @@
 const TOKEN_KEY = "stackerstash_token";
+const WORKSPACE_ID_KEY = "stackerstash_workspace_id";
 
 export function getAuthToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -12,12 +13,38 @@ export function setAuthToken(token: string | null): void {
   }
 }
 
+export function getActiveWorkspaceId(): string | null {
+  return localStorage.getItem(WORKSPACE_ID_KEY);
+}
+
+export function setActiveWorkspaceId(workspaceId: string | null): void {
+  if (workspaceId) {
+    localStorage.setItem(WORKSPACE_ID_KEY, workspaceId);
+  } else {
+    localStorage.removeItem(WORKSPACE_ID_KEY);
+  }
+}
+
 export interface UserWorkspace {
   id: string;
   name: string;
   slug: string;
+  description?: string;
   default_currency: string;
   auto_sort_enabled?: boolean;
+  is_default?: boolean;
+  item_count?: number;
+  total_market_value?: string;
+}
+
+export interface WorkspaceSettings {
+  id: string;
+  name: string;
+  slug: string;
+  default_currency: string;
+  auto_sort_enabled: boolean;
+  description?: string;
+  is_default?: boolean;
 }
 
 export interface AuthUser {
@@ -27,6 +54,7 @@ export interface AuthUser {
   is_staff: boolean;
   is_superuser: boolean;
   workspace: UserWorkspace;
+  workspaces?: UserWorkspace[];
 }
 
 export interface AdminOverview {
@@ -291,6 +319,8 @@ export interface CredentialStatus {
   is_configured: boolean;
   masked_hint: string;
   updated_at: string | null;
+  is_inherited?: boolean;
+  inherited_from_workspace_name?: string | null;
 }
 
 export interface VisionCandidate {
@@ -335,17 +365,39 @@ export interface VisionIdentifyResponse {
   quota_deferred?: boolean;
 }
 
-async function _authorizedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+async function _authorizedFetch(
+  path: string,
+  init: RequestInit = {},
+  allowStaleWorkspaceRetry = true
+): Promise<Response> {
   const token = getAuthToken();
+  const activeWorkspaceId = getActiveWorkspaceId();
   const headers = new Headers(init.headers);
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
+  }
+  if (activeWorkspaceId && !headers.has("X-Workspace-Id")) {
+    headers.set("X-Workspace-Id", activeWorkspaceId);
   }
   if (!(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 
   const resp = await fetch(`/api/v1${path}`, { ...init, headers });
+  if (resp.status === 403 && activeWorkspaceId) {
+    setActiveWorkspaceId(null);
+    if (allowStaleWorkspaceRetry && path.startsWith("/auth/me")) {
+      const retryHeaders = new Headers(init.headers);
+      if (token) retryHeaders.set("Authorization", `Bearer ${token}`);
+      if (!(init.body instanceof FormData) && !retryHeaders.has("Content-Type")) {
+        retryHeaders.set("Content-Type", "application/json");
+      }
+      const retryResp = await fetch(`/api/v1${path}`, { ...init, headers: retryHeaders });
+      if (retryResp.ok) {
+        return retryResp;
+      }
+    }
+  }
   if (!resp.ok) {
     if (resp.status === 401) {
       setAuthToken(null);
@@ -387,6 +439,36 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   me: () => apiFetch<AuthUser>("/auth/me"),
+  getWorkspaces: () => apiFetch<UserWorkspace[]>("/auth/workspaces"),
+  createWorkspace: (payload: {
+    name: string;
+    description?: string;
+    default_currency?: string;
+    auto_sort_enabled?: boolean;
+  }) =>
+    apiFetch<UserWorkspace>("/auth/workspaces", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateWorkspace: (
+    workspaceId: string,
+    payload: {
+      name?: string;
+      description?: string;
+      default_currency?: string;
+      auto_sort_enabled?: boolean;
+    }
+  ) =>
+    apiFetch<UserWorkspace>(`/auth/workspaces/${workspaceId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  setDefaultWorkspace: (workspaceId: string) =>
+    apiFetch<UserWorkspace>(`/auth/workspaces/${workspaceId}/set-default`, {
+      method: "POST",
+    }),
+  deleteWorkspace: (workspaceId: string) =>
+    apiFetch<void>(`/auth/workspaces/${workspaceId}`, { method: "DELETE" }),
   updateProfile: (payload: { display_name: string }) =>
     apiFetch<AuthUser>("/auth/me", {
       method: "PATCH",
@@ -565,13 +647,14 @@ export const api = {
     });
   },
 
-  getWorkspaceSettings: () => apiFetch<Required<UserWorkspace>>("/settings/workspace"),
+  getWorkspaceSettings: () => apiFetch<WorkspaceSettings>("/settings/workspace"),
   updateWorkspaceSettings: (payload: {
     name?: string;
+    description?: string;
     default_currency?: string;
     auto_sort_enabled?: boolean;
   }) =>
-    apiFetch<Required<UserWorkspace>>("/settings/workspace", {
+    apiFetch<WorkspaceSettings>("/settings/workspace", {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),

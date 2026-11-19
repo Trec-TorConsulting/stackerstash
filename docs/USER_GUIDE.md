@@ -88,8 +88,12 @@ Stacker Stash includes an **Import / Migrate** wizard on the **Collection** page
 
 ---
 
-## 7. Account Security & BYOK API Keys (Settings)
-Navigate to **Settings** to manage your display name, password, account deletion, Auto-Sort toggle, and optional Bring-Your-Own-Key credentials (encrypted at rest with Fernet):
+## 7. Multi-Vault Management, Account Security & BYOK API Keys (Settings)
+- **Managing Multiple Vaults**: Use the **Vault Switcher** in the sidebar/header (or **My Vaults** in **Settings**) to create isolated vaults (e.g., *Personal Stack*, *IRA Bullion*, *Trading Cards*), switch active vaults, edit vault names/descriptions/currencies, set a **Default** vault, or delete non-final vaults safely. Each vault keeps its own items, containers, dashboard totals, exports, and slab cert uniqueness.
+- **Account Security**: Update your display name, change your password, or permanently delete your account under **Profile & Account Security**.
+- **BYOK Inheritance & Per-Vault Overrides**: Configure Bring-Your-Own-Key API credentials encrypted at rest in **Settings**:
+  - Keys saved on your **Default** vault are automatically inherited across secondary vaults (Vision AI, appraisals, deferred AI enrichment, and Ollama auto-sort).
+  - Saving a key while a secondary vault is active creates a **Vault Override**; removing that override cleanly restores inheritance from your Default vault.
 - **Gemini API Key**: Enables Gemini Vision coin/banknote identification & AI valuation.
 - **Ollama URL / Model**: Self-hosted vision fallback (e.g., `http://localhost:11434`).
 - **PCGS Public API Token**: Enables automated PCGS Price Guide lookups by cert number.

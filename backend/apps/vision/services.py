@@ -13,7 +13,7 @@ import httpx
 from django.core.cache import cache
 from PIL import Image, ImageOps
 
-from apps.accounts.models import ProviderCredential, Workspace
+from apps.accounts.models import ProviderCredential, Workspace, resolve_workspace_secret
 from apps.catalog.models import CollectionItem
 
 from .models import IdentificationJob
@@ -89,8 +89,7 @@ Strict rules:
 
 
 def _get_secret(workspace: Workspace, provider: str) -> str:
-    cred = ProviderCredential.objects.filter(workspace=workspace, provider=provider).first()
-    return cred.get_secret() if cred else ""
+    return resolve_workspace_secret(workspace, provider)
 
 
 def _extract_json_block(text: str) -> dict[str, Any]:

@@ -10,7 +10,7 @@ from typing import Any
 from django.db import transaction
 from django.utils import timezone
 
-from apps.accounts.models import ProviderCredential, Workspace
+from apps.accounts.models import ProviderCredential, Workspace, resolve_workspace_secret
 from apps.catalog.models import CollectionItem
 
 from .models import AppraisalJob, SpotPriceSnapshot, ValuationHistory
@@ -95,8 +95,7 @@ def refresh_spot_prices() -> dict[str, Decimal]:
 
 
 def _get_workspace_secret(workspace: Workspace, provider: str) -> str:
-    cred = ProviderCredential.objects.filter(workspace=workspace, provider=provider).first()
-    return cred.get_secret() if cred else ""
+    return resolve_workspace_secret(workspace, provider)
 
 
 def _merge_enriched_specs(

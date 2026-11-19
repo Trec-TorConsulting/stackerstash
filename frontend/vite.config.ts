@@ -47,6 +47,15 @@ export default defineConfig({
               cacheableResponse: {
                 statuses: [0, 200],
               },
+              plugins: [
+                {
+                  cacheKeyWillBeUsed: async ({ request }: { request: Request }) => {
+                    const ws = request.headers.get("X-Workspace-Id") || "default";
+                    const sep = request.url.includes("?") ? "&" : "?";
+                    return `${request.url}${sep}__ws=${encodeURIComponent(ws)}`;
+                  },
+                },
+              ],
             },
           },
           {
