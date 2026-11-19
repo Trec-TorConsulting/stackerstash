@@ -109,7 +109,131 @@ def test_byok_free_backup_provider_credentials(api_client, user_a, provider, sec
 
 
 @pytest.mark.django_db
-def test_health_and_readiness_probes(api_client):
+def test_health_and_readiness_probes(api_client, settings, monkeypatch):
+    import redis
+
     assert api_client.get("/healthz").status_code == 200
     assert api_client.get("/readyz").status_code == 200
+
+    settings.READY_CHECK_REDIS = True
+
+    class _DownRedis:
+        def ping(self):
+            raise ConnectionError("redis unreachable")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(redis, "from_url", lambda *args, **kwargs: _DownRedis())
+    down_resp = api_client.get("/readyz")
+    assert down_resp.status_code == 503
+    assert "redis unreachable" in down_resp.json()["detail"]
+
+    class _UpRedis:
+        def ping(self):
+            return True
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(redis, "from_url", lambda *args, **kwargs: _UpRedis())
+    assert api_client.get("/readyz").status_code == 200
+
+
+@pytest.mark.django_db
+def test_self_service_account_crud_and_deletion_cleanup(api_client, user_a):
+    import io
+
+    from django.core.files.uploadedfile import SimpleUploadedFile
+    from PIL import Image
+
+    from apps.accounts.models import User, Workspace
+    from apps.catalog.models import CollectionItem, ItemPhoto
+
+    user, ws, token = user_a
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    # 1. Update display_name
+    patch_resp = api_client.patch(
+        "/api/v1/auth/me",
+        data=json.dumps({"display_name": "Alice Collector"}),
+        content_type="application/json",
+        **headers,
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["display_name"] == "Alice Collector"
+
+    # 2. Change password validation & update
+    bad_pw = api_client.post(
+        "/api/v1/auth/change-password",
+        data=json.dumps({"current_password": "WrongPassword", "new_password": "NewPassword123!"}),
+        content_type="application/json",
+        **headers,
+    )
+    assert bad_pw.status_code == 400
+
+    short_pw = api_client.post(
+        "/api/v1/auth/change-password",
+        data=json.dumps({"current_password": "StrongPassword123!", "new_password": "short"}),
+        content_type="application/json",
+        **headers,
+    )
+    assert short_pw.status_code == 400
+
+    good_pw = api_client.post(
+        "/api/v1/auth/change-password",
+        data=json.dumps({"current_password": "StrongPassword123!", "new_password": "NewPassword123!"}),
+        content_type="application/json",
+        **headers,
+    )
+    assert good_pw.status_code == 200
+
+    login_new = api_client.post(
+        "/api/v1/auth/login",
+        data=json.dumps({"email": user.email, "password": "NewPassword123!"}),
+        content_type="application/json",
+    )
+    assert login_new.status_code == 200
+
+    # 3. Upload a photo before deleting account so we verify media cleanup
+    item = CollectionItem.objects.create(workspace=ws, title="Temp Coin", category="COIN")
+    img = Image.new("RGB", (40, 40), color=(200, 180, 120))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    up = SimpleUploadedFile("temp.png", buf.getvalue(), content_type="image/png")
+    p_resp = api_client.post(
+        f"/api/v1/catalog/items/{item.id}/photos",
+        data={"file": up, "label": "OBVERSE", "is_primary": "true"},
+        **headers,
+    )
+    assert p_resp.status_code == 201
+    photo = ItemPhoto.objects.get(item=item)
+    storage = photo.image.storage
+    img_name = photo.image.name
+    thumb_name = photo.thumbnail.name
+    assert storage.exists(img_name)
+
+    # Wrong password rejected with 403
+    bad_del = api_client.delete(
+        "/api/v1/auth/me",
+        data=json.dumps({"password": "WrongPassword"}),
+        content_type="application/json",
+        **headers,
+    )
+    assert bad_del.status_code == 403
+    assert User.objects.filter(id=user.id).exists()
+
+    # Correct password deletes user, workspace, and stored photo/thumbnail files on commit
+    del_resp = api_client.delete(
+        "/api/v1/auth/me",
+        data=json.dumps({"password": "NewPassword123!"}),
+        content_type="application/json",
+        **headers,
+    )
+    assert del_resp.status_code == 204
+    assert not User.objects.filter(id=user.id).exists()
+    assert not Workspace.objects.filter(id=ws.id).exists()
+    assert not storage.exists(img_name)
+    if thumb_name:
+        assert not storage.exists(thumb_name)
 

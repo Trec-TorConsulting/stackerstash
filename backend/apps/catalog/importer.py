@@ -582,11 +582,15 @@ def _resolve_container_by_name(
 
 
 def _enqueue_csv_batch_appraisals(item_ids: list[Any], workspace_id: Any) -> None:
-    """Run background appraisals for CSV-imported items throttled to 2 workers."""
+    """Run background appraisals after commit, sequentially on SQLite to avoid locks."""
     import threading
-    from django.db import close_old_connections
+
+    from django.db import close_old_connections, connection, transaction
+
     from apps.accounts.models import Workspace
     from apps.valuation.services import start_appraisal_job
+
+    is_sqlite = connection.vendor == "sqlite"
 
     def _worker() -> None:
         close_old_connections()
@@ -603,12 +607,18 @@ def _enqueue_csv_batch_appraisals(item_ids: list[Any], workspace_id: Any) -> Non
                 finally:
                     close_old_connections()
 
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                list(pool.map(_run_one, item_ids))
+            if is_sqlite:
+                for iid in item_ids:
+                    _run_one(iid)
+            else:
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    list(pool.map(_run_one, item_ids))
+        except Exception:
+            pass
         finally:
             close_old_connections()
 
-    threading.Thread(target=_worker, daemon=True).start()
+    transaction.on_commit(lambda: threading.Thread(target=_worker, daemon=True).start())
 
 
 def import_mapped_csv(

@@ -12,11 +12,12 @@ from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from ninja import File, Form, Router, Schema, UploadedFile
+from ninja import File, Form, Router, Schema, Status, UploadedFile
 from ninja.errors import HttpError
 from PIL import Image
 
 from apps.accounts.auth import WorkspaceAuth
+from config.media_signing import build_signed_media_url
 
 from .image_processing import generate_image_thumbnail, process_item_image, rotate_item_image
 from .importer import TARGET_FIELDS, import_mapped_csv, preview_csv
@@ -332,9 +333,15 @@ class BulkUpdateOut(Schema):
 # ---------------------------------------------------------------------------
 
 
+def _signed_field_url(field) -> str | None:
+    if not field or not getattr(field, "name", ""):
+        return None
+    return build_signed_media_url(field.name)
+
+
 def _photo_to_out(photo: ItemPhoto) -> PhotoOut:
-    url = photo.image.url if photo.image else ""
-    thumb_url = photo.thumbnail.url if photo.thumbnail else (url or None)
+    url = _signed_field_url(photo.image) or ""
+    thumb_url = _signed_field_url(photo.thumbnail) or (url or None)
     return PhotoOut(
         id=photo.id,
         url=url,
@@ -392,7 +399,11 @@ def _apply_card_fields(
 
 def _item_to_out(item: CollectionItem, appraisal_job_id: UUID | None = None) -> ItemOut:
     photos = list(item.photos.all())
-    primary = next((p for p in photos if p.is_primary), photos[0] if photos else None)
+    photo_outs = [_photo_to_out(p) for p in photos]
+    primary_out = next(
+        (p_out for p_out in photo_outs if p_out.is_primary),
+        photo_outs[0] if photo_outs else None,
+    )
     attrs = item.attributes if isinstance(item.attributes, dict) else {}
     is_card = item.is_card_item
     set_name = str(attrs.get("set_name") or (item.series if is_card else "") or "")
@@ -478,16 +489,20 @@ def _item_to_out(item: CollectionItem, appraisal_job_id: UUID | None = None) -> 
         tags=item.tags or [],
         attributes=item.attributes or {},
         notes=item.notes,
-        primary_photo_url=primary.image.url if primary and primary.image else None,
-        primary_thumbnail_url=(
-            primary.thumbnail.url
-            if primary and primary.thumbnail
-            else (primary.image.url if primary and primary.image else None)
-        ),
-        photos=[_photo_to_out(p) for p in photos],
+        primary_photo_url=(primary_out.url or None) if primary_out else None,
+        primary_thumbnail_url=primary_out.thumbnail_url if primary_out else None,
+        photos=photo_outs,
         created_at=item.created_at,
         updated_at=item.updated_at,
     )
+
+
+def _delete_photo_files(photo: ItemPhoto) -> None:
+    """Remove both full-size image and thumbnail derivatives from storage."""
+    if photo.image:
+        photo.image.delete(save=False)
+    if photo.thumbnail:
+        photo.thumbnail.delete(save=False)
 
 
 def _validate_container(workspace, container_id: UUID | None) -> Container | None:
@@ -499,17 +514,22 @@ def _validate_container(workspace, container_id: UUID | None) -> Container | Non
     return container
 
 
-# ---------------------------------------------------------------------------
-# Containers
-# ---------------------------------------------------------------------------
+def _assert_no_container_cycle(container: Container, new_parent: Container | None) -> None:
+    """Reject assigning a container's parent to itself or any descendant."""
+    seen: set[UUID] = {container.id}
+    current = new_parent
+    while current is not None:
+        if current.id in seen:
+            raise HttpError(400, "Circular container hierarchy is not allowed.")
+        seen.add(current.id)
+        current = current.parent
 
 
-@catalog_router.get("/containers", response=list[ContainerOut])
-def list_containers(request):
-    containers = list(Container.objects.filter(workspace=request.workspace))
+def _build_container_tree(workspace) -> list[ContainerOut]:
+    containers = list(Container.objects.filter(workspace=workspace))
     items = list(
         CollectionItem.objects.filter(
-            workspace=request.workspace,
+            workspace=workspace,
             container__isnull=False,
         ).exclude(status=CollectionItem.Status.SOLD)
     )
@@ -551,6 +571,26 @@ def list_containers(request):
     return [build_node(root) for root in children_map.get(None, [])]
 
 
+def _find_container_node(nodes: list[ContainerOut], target_id: UUID) -> ContainerOut | None:
+    for node in nodes:
+        if node.id == target_id:
+            return node
+        match = _find_container_node(node.children, target_id)
+        if match is not None:
+            return match
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Containers
+# ---------------------------------------------------------------------------
+
+
+@catalog_router.get("/containers", response=list[ContainerOut])
+def list_containers(request):
+    return _build_container_tree(request.workspace)
+
+
 @catalog_router.post("/containers", response={201: ContainerOut})
 def create_container(request, payload: ContainerIn):
     parent = _validate_container(request.workspace, payload.parent_id)
@@ -561,31 +601,37 @@ def create_container(request, payload: ContainerIn):
         container_type=payload.container_type,
         location_notes=payload.location_notes,
     )
-    return 201, ContainerOut(
-        id=container.id,
-        name=container.name,
-        container_type=container.container_type,
-        parent_id=container.parent_id,
-        location_notes=container.location_notes,
-        direct_item_count=0,
-        total_item_count=0,
-        total_market_value=Decimal("0.00"),
-        total_melt_value=Decimal("0.00"),
-        children=[],
+    return Status(
+        201,
+        ContainerOut(
+            id=container.id,
+            name=container.name,
+            container_type=container.container_type,
+            parent_id=container.parent_id,
+            location_notes=container.location_notes,
+            direct_item_count=0,
+            total_item_count=0,
+            total_market_value=Decimal("0.00"),
+            total_melt_value=Decimal("0.00"),
+            children=[],
+        ),
     )
 
 
 @catalog_router.patch("/containers/{container_id}", response=ContainerOut)
 def update_container(request, container_id: UUID, payload: ContainerIn):
     container = get_object_or_404(Container, id=container_id, workspace=request.workspace)
-    if payload.parent_id == container.id:
-        raise HttpError(400, "A container cannot be its own parent.")
     parent = _validate_container(request.workspace, payload.parent_id)
+    _assert_no_container_cycle(container, parent)
     container.name = payload.name.strip()
     container.container_type = payload.container_type
     container.parent = parent
     container.location_notes = payload.location_notes
     container.save()
+    tree = _build_container_tree(request.workspace)
+    node = _find_container_node(tree, container.id)
+    if node is not None:
+        return node
     return ContainerOut(
         id=container.id,
         name=container.name,
@@ -604,7 +650,7 @@ def update_container(request, container_id: UUID, payload: ContainerIn):
 def delete_container(request, container_id: UUID):
     container = get_object_or_404(Container, id=container_id, workspace=request.workspace)
     container.delete()
-    return 204, None
+    return Status(204, None)
 
 
 # ---------------------------------------------------------------------------
@@ -804,7 +850,7 @@ def create_item(request, payload: ItemIn):
         job = start_appraisal_job(item, request.workspace)
         job_id = job.id
 
-    return 201, _item_to_out(item, appraisal_job_id=job_id)
+    return Status(201, _item_to_out(item, appraisal_job_id=job_id))
 
 
 @catalog_router.post("/items/bulk-delete", response=BulkDeleteOut)
@@ -818,7 +864,7 @@ def bulk_delete_items(request, payload: BulkDeleteIn):
     items = list(qs)
     for item in items:
         for photo in item.photos.all():
-            photo.image.delete(save=False)
+            _delete_photo_files(photo)
     CollectionItem.objects.filter(
         workspace=request.workspace, id__in=[item.id for item in items]
     ).delete()
@@ -999,13 +1045,80 @@ def update_item(request, item_id: UUID, payload: ItemPatch):
     return _item_to_out(item)
 
 
+@catalog_router.post("/items/{item_id}/duplicate", response={201: ItemOut})
+@transaction.atomic
+def duplicate_item(request, item_id: UUID):
+    from apps.catalog.auto_sort import enqueue_item_auto_sort
+    from apps.valuation.services import refresh_item_melt_from_latest_spot
+
+    src = get_object_or_404(
+        CollectionItem.objects.select_related("container"),
+        id=item_id,
+        workspace=request.workspace,
+    )
+    suffix = " (Copy)"
+    base_title = src.title[: 240 - len(suffix)] if len(src.title) + len(suffix) > 240 else src.title
+    cloned = CollectionItem.objects.create(
+        workspace=request.workspace,
+        container=src.container,
+        category=src.category,
+        status=CollectionItem.Status.IN_COLLECTION,
+        title=f"{base_title}{suffix}",
+        country=src.country,
+        year=src.year,
+        mint_or_refiner=src.mint_or_refiner,
+        denomination=src.denomination,
+        series=src.series,
+        quantity=src.quantity,
+        metal_type=src.metal_type,
+        weight_value=src.weight_value,
+        weight_unit=src.weight_unit,
+        purity=src.purity,
+        grading_service=src.grading_service,
+        cert_number="",
+        grade=src.grade,
+        estimated_grade=src.estimated_grade,
+        serial_number=src.serial_number,
+        purchase_price=src.purchase_price,
+        purchase_date=src.purchase_date,
+        vendor=src.vendor,
+        sold_price=None,
+        sold_date=None,
+        market_value_unit=src.market_value_unit,
+        valuation_source=src.valuation_source,
+        is_estimate=src.is_estimate,
+        mint_mark=src.mint_mark,
+        mintage=src.mintage,
+        variety=src.variety,
+        composition=src.composition,
+        gross_weight_grams=src.gross_weight_grams,
+        diameter_mm=src.diameter_mm,
+        thickness_mm=src.thickness_mm,
+        edge_type=src.edge_type,
+        designer=src.designer,
+        catalog_numbers=dict(src.catalog_numbers or {}),
+        attributes=dict(src.attributes or {}),
+        tags=list(src.tags or []),
+        notes=src.notes,
+        intake_source=CollectionItem.IntakeSource.MANUAL,
+    )
+    refresh_item_melt_from_latest_spot(cloned)
+    enqueue_item_auto_sort(cloned)
+    cloned = (
+        CollectionItem.objects.select_related("container")
+        .prefetch_related("photos")
+        .get(id=cloned.id)
+    )
+    return Status(201, _item_to_out(cloned))
+
+
 @catalog_router.delete("/items/{item_id}", response={204: None})
 def delete_item(request, item_id: UUID):
     item = get_object_or_404(CollectionItem, id=item_id, workspace=request.workspace)
     for photo in item.photos.all():
-        photo.image.delete(save=False)
+        _delete_photo_files(photo)
     item.delete()
-    return 204, None
+    return Status(204, None)
 
 
 # ---------------------------------------------------------------------------
@@ -1159,7 +1272,7 @@ def upload_item_photo(
         height=height,
     )
 
-    return 201, _photo_to_out(photo)
+    return Status(201, _photo_to_out(photo))
 
 
 class RotatePhotoIn(Schema):
@@ -1218,14 +1331,14 @@ def delete_item_photo(request, item_id: UUID, photo_id: UUID):
     item = get_object_or_404(CollectionItem, id=item_id, workspace=request.workspace)
     photo = get_object_or_404(ItemPhoto, id=photo_id, item=item, workspace=request.workspace)
     was_primary = photo.is_primary
-    photo.image.delete(save=False)
+    _delete_photo_files(photo)
     photo.delete()
     if was_primary:
         replacement = item.photos.first()
         if replacement:
             replacement.is_primary = True
             replacement.save(update_fields=["is_primary"])
-    return 204, None
+    return Status(204, None)
 
 
 # ---------------------------------------------------------------------------

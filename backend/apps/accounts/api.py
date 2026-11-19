@@ -1,13 +1,14 @@
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from django.contrib.auth import authenticate
 from django.db import transaction
-from ninja import Router, Schema
+from ninja import Router, Schema, Status
 from ninja.errors import HttpError
 
 from .auth import WorkspaceAuth, issue_access_token, resolve_user_workspace
-from .models import ProviderCredential, User, create_default_workspace_for_user
+from .models import ProviderCredential, User, Workspace, create_default_workspace_for_user
 
 auth_router = Router(tags=["Auth"])
 settings_router = Router(tags=["Settings"], auth=WorkspaceAuth())
@@ -74,6 +75,19 @@ class CredentialIn(Schema):
     value: str
 
 
+class MePatchIn(Schema):
+    display_name: str
+
+
+class ChangePasswordIn(Schema):
+    current_password: str
+    new_password: str
+
+
+class DeleteAccountIn(Schema):
+    password: str
+
+
 def _serialize_user(user: User, workspace=None) -> UserOut:
     ws = workspace or resolve_user_workspace(user)
     if ws is None:
@@ -112,7 +126,7 @@ def register(request, payload: RegisterIn):
     )
     workspace = create_default_workspace_for_user(user, name=payload.workspace_name)
     token = issue_access_token(user)
-    return 201, AuthResponse(access_token=token, user=_serialize_user(user, workspace))
+    return Status(201, AuthResponse(access_token=token, user=_serialize_user(user, workspace)))
 
 
 @auth_router.post("/login", response=AuthResponse)
@@ -128,6 +142,56 @@ def login(request, payload: LoginIn):
 @auth_router.get("/me", response=UserOut, auth=WorkspaceAuth())
 def me(request):
     return _serialize_user(request.user, request.workspace)
+
+
+@auth_router.patch("/me", response=UserOut, auth=WorkspaceAuth())
+def update_me(request, payload: MePatchIn):
+    user = request.user
+    user.display_name = payload.display_name.strip()[:120]
+    user.save(update_fields=["display_name"])
+    return _serialize_user(user, request.workspace)
+
+
+@auth_router.post("/change-password", auth=WorkspaceAuth())
+def change_password(request, payload: ChangePasswordIn):
+    user = request.user
+    if not user.check_password(payload.current_password):
+        raise HttpError(400, "Current password is incorrect.")
+    if len(payload.new_password) < 8:
+        raise HttpError(400, "New password must be at least 8 characters.")
+    user.set_password(payload.new_password)
+    user.save(update_fields=["password"])
+    return {"detail": "Password updated."}
+
+
+@auth_router.delete("/me", response={204: None}, auth=WorkspaceAuth())
+@transaction.atomic
+def delete_me(request, payload: DeleteAccountIn):
+    from apps.catalog.models import ItemPhoto
+
+    user = request.user
+    if not user.check_password(payload.password):
+        raise HttpError(403, "Password verification failed.")
+
+    owned_workspaces = list(Workspace.objects.filter(owner=user))
+    media_cleanup: list[tuple[Any, str]] = []
+    if owned_workspaces:
+        for photo in ItemPhoto.objects.filter(workspace__in=owned_workspaces):
+            if photo.image and photo.image.name:
+                media_cleanup.append((photo.image.storage, photo.image.name))
+            if photo.thumbnail and photo.thumbnail.name:
+                media_cleanup.append((photo.thumbnail.storage, photo.thumbnail.name))
+        Workspace.objects.filter(id__in=[ws.id for ws in owned_workspaces]).delete()
+
+    user.delete()
+
+    for storage, name in media_cleanup:
+        try:
+            storage.delete(name)
+        except Exception:
+            pass
+
+    return Status(204, None)
 
 
 @settings_router.get("/workspace", response=WorkspaceSettingsOut)
@@ -220,4 +284,4 @@ def delete_credential(request, provider: str):
         workspace=request.workspace,
         provider=provider,
     ).delete()
-    return 204, None
+    return Status(204, None)

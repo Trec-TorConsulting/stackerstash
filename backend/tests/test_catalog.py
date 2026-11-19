@@ -667,6 +667,7 @@ def test_goldback_on_shadowed_white_paper_sheet_background_removal():
 
 def test_assay_card_with_mixed_border_and_small_coin_preserves_full_card():
     from PIL import ImageDraw
+
     from apps.catalog.image_processing import process_item_image
 
     # White desk with dark top/bottom desk edges + dark-artwork assay card containing an off-center bright coin
@@ -1070,3 +1071,196 @@ def test_duplicate_slab_cert_number_prevented(api_client, user_a, user_b):
     )
     assert r_patch_self.status_code == 200
     assert r_patch_self.json()["grade"] == "MS65"
+
+
+@pytest.mark.django_db
+def test_signed_media_blocks_unsigned_tampered_expired_and_traversal(api_client, user_a, settings):
+    from config.media_signing import build_signed_media_url
+
+    settings.DEBUG = False
+    _, _, token_a = user_a
+    headers_a = {"HTTP_AUTHORIZATION": f"Bearer {token_a}"}
+
+    item = api_client.post(
+        "/api/v1/catalog/items",
+        data=json.dumps({"title": "Signed Bar", "category": "BAR"}),
+        content_type="application/json",
+        **headers_a,
+    ).json()
+
+    img = Image.new("RGB", (60, 60), color=(212, 175, 55))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    upload = SimpleUploadedFile("bar.png", buf.getvalue(), content_type="image/png")
+
+    p_resp = api_client.post(
+        f"/api/v1/catalog/items/{item['id']}/photos",
+        data={"file": upload, "label": "OBVERSE", "is_primary": "true"},
+        **headers_a,
+    )
+    assert p_resp.status_code == 201
+    signed_url = p_resp.json()["url"]
+    assert signed_url.startswith("/media/s/")
+    assert signed_url.endswith(".webp")
+
+    # 1. Valid signed URL returns 200
+    assert api_client.get(signed_url).status_code == 200
+
+    # Extract relative path from /media/s/<exp>/<sig>/<rel_path>
+    parts = signed_url.split("/", 5)
+    exp_str, sig, rel_path = parts[3], parts[4], parts[5]
+
+    # 2. Unsigned direct path -> 403
+    assert api_client.get(f"/media/{rel_path}").status_code == 403
+
+    # 3. Tampered signature -> 403
+    bad_sig = ("0" if sig[0] != "0" else "1") + sig[1:]
+    assert api_client.get(f"/media/s/{exp_str}/{bad_sig}/{rel_path}").status_code == 403
+
+    # 4. Expired signed URL -> 403
+    expired_url = build_signed_media_url(rel_path, now=0)
+    assert api_client.get(expired_url).status_code == 403
+
+    # 5. Path traversal -> 404
+    assert api_client.get("/media/..%2F..%2Fetc%2Fpasswd").status_code == 404
+    assert api_client.get(f"/media/s/{exp_str}/{sig}/../secret.webp").status_code == 404
+
+    # 6. Missing signed file -> 404
+    missing_url = build_signed_media_url("workspaces/missing/none.webp")
+    assert api_client.get(missing_url).status_code == 404
+
+
+@pytest.mark.django_db
+def test_container_cycle_guard_rollup_duplicate_item_and_thumbnail_cleanup(api_client, user_a):
+    from apps.catalog.models import ItemPhoto
+
+    _, ws, token_a = user_a
+    headers_a = {"HTTP_AUTHORIZATION": f"Bearer {token_a}"}
+
+    # Build A -> B -> C container hierarchy
+    c_a = api_client.post(
+        "/api/v1/catalog/containers",
+        data=json.dumps({"name": "Safe A", "container_type": "SAFE"}),
+        content_type="application/json",
+        **headers_a,
+    ).json()
+    c_b = api_client.post(
+        "/api/v1/catalog/containers",
+        data=json.dumps({"name": "Box B", "container_type": "BOX", "parent_id": c_a["id"]}),
+        content_type="application/json",
+        **headers_a,
+    ).json()
+    c_c = api_client.post(
+        "/api/v1/catalog/containers",
+        data=json.dumps({"name": "Tube C", "container_type": "TUBE", "parent_id": c_b["id"]}),
+        content_type="application/json",
+        **headers_a,
+    ).json()
+
+    # Multi-hop cycle A -> C -> A rejected with 400
+    cycle_resp = api_client.patch(
+        f"/api/v1/catalog/containers/{c_a['id']}",
+        data=json.dumps({
+            "name": "Safe A",
+            "container_type": "SAFE",
+            "parent_id": c_c["id"],
+            "location_notes": "Corner",
+        }),
+        content_type="application/json",
+        **headers_a,
+    )
+    assert cycle_resp.status_code == 400
+
+    # Create item in C and patch B -> returns real rolled-up total_item_count & children
+    item = api_client.post(
+        "/api/v1/catalog/items",
+        data=json.dumps({
+            "title": "1921 Morgan Dollar",
+            "category": "SLAB",
+            "container_id": c_c["id"],
+            "quantity": 2,
+            "grading_service": "PCGS",
+            "cert_number": "99887766",
+            "grade": "MS64",
+            "market_value_unit": "90.00",
+        }),
+        content_type="application/json",
+        **headers_a,
+    ).json()
+
+    patch_b = api_client.patch(
+        f"/api/v1/catalog/containers/{c_b['id']}",
+        data=json.dumps({
+            "name": "Box B Updated",
+            "container_type": "BOX",
+            "parent_id": c_a["id"],
+            "location_notes": "Top Shelf",
+        }),
+        content_type="application/json",
+        **headers_a,
+    )
+    assert patch_b.status_code == 200
+    b_data = patch_b.json()
+    assert b_data["name"] == "Box B Updated"
+    assert b_data["total_item_count"] == 2
+    assert len(b_data["children"]) == 1
+    assert b_data["children"][0]["id"] == c_c["id"]
+
+    # Mark item SOLD, then duplicate -> resets status, clears cert_number & sold fields
+    api_client.patch(
+        f"/api/v1/catalog/items/{item['id']}",
+        data=json.dumps({"status": "SOLD", "sold_price": "190.00", "sold_date": "2026-01-15"}),
+        content_type="application/json",
+        **headers_a,
+    )
+    dup_resp = api_client.post(
+        f"/api/v1/catalog/items/{item['id']}/duplicate",
+        **headers_a,
+    )
+    assert dup_resp.status_code == 201
+    dup = dup_resp.json()
+    assert dup["title"] == "1921 Morgan Dollar (Copy)"
+    assert dup["status"] == "IN_COLLECTION"
+    assert dup["cert_number"] == ""
+    assert dup["sold_price"] is None
+    assert dup["sold_date"] is None
+
+    # Upload 2 photos with thumbnails, delete one photo -> image & thumbnail removed from disk
+    def _upload_one():
+        im = Image.new("RGB", (60, 60), color=(180, 180, 180))
+        b = io.BytesIO()
+        im.save(b, format="PNG")
+        return api_client.post(
+            f"/api/v1/catalog/items/{dup['id']}/photos",
+            data={"file": SimpleUploadedFile("c.png", b.getvalue(), content_type="image/png"), "label": "OBVERSE"},
+            **headers_a,
+        ).json()
+
+    p1 = _upload_one()
+    p2 = _upload_one()
+    photo1 = ItemPhoto.objects.get(id=p1["id"])
+    photo2 = ItemPhoto.objects.get(id=p2["id"])
+    st = photo1.image.storage
+    p1_img, p1_thumb = photo1.image.name, photo1.thumbnail.name
+    p2_img, p2_thumb = photo2.image.name, photo2.thumbnail.name
+    assert st.exists(p1_img) and st.exists(p1_thumb)
+
+    del_p1 = api_client.delete(
+        f"/api/v1/catalog/items/{dup['id']}/photos/{p1['id']}",
+        **headers_a,
+    )
+    assert del_p1.status_code == 204
+    assert not st.exists(p1_img)
+    assert not st.exists(p1_thumb)
+
+    # Bulk delete remaining duplicated item -> photo2 image & thumbnail also removed from disk
+    bulk_del = api_client.post(
+        "/api/v1/catalog/items/bulk-delete",
+        data=json.dumps({"item_ids": [dup["id"]]}),
+        content_type="application/json",
+        **headers_a,
+    )
+    assert bulk_del.status_code == 200
+    assert bulk_del.json()["deleted_count"] == 1
+    assert not st.exists(p2_img)
+    assert not st.exists(p2_thumb)

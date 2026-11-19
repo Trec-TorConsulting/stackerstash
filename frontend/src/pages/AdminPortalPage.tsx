@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
+  AlertCircle,
   Building2,
   Coins,
   ExternalLink,
@@ -13,6 +14,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { useToast } from "../components/ToastProvider";
 import { api, type AdminUserRecord, type AuthUser } from "../lib/api";
 import { formatUsd } from "../lib/format";
 
@@ -22,6 +24,7 @@ interface AdminPortalPageProps {
 
 export function AdminPortalPage({ currentUser }: AdminPortalPageProps) {
   const qc = useQueryClient();
+  const toast = useToast();
   const [tab, setTab] = useState<"users" | "workspaces">("users");
   const [userSearch, setUserSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive" | "admins">("all");
@@ -58,11 +61,14 @@ export function AdminPortalPage({ currentUser }: AdminPortalPageProps) {
     }) => api.adminUpdateUser(userId, payload),
     onSuccess: () => {
       setActionError(null);
+      toast.success("User access updated.");
       qc.invalidateQueries({ queryKey: ["admin-users"] });
       qc.invalidateQueries({ queryKey: ["admin-overview"] });
     },
     onError: (err: Error) => {
-      setActionError(err.message || "Failed to update user.");
+      const msg = err.message || "Failed to update user.";
+      setActionError(msg);
+      toast.error(msg);
     },
   });
 
@@ -178,6 +184,76 @@ export function AdminPortalPage({ currentUser }: AdminPortalPageProps) {
         </div>
       </div>
 
+      {overviewQuery.isError && (
+        <div className="p-4 rounded-2xl bg-rose-950/20 border border-rose-500/30 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-sm text-rose-200">
+            <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
+            <span>
+              {overviewQuery.error instanceof Error
+                ? overviewQuery.error.message
+                : "Failed to load admin overview."}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => overviewQuery.refetch()}
+            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* Background Job & Dependency Health Strip */}
+      {overview && (
+        <div className="rounded-2xl bg-slate-900/70 border border-slate-800 p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={`px-2 py-0.5 rounded-full border font-medium ${
+                overview.db_healthy ?? true
+                  ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/30"
+                  : "bg-rose-500/10 text-rose-300 border-rose-500/30"
+              }`}
+            >
+              DB: {(overview.db_healthy ?? true) ? "Healthy" : "Degraded"}
+            </span>
+            <span
+              className={`px-2 py-0.5 rounded-full border font-medium ${
+                overview.redis_healthy
+                  ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/30"
+                  : "bg-slate-800 text-slate-300 border-slate-700"
+              }`}
+            >
+              Redis: {overview.redis_healthy ? "Connected" : "Offline / Eager"}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-4 text-slate-300">
+            <span>
+              Pending Appraisals: <strong className="font-mono text-amber-300">{overview.pending_appraisals ?? 0}</strong>
+            </span>
+            <span>
+              Running: <strong className="font-mono text-sky-300">{overview.running_appraisals ?? 0}</strong>
+            </span>
+            <span>
+              Failed (24h):{" "}
+              <strong
+                className={`font-mono ${
+                  (overview.failed_appraisals_24h ?? 0) > 0 ? "text-rose-300" : "text-slate-200"
+                }`}
+              >
+                {overview.failed_appraisals_24h ?? 0}
+              </strong>
+            </span>
+            <span>
+              Deferred AI: <strong className="font-mono text-slate-200">{overview.deferred_ai_items ?? 0}</strong>
+            </span>
+            <span>
+              Scans (24h): <strong className="font-mono text-slate-200">{overview.recent_identifications_24h ?? 0}</strong>
+            </span>
+          </div>
+        </div>
+      )}
+
       {actionError && (
         <div className="rounded-xl bg-rose-500/10 border border-rose-500/30 px-4 py-3 text-sm text-rose-300">
           {actionError}
@@ -255,6 +331,26 @@ export function AdminPortalPage({ currentUser }: AdminPortalPageProps) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/80">
+                  {usersQuery.isError && (
+                    <tr>
+                      <td colSpan={5} className="px-4 py-6 text-center text-rose-300">
+                        <div className="inline-flex items-center gap-3">
+                          <span>
+                            {usersQuery.error instanceof Error
+                              ? usersQuery.error.message
+                              : "Failed to load users."}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => usersQuery.refetch()}
+                            className="px-2.5 py-1 rounded-lg bg-slate-800 text-xs text-slate-200"
+                          >
+                            Retry
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
                   {usersQuery.isLoading && (
                     <tr>
                       <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
@@ -389,6 +485,22 @@ export function AdminPortalPage({ currentUser }: AdminPortalPageProps) {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {workspacesQuery.isError && (
+              <div className="md:col-span-2 p-4 rounded-2xl bg-rose-950/20 border border-rose-500/30 flex items-center justify-between gap-3">
+                <span className="text-sm text-rose-200">
+                  {workspacesQuery.error instanceof Error
+                    ? workspacesQuery.error.message
+                    : "Failed to load workspaces."}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => workspacesQuery.refetch()}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 text-xs text-slate-200"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
             {workspacesQuery.data?.map((ws) => (
               <div
                 key={ws.id}

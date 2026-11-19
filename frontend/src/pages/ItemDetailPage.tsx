@@ -1,8 +1,32 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Camera, Check, Edit3, ExternalLink, RotateCw, Sparkles, Star, Trash2, Upload, WifiOff, X } from "lucide-react";
+import {
+  AlertCircle,
+  AlertTriangle,
+  Camera,
+  Check,
+  Copy,
+  Edit3,
+  ExternalLink,
+  RotateCw,
+  Sparkles,
+  Star,
+  Trash2,
+  Upload,
+  WifiOff,
+  X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api, type AppraisalJob, type CollectionItem, type ContainerNode, type ValuationHistoryEntry } from "../lib/api";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { useToast } from "../components/ToastProvider";
+import {
+  api,
+  type AppraisalJob,
+  type CollectionItem,
+  type ContainerNode,
+  type ItemPhoto,
+  type ValuationHistoryEntry,
+} from "../lib/api";
 import {
   CARD_GRADING_SERVICES,
   CATEGORY_LABELS,
@@ -41,7 +65,11 @@ export function ItemDetailPage() {
   const initialJobId = searchParams.get("job");
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const toast = useToast();
   const [activePhotoUrl, setActivePhotoUrl] = useState<string | null>(null);
+  const [uploadLabel, setUploadLabel] = useState("AUTO");
+  const [confirmDeleteItem, setConfirmDeleteItem] = useState(false);
+  const [pendingDeletePhoto, setPendingDeletePhoto] = useState<ItemPhoto | null>(null);
   const [isRotating, setIsRotating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isOnline, setIsOnline] = useState(
@@ -80,6 +108,10 @@ export function ItemDetailPage() {
     sort_subcategory: "",
     status: "IN_COLLECTION",
     container_id: "",
+    metal_type: "NONE",
+    weight_value: "0",
+    weight_unit: "OZ_T",
+    purity: "0.999000",
     grading_service: "NONE",
     grade: "",
     cert_number: "",
@@ -88,9 +120,21 @@ export function ItemDetailPage() {
     serial_number: "",
     purchase_price: "",
     purchase_date: "",
+    sold_price: "",
+    sold_date: "",
     vendor: "",
     market_value_unit: "0.00",
+    tagsText: "",
     notes: "",
+    card_game: "",
+    set_name: "",
+    set_code: "",
+    card_number: "",
+    rarity: "",
+    card_finish: "",
+    card_edition: "",
+    language: "",
+    raw_condition: "",
   });
 
   useEffect(() => {
@@ -104,7 +148,13 @@ export function ItemDetailPage() {
     };
   }, []);
 
-  const { data: fetchedItem, isLoading } = useQuery({
+  const {
+    data: fetchedItem,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ["item", id],
     queryFn: async () => {
       try {
@@ -171,10 +221,15 @@ export function ItemDetailPage() {
     mutationFn: (payload: Record<string, unknown>) => api.updateItem(id!, payload),
     onSuccess: () => {
       setIsEditing(false);
+      toast.success("Item updated.");
       qc.invalidateQueries({ queryKey: ["item", id] });
       qc.invalidateQueries({ queryKey: ["items"] });
       qc.invalidateQueries({ queryKey: ["cert-url", id] });
       qc.invalidateQueries({ queryKey: ["portfolio-summary"] });
+      qc.invalidateQueries({ queryKey: ["containers"] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to update item.");
     },
   });
 
@@ -182,18 +237,57 @@ export function ItemDetailPage() {
     mutationFn: () => api.appraiseItem(id!),
     onSuccess: (job) => {
       setActiveJob(job);
+      toast.info("Appraisal started.");
       qc.invalidateQueries({ queryKey: ["item", id] });
       qc.invalidateQueries({ queryKey: ["item-valuations", id] });
       qc.invalidateQueries({ queryKey: ["portfolio-summary"] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to start appraisal.");
+    },
+  });
+
+  const duplicateMut = useMutation({
+    mutationFn: () => api.duplicateItem(id!),
+    onSuccess: (cloned) => {
+      toast.success(`Duplicated as "${cloned.title}".`);
+      qc.invalidateQueries({ queryKey: ["items"] });
+      qc.invalidateQueries({ queryKey: ["portfolio-summary"] });
+      navigate(`/items/${cloned.id}`);
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to duplicate item.");
     },
   });
 
   const deleteMut = useMutation({
     mutationFn: () => api.deleteItem(id!),
     onSuccess: () => {
+      setConfirmDeleteItem(false);
+      toast.success("Item deleted.");
       qc.invalidateQueries({ queryKey: ["items"] });
       qc.invalidateQueries({ queryKey: ["portfolio-summary"] });
+      qc.invalidateQueries({ queryKey: ["containers"] });
       navigate("/collection");
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to delete item.");
+    },
+  });
+
+  const deletePhotoMut = useMutation({
+    mutationFn: (photoId: string) => api.deletePhoto(id!, photoId),
+    onSuccess: (_, deletedId) => {
+      if (pendingDeletePhoto?.url === activePhotoUrl || item?.photos.find((p) => p.id === deletedId)?.url === activePhotoUrl) {
+        setActivePhotoUrl(null);
+      }
+      setPendingDeletePhoto(null);
+      toast.success("Photo removed.");
+      qc.invalidateQueries({ queryKey: ["item", id] });
+      qc.invalidateQueries({ queryKey: ["items"] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to delete photo.");
     },
   });
 
@@ -205,15 +299,21 @@ export function ItemDetailPage() {
     try {
       const normalized = await normalizeImageFileForUpload(file, 2048, 0.92);
       const existingLabels = new Set((item?.photos || []).map((p) => p.label));
-      const nextLabel = !existingLabels.has("OBVERSE")
-        ? "OBVERSE"
-        : !existingLabels.has("REVERSE")
-          ? "REVERSE"
-          : "OTHER";
+      const nextLabel =
+        uploadLabel !== "AUTO"
+          ? uploadLabel
+          : !existingLabels.has("OBVERSE")
+            ? "OBVERSE"
+            : !existingLabels.has("REVERSE")
+              ? "REVERSE"
+              : "OTHER";
       const uploaded = await api.uploadPhoto(id, normalized, nextLabel, !existingLabels.size);
       setActivePhotoUrl(uploaded.url);
+      toast.success("Photo uploaded.");
       qc.invalidateQueries({ queryKey: ["item", id] });
       qc.invalidateQueries({ queryKey: ["items"] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to upload photo.");
     } finally {
       setIsRotating(false);
     }
@@ -234,6 +334,10 @@ export function ItemDetailPage() {
       sort_subcategory: item.sort_subcategory || "",
       status: item.status,
       container_id: item.container_id || "",
+      metal_type: item.metal_type || "NONE",
+      weight_value: item.weight_value || "0",
+      weight_unit: item.weight_unit || "OZ_T",
+      purity: item.purity || "0.999000",
       grading_service: item.grading_service || "NONE",
       grade: item.grade || "",
       cert_number: item.cert_number || "",
@@ -242,9 +346,21 @@ export function ItemDetailPage() {
       serial_number: item.serial_number || "",
       purchase_price: item.purchase_price ?? "",
       purchase_date: item.purchase_date || "",
+      sold_price: item.sold_price ?? "",
+      sold_date: item.sold_date || "",
       vendor: item.vendor || "",
       market_value_unit: item.market_value_unit || "0.00",
+      tagsText: (item.tags || []).join(", "),
       notes: item.notes || "",
+      card_game: String(item.card_game || item.attributes?.card_game || ""),
+      set_name: String(item.set_name || item.attributes?.set_name || ""),
+      set_code: String(item.set_code || item.attributes?.set_code || ""),
+      card_number: String(item.card_number || item.attributes?.card_number || ""),
+      rarity: String(item.rarity || item.attributes?.rarity || ""),
+      card_finish: String(item.card_finish || item.attributes?.card_finish || ""),
+      card_edition: String(item.card_edition || item.attributes?.card_edition || ""),
+      language: String(item.language || item.attributes?.language || ""),
+      raw_condition: String(item.raw_condition || item.attributes?.raw_condition || ""),
     });
     setIsEditing(true);
   }
@@ -290,6 +406,10 @@ export function ItemDetailPage() {
       mint_or_refiner: editForm.mint_or_refiner.trim(),
       status: editForm.status,
       container_id: editForm.container_id || null,
+      metal_type: editForm.metal_type,
+      weight_value: editForm.weight_value || "0",
+      weight_unit: editForm.weight_unit,
+      purity: editForm.purity || "0.999000",
       grading_service: editForm.grading_service,
       grade: isRaw ? "" : editForm.grade,
       cert_number: isRaw ? "" : editForm.cert_number,
@@ -297,11 +417,28 @@ export function ItemDetailPage() {
       serial_number: editForm.serial_number,
       purchase_price: editForm.purchase_price || null,
       purchase_date: editForm.purchase_date || null,
+      sold_price: editForm.sold_price || null,
+      sold_date: editForm.sold_date || null,
       vendor: editForm.vendor.trim(),
       market_value_unit: editForm.market_value_unit || "0.00",
+      tags: editForm.tagsText
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean),
       attributes: nextAttrs,
       notes: editForm.notes,
     };
+    if (isCardItem(item) || editForm.category === "CARD") {
+      payload.card_game = editForm.card_game.trim();
+      payload.set_name = editForm.set_name.trim();
+      payload.set_code = editForm.set_code.trim();
+      payload.card_number = editForm.card_number.trim();
+      payload.rarity = editForm.rarity.trim();
+      payload.card_finish = editForm.card_finish.trim();
+      payload.card_edition = editForm.card_edition.trim();
+      payload.language = editForm.language.trim();
+      payload.raw_condition = editForm.raw_condition.trim();
+    }
     if (
       editForm.sort_category !== (item.sort_category || "") ||
       editForm.sort_subcategory !== (item.sort_subcategory || "")
@@ -310,6 +447,24 @@ export function ItemDetailPage() {
       payload.sort_subcategory = editForm.sort_subcategory.trim() || "Uncategorized";
     }
     updateMut.mutate(payload);
+  }
+
+  if (isError && !item) {
+    return (
+      <div className="max-w-3xl mx-auto p-6 rounded-2xl bg-rose-950/20 border border-rose-500/30 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3 text-sm text-rose-200">
+          <AlertCircle className="h-5 w-5 text-rose-400 shrink-0" />
+          <span>{error instanceof Error ? error.message : "Failed to load item details."}</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => refetch()}
+          className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-100"
+        >
+          Retry
+        </button>
+      </div>
+    );
   }
 
   if (isLoading || !item) {
@@ -417,7 +572,17 @@ export function ItemDetailPage() {
             {item.specs_provenance?.market_value_unit === "USER" ? "Value Locked" : "Lock Value"}
           </button>
           <button
-            onClick={() => deleteMut.mutate()}
+            type="button"
+            disabled={!isOnline || duplicateMut.isPending}
+            onClick={() => duplicateMut.mutate()}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-amber-500/40 text-slate-200 text-sm font-medium transition disabled:opacity-50"
+          >
+            <Copy className="h-4 w-4" />
+            {duplicateMut.isPending ? "Duplicating..." : "Duplicate Item"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirmDeleteItem(true)}
             className="p-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-rose-500/40 text-slate-400 hover:text-rose-400 transition"
             aria-label="Delete item"
           >
@@ -461,8 +626,11 @@ export function ItemDetailPage() {
                       try {
                         const updated = await api.rotatePhoto(item.id, activePhoto.id, 90);
                         setActivePhotoUrl(updated.url);
+                        toast.success("Photo rotated.");
                         qc.invalidateQueries({ queryKey: ["item", id] });
                         qc.invalidateQueries({ queryKey: ["items"] });
+                      } catch (err) {
+                        toast.error(err instanceof Error ? err.message : "Failed to rotate photo.");
                       } finally {
                         setIsRotating(false);
                       }
@@ -486,7 +654,11 @@ export function ItemDetailPage() {
                     displayUrl === p.url ? "border-amber-400" : "border-slate-800"
                   }`}
                 >
-                  <img src={p.url} alt={p.label} className="h-full w-full object-cover" />
+                  <img
+                    src={p.thumbnail_url || p.url}
+                    alt={p.label}
+                    className="h-full w-full object-cover"
+                  />
                   <span className="absolute inset-x-0 bottom-0 bg-slate-950/80 text-[9px] text-slate-200 px-1 py-0.5 text-center truncate">
                     {PHOTO_LABEL_SHORT[p.label] || p.label}
                   </span>
@@ -495,14 +667,28 @@ export function ItemDetailPage() {
                   type="button"
                   title="Set as primary"
                   onClick={async () => {
-                    await api.setPrimaryPhoto(item.id, p.id);
-                    qc.invalidateQueries({ queryKey: ["item", id] });
+                    try {
+                      await api.setPrimaryPhoto(item.id, p.id);
+                      toast.success("Primary photo updated.");
+                      qc.invalidateQueries({ queryKey: ["item", id] });
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : "Failed to set primary photo.");
+                    }
                   }}
                   className={`absolute -top-1 -right-1 p-1 rounded-full bg-slate-950 border border-slate-700 ${
                     p.is_primary ? "text-amber-400" : "text-slate-500 opacity-0 group-hover:opacity-100"
                   }`}
                 >
                   <Star className="h-3 w-3 fill-current" />
+                </button>
+                <button
+                  type="button"
+                  title="Delete photo"
+                  aria-label={`Delete photo ${p.label}`}
+                  onClick={() => setPendingDeletePhoto(p)}
+                  className="absolute -top-1 -left-1 p-1 rounded-full bg-slate-950 border border-slate-700 text-slate-400 hover:text-rose-400 opacity-0 group-hover:opacity-100 focus:opacity-100 transition"
+                >
+                  <Trash2 className="h-3 w-3" />
                 </button>
               </div>
             ))}
@@ -516,6 +702,20 @@ export function ItemDetailPage() {
               Upload
               <input type="file" accept="image/*" className="hidden" onChange={handleAddPhoto} />
             </label>
+            <select
+              aria-label="Upload photo label"
+              value={uploadLabel}
+              onChange={(e) => setUploadLabel(e.target.value)}
+              className="h-9 px-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-300"
+            >
+              <option value="AUTO">Label: Auto</option>
+              <option value="OBVERSE">Obverse (Front)</option>
+              <option value="REVERSE">Reverse (Back)</option>
+              <option value="SLAB_LABEL">Slab Label</option>
+              <option value="ASSAY">Assay / CoA</option>
+              <option value="RECEIPT">Receipt</option>
+              <option value="OTHER">Other</option>
+            </select>
           </div>
         </div>
 
@@ -984,13 +1184,115 @@ export function ItemDetailPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-400 mb-1">Purchase Date</label>
+                  <label htmlFor="edit-purchase-price" className="block text-xs text-slate-400 mb-1">
+                    Purchase Price / Unit ($)
+                  </label>
                   <input
+                    id="edit-purchase-price"
+                    type="number"
+                    step="0.01"
+                    value={editForm.purchase_price}
+                    onChange={(e) => setEditForm({ ...editForm, purchase_price: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="edit-purchase-date" className="block text-xs text-slate-400 mb-1">
+                    Purchase Date
+                  </label>
+                  <input
+                    id="edit-purchase-date"
                     type="date"
                     value={editForm.purchase_date}
                     onChange={(e) => setEditForm({ ...editForm, purchase_date: e.target.value })}
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
                   />
+                </div>
+                <div>
+                  <label htmlFor="edit-sold-price" className="block text-xs text-slate-400 mb-1">
+                    Sold Price / Total ($)
+                  </label>
+                  <input
+                    id="edit-sold-price"
+                    type="number"
+                    step="0.01"
+                    value={editForm.sold_price}
+                    onChange={(e) => setEditForm({ ...editForm, sold_price: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="edit-sold-date" className="block text-xs text-slate-400 mb-1">
+                    Sold Date
+                  </label>
+                  <input
+                    id="edit-sold-date"
+                    type="date"
+                    value={editForm.sold_date}
+                    onChange={(e) => setEditForm({ ...editForm, sold_date: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="edit-metal-type" className="block text-xs text-slate-400 mb-1">
+                    Metal Type
+                  </label>
+                  <select
+                    id="edit-metal-type"
+                    value={editForm.metal_type}
+                    onChange={(e) => setEditForm({ ...editForm, metal_type: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  >
+                    {Object.entries(METAL_LABELS).map(([k, v]) => (
+                      <option key={k} value={k}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label htmlFor="edit-weight-value" className="block text-xs text-slate-400 mb-1">
+                      Weight
+                    </label>
+                    <input
+                      id="edit-weight-value"
+                      type="number"
+                      step="0.0001"
+                      value={editForm.weight_value}
+                      onChange={(e) => setEditForm({ ...editForm, weight_value: e.target.value })}
+                      className="w-full px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="edit-weight-unit" className="block text-xs text-slate-400 mb-1">
+                      Unit
+                    </label>
+                    <select
+                      id="edit-weight-unit"
+                      value={editForm.weight_unit}
+                      onChange={(e) => setEditForm({ ...editForm, weight_unit: e.target.value })}
+                      className="w-full px-2 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                    >
+                      <option value="OZ_T">ozt</option>
+                      <option value="G">g</option>
+                      <option value="KG">kg</option>
+                      <option value="OZ_AVDP">oz</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="edit-purity" className="block text-xs text-slate-400 mb-1">
+                      Purity
+                    </label>
+                    <input
+                      id="edit-purity"
+                      type="number"
+                      step="0.0001"
+                      value={editForm.purity}
+                      onChange={(e) => setEditForm({ ...editForm, purity: e.target.value })}
+                      className="w-full px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                    />
+                  </div>
                 </div>
                 <div>
                   <label className="block text-xs text-slate-400 mb-1">Vendor</label>
@@ -1013,6 +1315,121 @@ export function ItemDetailPage() {
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
                   />
                 </div>
+                <div className="sm:col-span-2">
+                  <label htmlFor="edit-tags" className="block text-xs text-slate-400 mb-1">
+                    Tags (comma-separated)
+                  </label>
+                  <input
+                    id="edit-tags"
+                    value={editForm.tagsText}
+                    onChange={(e) => setEditForm({ ...editForm, tagsText: e.target.value })}
+                    placeholder="morgan, silver, key-date"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+                {(isCardItem(item) || editForm.category === "CARD") && (
+                  <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 border-t border-slate-800/70">
+                    <div>
+                      <label htmlFor="edit-card-game" className="block text-xs text-slate-400 mb-1">
+                        Card Game
+                      </label>
+                      <input
+                        id="edit-card-game"
+                        value={editForm.card_game}
+                        onChange={(e) => setEditForm({ ...editForm, card_game: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="edit-set-name" className="block text-xs text-slate-400 mb-1">
+                        Set Name
+                      </label>
+                      <input
+                        id="edit-set-name"
+                        value={editForm.set_name}
+                        onChange={(e) => setEditForm({ ...editForm, set_name: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="edit-set-code" className="block text-xs text-slate-400 mb-1">
+                        Set Code
+                      </label>
+                      <input
+                        id="edit-set-code"
+                        value={editForm.set_code}
+                        onChange={(e) => setEditForm({ ...editForm, set_code: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="edit-card-number" className="block text-xs text-slate-400 mb-1">
+                        Card #
+                      </label>
+                      <input
+                        id="edit-card-number"
+                        value={editForm.card_number}
+                        onChange={(e) => setEditForm({ ...editForm, card_number: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="edit-rarity" className="block text-xs text-slate-400 mb-1">
+                        Rarity
+                      </label>
+                      <input
+                        id="edit-rarity"
+                        value={editForm.rarity}
+                        onChange={(e) => setEditForm({ ...editForm, rarity: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="edit-card-finish" className="block text-xs text-slate-400 mb-1">
+                        Finish
+                      </label>
+                      <input
+                        id="edit-card-finish"
+                        value={editForm.card_finish}
+                        onChange={(e) => setEditForm({ ...editForm, card_finish: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="edit-card-edition" className="block text-xs text-slate-400 mb-1">
+                        Edition
+                      </label>
+                      <input
+                        id="edit-card-edition"
+                        value={editForm.card_edition}
+                        onChange={(e) => setEditForm({ ...editForm, card_edition: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="edit-card-language" className="block text-xs text-slate-400 mb-1">
+                        Language
+                      </label>
+                      <input
+                        id="edit-card-language"
+                        value={editForm.language}
+                        onChange={(e) => setEditForm({ ...editForm, language: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="edit-raw-condition" className="block text-xs text-slate-400 mb-1">
+                        Raw Condition
+                      </label>
+                      <input
+                        id="edit-raw-condition"
+                        value={editForm.raw_condition}
+                        onChange={(e) => setEditForm({ ...editForm, raw_condition: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                      />
+                    </div>
+                  </div>
+                )}
                 <div className="sm:col-span-2">
                   <label className="block text-xs text-slate-400 mb-1">Notes</label>
                   <textarea
@@ -1081,6 +1498,30 @@ export function ItemDetailPage() {
           />
         )}
       </div>
+
+      <ConfirmDialog
+        open={confirmDeleteItem}
+        title="Delete Catalog Item?"
+        description={`Permanently delete "${item.title}" and all attached photos? This action cannot be undone.`}
+        confirmLabel="Delete Item"
+        isPending={deleteMut.isPending}
+        onCancel={() => setConfirmDeleteItem(false)}
+        onConfirm={() => deleteMut.mutate()}
+      />
+
+      <ConfirmDialog
+        open={pendingDeletePhoto !== null}
+        title="Delete Photo?"
+        description="Remove this photo permanently from storage?"
+        confirmLabel="Delete Photo"
+        isPending={deletePhotoMut.isPending}
+        onCancel={() => setPendingDeletePhoto(null)}
+        onConfirm={() => {
+          if (pendingDeletePhoto) {
+            deletePhotoMut.mutate(pendingDeletePhoto.id);
+          }
+        }}
+      />
     </div>
   );
 }

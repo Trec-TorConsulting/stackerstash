@@ -1,7 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Layout } from "./components/Layout";
+import { ToastProvider } from "./components/ToastProvider";
 import { api, getAuthToken, setAuthToken, type AuthUser } from "./lib/api";
 import { AdminPortalPage } from "./pages/AdminPortalPage";
 import { AuthPage } from "./pages/AuthPage";
@@ -81,7 +83,20 @@ export function AppRoutes() {
         <Route path="/scan" element={<ScanAddPage />} />
         <Route path="/items/:id" element={<ItemDetailPage />} />
         <Route path="/containers" element={<ContainersPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
+        <Route
+          path="/settings"
+          element={
+            <SettingsPage
+              currentUser={user}
+              onUserUpdated={setUser}
+              onAccountDeleted={() => {
+                setAuthToken(null);
+                queryClient.clear();
+                setUser(null);
+              }}
+            />
+          }
+        />
         <Route path="/admin" element={<AdminPortalPage currentUser={user} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
@@ -91,11 +106,15 @@ export function AppRoutes() {
 
 export default function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <AppRoutes />
-      </BrowserRouter>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <ToastProvider>
+        <QueryClientProvider client={queryClient}>
+          <BrowserRouter>
+            <AppRoutes />
+          </BrowserRouter>
+        </QueryClientProvider>
+      </ToastProvider>
+    </ErrorBoundary>
   );
 }
 

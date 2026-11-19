@@ -67,13 +67,14 @@ Stacker Stash includes an **Import / Migrate** wizard on the **Collection** page
 ---
 
 ## 5. Organizing Storage Containers
-1. Open **Containers** to create hierarchical physical storage locations (e.g., `Home Safe` → `Monster Box #1` → `ASE Tube A`).
-2. Assign items to any container during creation or on the item's detail page.
-3. Container cards display direct and rolled-up item counts, total melt value, and total market value.
+1. Open **Containers** to create hierarchical physical storage locations of any depth (e.g., `Home Safe` → `Monster Box #1` → `ASE Tube A`), including optional `Location Notes`.
+2. Click the edit icon on any container to rename it, change its type or parent container, or update location notes; click **View Items** to open `/collection` filtered to that container.
+3. Deleting a container prompts for confirmation before removing nested child containers (stored items stay in your vault as Unassigned).
 
 ---
 
-## 6. Appraisals, Specs, Explainability & Offline Coin-Show Mode
+## 6. Appraisals, Editing, Duplication & Offline Coin-Show Mode
+- **Item Editing, Duplication & Photo Management**: On any item's detail page, click **Edit Details** to update cost basis (`purchase_price`), sold tracking (`sold_price`/`sold_date`), bullion weight/purity, tags, or trading card specs; use **Duplicate Item** to clone specs (clearing `cert_number` and sold fields); upload labeled photos (`Obverse`, `Reverse`, `Slab Label`, `Assay`, `Receipt`) and remove individual photos after confirmation.
 - **Multi-Source Appraise Now**: On any item's detail page, click **Appraise Now** to run a non-blocking, concurrent appraisal pipeline:
   1. **Live Spot Melt Floor**: Immediately updates precious-metal melt value and ensures market value never drops below melt.
   2. **Numismatic Specs Enrichment**: Pulls mintage, composition, diameter, weight, edge, designer, and catalog numbers from PCGS, Numista, or AI (preserving any specs you manually edited).
@@ -83,12 +84,12 @@ Stacker Stash includes an **Import / Migrate** wizard on the **Collection** page
 - **Why It's Valued Here**: View the Melt vs. Collector Premium % bar, Low–Fair–High range, Confidence badge (`HIGH` / `MEDIUM` / `LOW`), key value drivers, and expandable Source Comparison table.
 - **Collectibility & Hold Thesis**: Understand whether an item is *Bullion / Melt-Driven*, *Semi-Numismatic*, *Key Date / Scarce*, or *Numismatic*, including grading upside tips for raw coins.
 - **Offline Coin-Show Mode (PWA)**: Viewed items, their valuation breakdowns, specs, and photos are cached locally in the PWA so you can inspect them at coin shows or local coin shops even without internet access.
-- **Insurance / Print Report**: On the **Collection** page, click **Print Report** (or **Export CSV** / download JSON from `/api/v1/catalog/items/export/json`) for a clean, print-ready inventory report.
+- **Authenticated Exports & Print Reports**: On the **Collection** page, click **Export CSV**, **Export JSON**, or **Print Report** for authenticated downloads and print-ready inventory reports.
 
 ---
 
-## 7. Configuring BYOK API Keys (Settings)
-Navigate to **Settings** to add optional Bring-Your-Own-Key credentials (encrypted at rest with Fernet):
+## 7. Account Security & BYOK API Keys (Settings)
+Navigate to **Settings** to manage your display name, password, account deletion, Auto-Sort toggle, and optional Bring-Your-Own-Key credentials (encrypted at rest with Fernet):
 - **Gemini API Key**: Enables Gemini Vision coin/banknote identification & AI valuation.
 - **Ollama URL / Model**: Self-hosted vision fallback (e.g., `http://localhost:11434`).
 - **PCGS Public API Token**: Enables automated PCGS Price Guide lookups by cert number.

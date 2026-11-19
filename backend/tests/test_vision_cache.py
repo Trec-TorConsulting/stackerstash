@@ -58,6 +58,7 @@ def test_cert_lookup_cache_hit_and_miss():
 @pytest.mark.django_db
 def test_pcgs_and_numista_providers_use_server_cache(monkeypatch):
     from decimal import Decimal
+
     from apps.valuation import providers
 
     calls = {"pcgs": 0, "numista": 0}
