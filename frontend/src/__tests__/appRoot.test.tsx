@@ -136,7 +136,7 @@ describe("App and AppRoutes", () => {
     expect(screen.getByText(/Unlocking vault/i)).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(screen.getByText("ComingSoon Mock")).toBeInTheDocument();
+      expect(screen.getByText("Marketing Mock")).toBeInTheDocument();
     });
     expect(apiModule.getAuthToken()).toBeNull();
   });

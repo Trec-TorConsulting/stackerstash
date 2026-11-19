@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Layout } from "./components/Layout";
+import { SeoHead } from "./components/SeoHead";
 import { ToastProvider } from "./components/ToastProvider";
 import {
   api,
@@ -24,7 +25,7 @@ import { MarketingPage } from "./pages/MarketingPage";
 import { ScanAddPage } from "./pages/ScanAddPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
-const SITE_MODE = import.meta.env.VITE_SITE_MODE || "coming_soon";
+const SITE_MODE = import.meta.env.VITE_SITE_MODE || "marketing";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -97,31 +98,46 @@ export function AppRoutes() {
   if (!user) {
     const publicHome = SITE_MODE === "marketing" ? <MarketingPage /> : <ComingSoonPage />;
     return (
-      <Routes>
-        <Route path="/" element={publicHome} />
-        <Route path="/coming-soon" element={<ComingSoonPage />} />
-        <Route path="/marketing" element={<MarketingPage />} />
-        <Route
-          path="/login"
-          element={<AuthPage onAuth={handleAuthenticated} initialMode="login" />}
-        />
-        <Route
-          path="/register"
-          element={<AuthPage onAuth={handleAuthenticated} initialMode="register" />}
-        />
-        <Route
-          path="/invite/:token"
-          element={<InviteAcceptPage currentUser={null} />}
-        />
-        <Route path="*" element={<Navigate to="/login" replace />} />
-      </Routes>
+      <>
+        <SeoHead />
+        <Routes>
+          <Route path="/" element={publicHome} />
+          <Route path="/coming-soon" element={<ComingSoonPage />} />
+          <Route path="/marketing" element={<MarketingPage />} />
+          <Route path="/features" element={<MarketingPage section="features" />} />
+          <Route path="/pricing" element={<MarketingPage section="pricing" />} />
+          <Route path="/security" element={<MarketingPage section="security" />} />
+          <Route path="/privacy" element={<MarketingPage section="privacy" />} />
+          <Route path="/terms" element={<MarketingPage section="terms" />} />
+          <Route
+            path="/login"
+            element={<AuthPage onAuth={handleAuthenticated} initialMode="login" />}
+          />
+          <Route
+            path="/register"
+            element={<AuthPage onAuth={handleAuthenticated} initialMode="register" />}
+          />
+          <Route
+            path="/invite/:token"
+            element={<InviteAcceptPage currentUser={null} />}
+          />
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      </>
     );
   }
 
   return (
-    <Routes>
-      <Route path="/coming-soon" element={<ComingSoonPage />} />
-      <Route path="/marketing" element={<MarketingPage />} />
+    <>
+      <SeoHead />
+      <Routes>
+        <Route path="/coming-soon" element={<ComingSoonPage />} />
+        <Route path="/marketing" element={<MarketingPage />} />
+        <Route path="/features" element={<MarketingPage section="features" />} />
+        <Route path="/pricing" element={<MarketingPage section="pricing" />} />
+        <Route path="/security" element={<MarketingPage section="security" />} />
+        <Route path="/privacy" element={<MarketingPage section="privacy" />} />
+        <Route path="/terms" element={<MarketingPage section="terms" />} />
       <Route
         element={
           <Layout
@@ -162,6 +178,7 @@ export function AppRoutes() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
+    </>
   );
 }
 

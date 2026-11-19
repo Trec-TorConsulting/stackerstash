@@ -1,0 +1,15 @@
+User-agent: *
+Allow: /
+
+Disallow: /api/
+Disallow: /super-admin/
+Disallow: /media/
+Disallow: /invite/
+Disallow: /settings
+Disallow: /admin
+Disallow: /collection
+Disallow: /scan
+Disallow: /containers
+Disallow: /items/
+
+Sitemap: https://stackerstash.com/sitemap.xml

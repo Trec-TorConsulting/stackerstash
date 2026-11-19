@@ -31,6 +31,13 @@ export default defineConfig({
         skipWaiting: true,
         clientsClaim: true,
         cleanupOutdatedCaches: true,
+        navigateFallbackDenylist: [
+          /^\/api\//,
+          /^\/super-admin\//,
+          /^\/media\//,
+          /^\/robots\.txt$/,
+          /^\/sitemap\.xml$/,
+        ],
         runtimeCaching: [
           {
             urlPattern: ({ url }) =>
