@@ -1052,6 +1052,13 @@ def auto_orient_upright(img: Image.Image) -> Image.Image:
     return img
 
 
+def _strip_image_metadata(img: Image.Image) -> Image.Image:
+    """Return a pixel-identical image copy with all EXIF, GPS, XMP, and comment metadata stripped."""
+    clean = img.copy()
+    clean.info.clear()
+    return clean
+
+
 def _encode_processed_image(
     img: Image.Image,
     *,
@@ -1061,10 +1068,12 @@ def _encode_processed_image(
     del orig_format
     out = io.BytesIO()
     if img.mode == "RGBA" or force_png:
-        img.save(out, format="PNG", optimize=True)
+        clean = _strip_image_metadata(img)
+        clean.save(out, format="PNG", optimize=True)
         ext = "png"
     else:
-        img.convert("RGB").save(out, format="WEBP", quality=82, method=5)
+        clean = _strip_image_metadata(img.convert("RGB"))
+        clean.save(out, format="WEBP", quality=82, method=5)
         ext = "webp"
     width, height = img.size
     return out.getvalue(), width, height, ext
@@ -1076,13 +1085,15 @@ def generate_image_thumbnail(
     max_dimension: int = 480,
     quality: int = 78,
 ) -> tuple[bytes, int, int, str]:
-    """Generate a compact WebP thumbnail (longest edge <= max_dimension)."""
+    """Generate a compact WebP thumbnail (longest edge <= max_dimension) with metadata stripped."""
     with Image.open(io.BytesIO(raw_or_processed_bytes)) as opened:
         img = ImageOps.exif_transpose(opened)
         if max(img.size) > max_dimension:
             img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
         out = io.BytesIO()
-        target = img.convert("RGBA") if img.mode in ("RGBA", "LA") else img.convert("RGB")
+        target = _strip_image_metadata(
+            img.convert("RGBA") if img.mode in ("RGBA", "LA") else img.convert("RGB")
+        )
         target.save(out, format="WEBP", quality=quality, method=5)
         width, height = target.size
         return out.getvalue(), width, height, "webp"

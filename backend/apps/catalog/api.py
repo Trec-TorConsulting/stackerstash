@@ -26,7 +26,16 @@ from apps.accounts.models import (
 from config.media_signing import build_signed_media_url
 
 from .image_processing import generate_image_thumbnail, process_item_image, rotate_item_image
-from .importer import TARGET_FIELDS, import_mapped_csv, preview_csv
+from .importer import (
+    TARGET_FIELDS,
+    import_mapped_csv,
+    normalize_category,
+    normalize_grading_service,
+    normalize_metal_type,
+    normalize_status,
+    normalize_weight_unit,
+    preview_csv,
+)
 from .models import CollectionItem, Container, ItemPhoto
 from .presets import ITEM_PRESETS
 
@@ -1492,10 +1501,18 @@ def export_items_json(request):
     return resp
 
 
+def _read_bounded_csv_bytes(file: UploadedFile) -> bytes:
+    file.seek(0)
+    raw_bytes = file.read(MAX_UPLOAD_BYTES + 1)
+    if not raw_bytes or len(raw_bytes) > MAX_UPLOAD_BYTES:
+        raise HttpError(400, "Uploaded CSV file must be non-empty and at most 10 MB.")
+    return raw_bytes
+
+
 @catalog_router.post("/items/import/csv", response=CsvImportResult)
 def import_items_csv(request, file: UploadedFile = File(...)):
     require_editor(request)
-    raw = file.read().decode("utf-8-sig")
+    raw = _read_bounded_csv_bytes(file).decode("utf-8-sig", errors="replace")
     rows = list(csv.DictReader(io.StringIO(raw)))
     created_count = 0
     errors: list[CsvImportRowError] = []
@@ -1505,8 +1522,7 @@ def import_items_csv(request, file: UploadedFile = File(...)):
     if initial_remaining == 0:
         has_active_rows = any(
             (r.get("title") or "").strip()
-            and (r.get("status") or "IN_COLLECTION").strip().upper()
-            != CollectionItem.Status.SOLD
+            and normalize_status(r.get("status")) != CollectionItem.Status.SOLD
             for r in rows
         )
         if has_active_rows:
@@ -1517,7 +1533,7 @@ def import_items_csv(request, file: UploadedFile = File(...)):
         if not title:
             errors.append(CsvImportRowError(row=idx, error="Missing required 'title' column."))
             continue
-        row_status = (row.get("status") or "IN_COLLECTION").strip().upper()
+        row_status = normalize_status(row.get("status"))
         if row_status != CollectionItem.Status.SOLD and remaining is not None:
             if remaining <= 0:
                 errors.append(
@@ -1535,21 +1551,26 @@ def import_items_csv(request, file: UploadedFile = File(...)):
             purchase_val = (
                 Decimal(row["purchase_price"]) if row.get("purchase_price") else None
             )
+            cert_num = (row.get("cert_number") or "").strip()[:64]
+            if cert_num and CollectionItem.objects.filter(
+                workspace=request.workspace, cert_number__iexact=cert_num
+            ).exists():
+                raise ValueError(f"Duplicate cert_number '{cert_num}' in workspace.")
             created_item = CollectionItem.objects.create(
                 workspace=request.workspace,
                 title=title,
-                category=(row.get("category") or "COIN").upper(),
+                category=normalize_category(row.get("category")),
                 status=row_status,
                 country=row.get("country") or "",
                 year=row.get("year") or "",
                 mint_or_refiner=row.get("mint_or_refiner") or "",
                 quantity=max(1, qty),
-                metal_type=(row.get("metal_type") or "NONE").upper(),
+                metal_type=normalize_metal_type(row.get("metal_type")),
                 weight_value=weight_val,
-                weight_unit=(row.get("weight_unit") or "OZ_T").upper(),
+                weight_unit=normalize_weight_unit(row.get("weight_unit")),
                 purity=purity_val,
-                grading_service=(row.get("grading_service") or "NONE").upper(),
-                cert_number=row.get("cert_number") or "",
+                grading_service=normalize_grading_service(row.get("grading_service")),
+                cert_number=cert_num,
                 grade=row.get("grade") or "",
                 serial_number=row.get("serial_number") or "",
                 purchase_price=purchase_val,
@@ -1571,7 +1592,7 @@ def import_items_csv(request, file: UploadedFile = File(...)):
 @catalog_router.post("/items/import/preview", response=CsvImportPreviewOut)
 def preview_items_csv_import(request, file: UploadedFile = File(...)):
     require_editor(request)
-    preview = preview_csv(file.read())
+    preview = preview_csv(_read_bounded_csv_bytes(file))
     return CsvImportPreviewOut(
         detected_preset=preview.detected_preset,
         headers=preview.headers,
@@ -1591,6 +1612,7 @@ def import_items_csv_mapped(
     import_photos: bool = Form(False),
 ):
     require_editor(request)
+    raw_csv_bytes = _read_bounded_csv_bytes(file)
     parsed_mapping: dict[str, str] | None = None
     if mapping.strip():
         try:
@@ -1602,7 +1624,7 @@ def import_items_csv_mapped(
             raise HttpError(400, f"Invalid mapping JSON: {exc}") from exc
 
     res = import_mapped_csv(
-        file.read(),
+        raw_csv_bytes,
         workspace=request.workspace,
         mapping=parsed_mapping,
         import_photos=import_photos,

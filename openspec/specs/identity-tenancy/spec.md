@@ -6,7 +6,7 @@ Provides multi-tenant user accounts, workspace data isolation, role-based admini
 ## Requirements
 
 ### Requirement: User registration and authentication
-The system SHALL allow users to register, authenticate, and maintain authenticated sessions across mobile PWA and desktop browsers.
+The system SHALL allow users to register, authenticate, and maintain authenticated sessions across mobile PWA and desktop browsers while enforcing configured password validators and binding JWT access tokens to the user's current password hash so password changes immediately invalidate prior tokens.
 
 #### Scenario: User signs up and logs in
 - **WHEN** a new user submits valid registration credentials and logs in
@@ -15,6 +15,14 @@ The system SHALL allow users to register, authenticate, and maintain authenticat
 #### Scenario: Invalid credentials rejected
 - **WHEN** a user submits an incorrect password or unknown email
 - **THEN** the system rejects the request with HTTP 401 and does not leak account existence
+
+#### Scenario: Common or numeric-only password rejected on registration and password change
+- **WHEN** a user attempts to register or change their password using a common password (such as `"password123"`) or a purely numeric password (such as `"12345678"`)
+- **THEN** the system evaluates Django's configured `AUTH_PASSWORD_VALIDATORS` and rejects the request with HTTP 400 and a descriptive validation message
+
+#### Scenario: Password change immediately revokes prior JWT access tokens
+- **WHEN** an authenticated user changes their password via `POST /api/v1/auth/change-password`
+- **THEN** any JWT access token issued before the password change fails authentication with HTTP 401 on subsequent API requests, and the password-change response (or re-login) provides a fresh valid token
 
 ### Requirement: Workspace tenant isolation
 The system SHALL isolate all collection items, containers, photos, valuations, and background identification or appraisal jobs strictly to the authenticated user's active vault (`Workspace`), while allowing BYOK provider credentials to resolve with primary-vault inheritance and per-vault overrides.
@@ -117,6 +125,14 @@ The system SHALL resolve the active vault from the `X-Workspace-Id` request head
 - **WHEN** a user switches active vaults in the web or PWA client
 - **THEN** the client persists the selected vault ID, clears/invalidates active React Query caches, and partitions offline Workbox/IndexedDB responses by active vault ID so items or metrics from the previous vault never bleed into the newly selected vault
 
+#### Scenario: Offline IndexedDB cache never serves unauthorized or cross-vault items on 403 or 404
+- **WHEN** a user switches from Vault A to Vault B (or loses access to a shared vault) and requests an item ID that existed in Vault A, causing the API to return HTTP 403 or HTTP 404
+- **THEN** the client does not fall back to the IndexedDB snapshot from Vault A and surfaces the not-found/unauthorized error
+
+#### Scenario: Logout purges all client-side vault and media caches
+- **WHEN** a user logs out of the web or PWA client
+- **THEN** the client clears the auth token, active workspace ID, React Query memory cache, IndexedDB offline item snapshots (`stackerstash-offline`), and Workbox runtime caches (`api-items-valuation-cache` and `item-media-cache`)
+
 ### Requirement: Navigation vault switcher and settings management UI
 The system SHALL provide a persistent active-vault switcher (including quick vault creation) in both desktop and mobile navigation, and a dedicated My Vaults management section in Settings.
 
@@ -127,3 +143,14 @@ The system SHALL provide a persistent active-vault switcher (including quick vau
 #### Scenario: Create and manage vaults in Settings
 - **WHEN** a signed-in user opens Settings and uses the My Vaults section
 - **THEN** they can create a new vault, edit any owned vault's name, description, currency, and auto-sort setting, set a default vault, and delete a non-last vault after confirming the destructive action
+
+### Requirement: Domain-separated workspace-bound media path signing
+The system SHALL sign uploaded media URLs with a domain-separated HMAC key derived from `SECRET_KEY`, bound to a short-lived expiry window (at most 24 hours) and the target workspace's active media epoch so revoked memberships or deleted workspaces invalidate previously signed media URLs.
+
+#### Scenario: Valid signed media request served with private security headers
+- **WHEN** a client requests a signed media path `/media/s/{exp}/{sig}/workspaces/{workspace_id}/items/{item_id}/{file}` with a valid signature for an existing workspace
+- **THEN** the server serves the file with `Cache-Control: private, no-transform`, `X-Content-Type-Options: nosniff`, and `Content-Security-Policy: default-src 'none'; img-src 'self'`
+
+#### Scenario: Signed media URL invalidated when member is removed or workspace is deleted
+- **WHEN** a collaborator is removed from a shared vault (or leaves the vault, or the vault is deleted), advancing or removing the workspace media epoch
+- **THEN** any previously issued signed media URL for that workspace fails verification with HTTP 403 or HTTP 404

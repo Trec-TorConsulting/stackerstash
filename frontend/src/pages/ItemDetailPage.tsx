@@ -21,6 +21,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../components/ToastProvider";
 import {
   api,
+  ApiError,
   type AppraisalJob,
   type CollectionItem,
   type ContainerNode,
@@ -163,6 +164,9 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
       try {
         return await api.getItem(id!);
       } catch (err) {
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404)) {
+          throw err;
+        }
         const cached = await getCachedItemSnapshot(id!);
         if (cached) {
           setOfflineFallback(cached);

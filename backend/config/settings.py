@@ -6,7 +6,7 @@ import base64
 import hashlib
 import os
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from corsheaders.defaults import default_headers
 
@@ -60,6 +60,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "config.api.api_security_headers_middleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -93,17 +94,23 @@ def _build_databases() -> dict:
         }
     parsed = urlparse(db_url)
     if parsed.scheme in {"postgres", "postgresql"}:
-        return {
-            "default": {
-                "ENGINE": "django.db.backends.postgresql",
-                "NAME": parsed.path.lstrip("/"),
-                "USER": parsed.username or "",
-                "PASSWORD": parsed.password or "",
-                "HOST": parsed.hostname or "localhost",
-                "PORT": str(parsed.port or 5432),
-                "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),
-            }
+        query_params = parse_qs(parsed.query)
+        sslmode = (
+            (query_params.get("sslmode") or [""])[0].strip()
+            or os.getenv("DB_SSLMODE", "").strip()
+        )
+        db_cfg: dict = {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": parsed.path.lstrip("/"),
+            "USER": parsed.username or "",
+            "PASSWORD": parsed.password or "",
+            "HOST": parsed.hostname or "localhost",
+            "PORT": str(parsed.port or 5432),
+            "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),
         }
+        if sslmode:
+            db_cfg["OPTIONS"] = {"sslmode": sslmode}
+        return {"default": db_cfg}
     raise ValueError(f"Unsupported DATABASE_URL scheme: {parsed.scheme}")
 
 
@@ -179,6 +186,16 @@ READY_CHECK_REDIS = os.getenv("READY_CHECK_REDIS", "false" if DEBUG else "true")
 
 # JWT config
 JWT_ACCESS_TTL_SECONDS = int(os.getenv("JWT_ACCESS_TTL_SECONDS", "86400"))
+
+# Self-hosted Ollama SSRF allowlist (empty in production unless explicitly set)
+OLLAMA_ALLOWED_HOSTS = [
+    h.strip().lower()
+    for h in os.getenv(
+        "OLLAMA_ALLOWED_HOSTS",
+        "ollama.local,localhost,127.0.0.1" if DEBUG else "",
+    ).split(",")
+    if h.strip()
+]
 
 # Subscription Tiers & Stripe Billing
 APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:5173").rstrip("/")

@@ -54,6 +54,13 @@ class CertLookupCache(models.Model):
     """Server-side cache for verified grading slab cert & numismatic lookups."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(
+        Workspace,
+        on_delete=models.CASCADE,
+        related_name="cert_lookup_caches",
+        null=True,
+        blank=True,
+    )
     grading_service = models.CharField(max_length=24, db_index=True)
     cert_number = models.CharField(max_length=64, db_index=True)
     payload = models.JSONField(default=dict, blank=True)
@@ -62,6 +69,6 @@ class CertLookupCache(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = [("grading_service", "cert_number")]
+        unique_together = [("workspace", "grading_service", "cert_number")]
         ordering = ["-updated_at"]
 

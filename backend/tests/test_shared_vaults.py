@@ -102,13 +102,31 @@ def test_invite_lifecycle_preview_pending_accept_decline_revoke_expiry(api_clien
     assert inv_up.status_code == 201
     invite = inv_up.json()
 
-    # Unauthenticated preview works without leaking catalog data
+    # Unauthenticated preview works with masked emails without leaking catalog data
     preview_resp = api_client.get(f"/api/v1/auth/invites/{invite['token']}")
     assert preview_resp.status_code == 200
     preview = preview_resp.json()
     assert preview["workspace_name"] == alice_ws.name
     assert preview["role"] == "EDITOR"
-    assert preview["owner_email"] == alice.email
+    assert preview["owner_email"] == "a***@example.com"
+    assert preview["invited_by_email"] == "a***@example.com"
+    assert preview["email"] == "b***@example.com"
+
+    # Authenticated invitee preview returns unmasked email so client email-match succeeds
+    authed_preview = api_client.get(
+        f"/api/v1/auth/invites/{invite['token']}", **_headers(bob_token)
+    ).json()
+    assert authed_preview["email"] == bob.email
+    assert authed_preview["owner_email"] == alice.email
+
+    # Prior revoked invite token returns 410 on preview and is redacted in owner invites list
+    assert api_client.get(f"/api/v1/auth/invites/{prior_inv.token}").status_code == 410
+    owner_invites = api_client.get(
+        f"/api/v1/auth/workspaces/{alice_ws.id}/invites", **_headers(alice_token)
+    ).json()
+    revoked_row = next(i for i in owner_invites if i["id"] == str(prior_inv.id))
+    assert revoked_row["token"] == ""
+    assert revoked_row["invite_path"] == ""
 
     # Pending inbox shows the invite for Bob
     pending_resp = api_client.get("/api/v1/auth/invites/pending", **_headers(bob_token))
@@ -277,12 +295,16 @@ def test_member_role_update_removal_and_leave_vault(api_client, user_a, user_b):
         == 400
     )
 
-    # Bob leaves vault cleanly
+    # Bob leaves vault cleanly and prior signed media URLs for the vault are invalidated
+    from config.media_signing import build_signed_media_url
+
+    pre_leave_url = build_signed_media_url(f"workspaces/{alice_ws.id}/items/1/obv.png")
     leave_resp = api_client.post(
         f"/api/v1/auth/workspaces/{alice_ws.id}/leave",
         **_headers(bob_token),
     )
     assert leave_resp.status_code == 204
+    assert api_client.get(pre_leave_url).status_code == 403
     assert (
         api_client.get(
             "/api/v1/catalog/items",
@@ -291,17 +313,19 @@ def test_member_role_update_removal_and_leave_vault(api_client, user_a, user_b):
         == 403
     )
 
-    # Re-add and test owner removing member
+    # Re-add and test owner removing member also rotates media_key_version and invalidates prior URLs
     membership2 = WorkspaceMembership.objects.create(
         workspace=alice_ws,
         user=bob,
         role=WorkspaceMembership.Role.VIEWER,
     )
+    pre_remove_url = build_signed_media_url(f"workspaces/{alice_ws.id}/items/1/obv.png")
     del_resp = api_client.delete(
         f"/api/v1/auth/workspaces/{alice_ws.id}/members/{membership2.id}",
         **_headers(alice_token),
     )
     assert del_resp.status_code == 204
+    assert api_client.get(pre_remove_url).status_code == 403
     assert not WorkspaceMembership.objects.filter(id=membership2.id).exists()
 
 

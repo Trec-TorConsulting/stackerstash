@@ -31,7 +31,7 @@ def list_spots(request):
 
 @valuation_router.post("/spots/refresh")
 def trigger_spot_refresh(request):
-    spots = refresh_spot_prices()
+    spots = refresh_spot_prices(workspace=request.workspace)
     return {k: str(v) for k, v in spots.items()}
 
 

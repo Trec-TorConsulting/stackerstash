@@ -75,20 +75,31 @@ def refresh_item_melt_from_latest_spot(
     return item
 
 
+_SPOT_FETCH_COOLDOWN_KEY = "valuation:spot_fetch_cooldown"
+_SPOT_FETCH_COOLDOWN_SECONDS = 30
+
+
 @transaction.atomic
-def refresh_spot_prices() -> dict[str, Decimal]:
+def refresh_spot_prices(workspace: Workspace | None = None) -> dict[str, Decimal]:
     """Fetch live spot prices, store snapshots, and recalculate bullion melt values."""
-    fetched = fetch_spot_prices_from_gold_api()
-    for metal_type, price in fetched.items():
-        SpotPriceSnapshot.objects.create(
-            metal_type=metal_type,
-            price_usd_per_troy_oz=price,
-            source="gold-api.com",
-        )
+    from django.core.cache import cache
+
+    if not cache.get(_SPOT_FETCH_COOLDOWN_KEY) or not SpotPriceSnapshot.objects.exists():
+        fetched = fetch_spot_prices_from_gold_api()
+        if fetched:
+            for metal_type, price in fetched.items():
+                SpotPriceSnapshot.objects.create(
+                    metal_type=metal_type,
+                    price_usd_per_troy_oz=price,
+                    source="gold-api.com",
+                )
+            cache.set(_SPOT_FETCH_COOLDOWN_KEY, True, timeout=_SPOT_FETCH_COOLDOWN_SECONDS)
     spots = get_latest_spot_map()
     bullion_items = CollectionItem.objects.exclude(
         metal_type=CollectionItem.MetalType.NONE
     )
+    if workspace is not None:
+        bullion_items = bullion_items.filter(workspace=workspace)
     for item in bullion_items:
         refresh_item_melt_from_latest_spot(item, spots)
     return spots
@@ -208,7 +219,7 @@ def appraise_item(
     psa_token = _get_workspace_secret(workspace, ProviderCredential.Provider.PSA_API_TOKEN)
     pokemon_tcg_key = _get_workspace_secret(workspace, ProviderCredential.Provider.POKEMON_TCG_API_KEY)
 
-    from apps.vision.services import estimate_item_value_with_ai
+    from apps.vision.services import _sanitize_error_message, estimate_item_value_with_ai
 
     results: dict[str, Any] = {}
     errors: dict[str, str] = {}
@@ -220,6 +231,7 @@ def appraise_item(
                 item.cert_number,
                 pcgs_token=pcgs_token,
                 psa_token=psa_token,
+                workspace=workspace,
             )
         return None
 
@@ -248,6 +260,7 @@ def appraise_item(
                 country=item.country,
                 denomination=item.denomination,
                 api_key=numista_key,
+                workspace=workspace,
             )
         return None
 
@@ -349,8 +362,9 @@ def appraise_item(
             try:
                 results[name] = fut.result()
             except Exception as exc:
-                logger.warning("Appraisal provider %s failed for item %s: %s", name, item.id, exc)
-                errors[name] = str(exc)
+                sanitized_err = _sanitize_error_message(str(exc))
+                logger.warning("Appraisal provider %s failed for item %s: %s", name, item.id, sanitized_err)
+                errors[name] = sanitized_err
 
     _update_job_step(job, "specs", "DONE")
     _update_job_step(job, "price_guides", "DONE")
@@ -731,10 +745,13 @@ def _run_appraisal_job_thread(job_id: Any) -> None:
         job.completed_at = timezone.now()
         job.save(update_fields=["status", "completed_at"])
     except Exception as exc:
-        logger.exception("AppraisalJob %s failed: %s", job_id, exc)
+        from apps.vision.services import _sanitize_error_message
+
+        sanitized_err = _sanitize_error_message(str(exc))
+        logger.exception("AppraisalJob %s failed: %s", job_id, sanitized_err)
         AppraisalJob.objects.filter(id=job_id).update(
             status=AppraisalJob.Status.FAILED,
-            error_message=str(exc),
+            error_message=sanitized_err,
             completed_at=timezone.now(),
         )
     finally:

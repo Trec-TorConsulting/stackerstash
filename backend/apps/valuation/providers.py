@@ -85,13 +85,18 @@ def _serialize_specs_for_cache(specs: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def lookup_pcgs_cert(cert_number: str, pcgs_token: str, timeout: float = 10.0) -> dict[str, Any] | None:
+def lookup_pcgs_cert(
+    cert_number: str,
+    pcgs_token: str,
+    timeout: float = 10.0,
+    workspace: Any = None,
+) -> dict[str, Any] | None:
     """Query PCGS Public API for cert details and price guide value when BYOK token is set."""
     if not cert_number or not pcgs_token:
         return None
     from apps.vision.cache import lookup_cert_cache, store_cert_cache
 
-    cached = lookup_cert_cache("PCGS", cert_number)
+    cached = lookup_cert_cache("PCGS", cert_number, workspace=workspace)
     if cached and cached.get("market_value"):
         return {
             "market_value": Decimal(str(cached["market_value"])),
@@ -145,6 +150,7 @@ def lookup_pcgs_cert(cert_number: str, pcgs_token: str, timeout: float = 10.0) -
                         "raw": data,
                     },
                     source="PCGS",
+                    workspace=workspace,
                 )
                 return {
                     "market_value": mv,
@@ -197,13 +203,14 @@ def lookup_cert_metadata(
     pcgs_token: str | None = None,
     psa_token: str | None = None,
     timeout: float = 10.0,
+    workspace: Any = None,
 ) -> dict[str, Any] | None:
     """Resolve cert data (PCGS/PSA API when token exists) or official verification link."""
     cert = cert_number.strip()
     if not cert or grading_service == "NONE":
         return None
     if grading_service == "PCGS" and pcgs_token:
-        pcgs_res = lookup_pcgs_cert(cert, pcgs_token, timeout=timeout)
+        pcgs_res = lookup_pcgs_cert(cert, pcgs_token, timeout=timeout, workspace=workspace)
         if pcgs_res:
             return pcgs_res
     if grading_service == "PSA" and psa_token:
@@ -269,6 +276,7 @@ def lookup_numista_specs(
     denomination: str = "",
     api_key: str = "",
     timeout: float = 10.0,
+    workspace: Any = None,
 ) -> dict[str, Any] | None:
     """Query Numista v3 API for coin specifications (mintage, weight, diameter, composition)."""
     if not title or not api_key:
@@ -276,8 +284,8 @@ def lookup_numista_specs(
     from apps.vision.cache import lookup_cert_cache, store_cert_cache
 
     query = " ".join(part for part in [year, country, denomination, title] if part).strip()
-    cache_key = query.lower()[:64]
-    cached = lookup_cert_cache("NUMISTA", cache_key)
+    cache_key = hashlib.sha256(query.lower().encode("utf-8")).hexdigest()
+    cached = lookup_cert_cache("NUMISTA", cache_key, workspace=workspace)
     if cached and isinstance(cached.get("specs"), dict):
         return {
             "specs": _hydrate_cached_specs(cached["specs"]),
@@ -342,6 +350,7 @@ def lookup_numista_specs(
                 cache_key,
                 {"specs": _serialize_specs_for_cache(specs), "raw": detail},
                 source="NUMISTA",
+                workspace=workspace,
             )
             return {"specs": specs, "raw": detail}
     except Exception as exc:

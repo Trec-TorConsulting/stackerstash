@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import time
 import uuid
 from typing import Any
 
 import jwt
 from django.conf import settings
+from django.core.cache import cache
 from django.db.models import Case, IntegerField, Value, When
 from django.http import HttpRequest
 from ninja.errors import HttpError
@@ -14,12 +17,48 @@ from ninja.security import HttpBearer
 from .models import User, Workspace, WorkspaceMembership
 
 
+def enforce_rate_limit(
+    request: HttpRequest,
+    scope: str,
+    *,
+    identifier: str = "",
+    limit: int | None = None,
+    window_seconds: int | None = None,
+) -> None:
+    """Enforce a cache-backed request rate limit per scope + client IP/identifier."""
+    max_attempts = (
+        limit
+        if limit is not None
+        else int(getattr(settings, "AUTH_RATE_LIMIT_MAX_ATTEMPTS", 20))
+    )
+    window = (
+        window_seconds
+        if window_seconds is not None
+        else int(getattr(settings, "AUTH_RATE_LIMIT_WINDOW_SECONDS", 60))
+    )
+    forwarded = (request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",")[0].strip()
+    client_ip = forwarded or (request.META.get("REMOTE_ADDR") or "unknown").strip()
+    key_raw = f"{scope}:{client_ip}:{identifier.strip().lower()}"
+    digest = hashlib.sha256(key_raw.encode("utf-8")).hexdigest()[:32]
+    cache_key = f"ratelimit:{scope}:{digest}"
+    count = int(cache.get(cache_key, 0) or 0) + 1
+    if count > max_attempts:
+        raise HttpError(429, "Too many attempts. Please wait and try again.")
+    cache.set(cache_key, count, timeout=window)
+
+
+def _password_fingerprint(user: User) -> str:
+    """Return a short non-reversible SHA-256 fingerprint of the user's current password hash."""
+    return hashlib.sha256((user.password or "").encode("utf-8")).hexdigest()[:16]
+
+
 def issue_access_token(user: User) -> str:
-    """Issue a signed HS256 JWT for the authenticated user."""
+    """Issue a signed HS256 JWT for the authenticated user bound to their current password hash."""
     now = int(time.time())
     payload = {
         "sub": str(user.id),
         "email": user.email,
+        "pwd": _password_fingerprint(user),
         "iat": now,
         "exp": now + settings.JWT_ACCESS_TTL_SECONDS,
     }
@@ -105,6 +144,9 @@ class WorkspaceAuth(HttpBearer):
             return None
         user = User.objects.filter(id=payload["sub"], is_active=True).first()
         if not user:
+            return None
+        token_pwd = str(payload.get("pwd") or "")
+        if not token_pwd or not hmac.compare_digest(token_pwd, _password_fingerprint(user)):
             return None
 
         requested_ws_id = (request.headers.get("X-Workspace-Id") or "").strip()

@@ -1,4 +1,4 @@
-import type { CollectionItem, ValuationHistoryEntry } from "./api";
+import { getActiveWorkspaceId, type CollectionItem, type ValuationHistoryEntry } from "./api";
 
 export interface CachedItemSnapshot {
   item: CollectionItem;
@@ -9,6 +9,10 @@ export interface CachedItemSnapshot {
 const DB_NAME = "stackerstash-offline";
 const STORE_NAME = "item-snapshots";
 const memoryFallback = new Map<string, CachedItemSnapshot>();
+
+function buildCacheKey(itemId: string): string {
+  return `${getActiveWorkspaceId() || "default"}:${itemId}`;
+}
 
 function openDb(): Promise<IDBDatabase | null> {
   if (typeof indexedDB === "undefined") {
@@ -35,19 +39,20 @@ export async function cacheItemSnapshot(
   item: CollectionItem,
   valuations: ValuationHistoryEntry[] = []
 ): Promise<void> {
+  const key = buildCacheKey(item.id);
   const snapshot: CachedItemSnapshot = {
     item,
     valuations,
     cachedAt: new Date().toISOString(),
   };
-  memoryFallback.set(item.id, snapshot);
+  memoryFallback.set(key, snapshot);
 
   const db = await openDb();
   if (!db) return;
   await new Promise<void>((resolve) => {
     try {
       const tx = db.transaction(STORE_NAME, "readwrite");
-      tx.objectStore(STORE_NAME).put(snapshot, item.id);
+      tx.objectStore(STORE_NAME).put(snapshot, key);
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     } catch {
@@ -57,18 +62,35 @@ export async function cacheItemSnapshot(
 }
 
 export async function getCachedItemSnapshot(itemId: string): Promise<CachedItemSnapshot | null> {
+  const key = buildCacheKey(itemId);
   const db = await openDb();
   if (!db) {
-    return memoryFallback.get(itemId) || null;
+    return memoryFallback.get(key) || null;
   }
   return new Promise((resolve) => {
     try {
       const tx = db.transaction(STORE_NAME, "readonly");
-      const req = tx.objectStore(STORE_NAME).get(itemId);
-      req.onsuccess = () => resolve((req.result as CachedItemSnapshot) || memoryFallback.get(itemId) || null);
-      req.onerror = () => resolve(memoryFallback.get(itemId) || null);
+      const req = tx.objectStore(STORE_NAME).get(key);
+      req.onsuccess = () => resolve((req.result as CachedItemSnapshot) || memoryFallback.get(key) || null);
+      req.onerror = () => resolve(memoryFallback.get(key) || null);
     } catch {
-      resolve(memoryFallback.get(itemId) || null);
+      resolve(memoryFallback.get(key) || null);
+    }
+  });
+}
+
+export async function clearOfflineCache(): Promise<void> {
+  memoryFallback.clear();
+  const db = await openDb();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      tx.objectStore(STORE_NAME).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    } catch {
+      resolve();
     }
   });
 }

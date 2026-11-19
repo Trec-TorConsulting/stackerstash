@@ -58,13 +58,32 @@ def test_a01_broken_access_control_and_media_signatures(api_client, user_a, user
     assert api_client.delete(f"/api/v1/catalog/containers/{container.id}", **_headers(bob_token)).status_code == 404
     assert api_client.get("/api/v1/admin/overview", **_headers(bob_token)).status_code == 403
 
-    # Signed media verification
+    # Signed media verification & private security headers + revocation on workspace deletion
+    from config.media_signing import build_signed_media_url
+
     media_root = Path(settings.MEDIA_ROOT)
     media_root.mkdir(parents=True, exist_ok=True)
     (media_root / "secret.jpg").write_bytes(b"imgdata")
     assert api_client.get("/media/secret.jpg").status_code == 403
     assert api_client.get("/media/secret.jpg?exp=9999999999&sig=bad").status_code == 403
     assert api_client.get("/media/secret.jpg?exp=1&sig=bad").status_code == 403
+
+    ws_rel = f"workspaces/{alice_ws.id}/items/{item.id}/coin.jpg"
+    ws_file = media_root / ws_rel
+    ws_file.parent.mkdir(parents=True, exist_ok=True)
+    ws_file.write_bytes(b"imgdata")
+    signed_ws_url = build_signed_media_url(ws_rel)
+    ok_media = api_client.get(signed_ws_url)
+    assert ok_media.status_code == 200
+    assert ok_media["Cache-Control"] == "private, max-age=3600, no-transform"
+    assert ok_media["X-Content-Type-Options"] == "nosniff"
+    assert ok_media["Content-Security-Policy"] == "default-src 'none'; img-src 'self'"
+    assert ok_media["Referrer-Policy"] == "same-origin"
+
+    # Advancing workspace media_key_version invalidates previously issued signed URLs
+    alice_ws.media_key_version += 1
+    alice_ws.save(update_fields=["media_key_version"])
+    assert api_client.get(signed_ws_url).status_code == 403
 
 
 @pytest.mark.django_db
@@ -184,14 +203,60 @@ def test_a07_a08_a09_auth_integrity_and_secret_non_disclosure(api_client, user_a
     assert api_client.get("/api/v1/auth/me", HTTP_AUTHORIZATION=f"Bearer {expired_tok}").status_code == 401
     assert api_client.get("/api/v1/auth/me", HTTP_AUTHORIZATION="Bearer bad.jwt.token").status_code == 401
 
+    # Password change immediately invalidates prior JWT tokens
+    pw_change = api_client.post(
+        "/api/v1/auth/change-password",
+        data=json.dumps({"current_password": "StrongPassword123!", "new_password": "RotatedPassword123!"}),
+        content_type="application/json",
+        **_headers(alice_token),
+    )
+    assert pw_change.status_code == 200
+    assert api_client.get("/api/v1/auth/me", **_headers(alice_token)).status_code == 401
+    rotated_token = pw_change.json()["access_token"]
+    assert api_client.get("/api/v1/auth/me", **_headers(rotated_token)).status_code == 200
+
     # Inactive user rejected
     alice.is_active = False
     alice.save(update_fields=["is_active"])
-    assert api_client.get("/api/v1/auth/me", **_headers(alice_token)).status_code == 401
+    assert api_client.get("/api/v1/auth/me", **_headers(rotated_token)).status_code == 401
+
+    # Brute-force rate limiting returns 429 on repeated auth / invite attempts
+    settings.AUTH_RATE_LIMIT_MAX_ATTEMPTS = 2
+    for _ in range(2):
+        assert (
+            api_client.post(
+                "/api/v1/auth/login",
+                data=json.dumps({"email": "brute@example.com", "password": "WrongPassword123!"}),
+                content_type="application/json",
+                HTTP_X_FORWARDED_FOR="203.0.113.55",
+            ).status_code
+            == 401
+        )
+    throttled_login = api_client.post(
+        "/api/v1/auth/login",
+        data=json.dumps({"email": "brute@example.com", "password": "WrongPassword123!"}),
+        content_type="application/json",
+        HTTP_X_FORWARDED_FOR="203.0.113.55",
+    )
+    assert throttled_login.status_code == 429
+
+    for _ in range(2):
+        assert (
+            api_client.get(
+                "/api/v1/auth/invites/guess-token",
+                HTTP_X_FORWARDED_FOR="203.0.113.56",
+            ).status_code
+            == 404
+        )
+    throttled_invite = api_client.get(
+        "/api/v1/auth/invites/guess-token",
+        HTTP_X_FORWARDED_FOR="203.0.113.56",
+    )
+    assert throttled_invite.status_code == 429
 
     # Stripe webhook tampering -> 400 without tier upgrade
     settings.STRIPE_WEBHOOK_SECRET = "whsec_test"
-    AccountSubscription.objects.create(user=alice, tier=PlanTier.FREE)
+    AccountSubscription.objects.update_or_create(user=alice, defaults={"tier": PlanTier.FREE})
     with patch("apps.accounts.billing_api.stripe.Webhook.construct_event", side_effect=ValueError("bad sig")):
         bad_wh = api_client.post(
             "/api/v1/billing/webhook",
@@ -202,9 +267,89 @@ def test_a07_a08_a09_auth_integrity_and_secret_non_disclosure(api_client, user_a
         assert bad_wh.status_code == 400
     assert AccountSubscription.objects.get(user=alice).tier == PlanTier.FREE
 
+    # Provider exception strings scrubbed in ValuationHistory, AppraisalJob, and deferred AI enrichment
+    from apps.valuation.models import SpotPriceSnapshot, ValuationHistory
+    from apps.valuation.services import appraise_item, start_appraisal_job
+    from apps.valuation.tasks import process_deferred_ai_enrichment_task
+
+    SpotPriceSnapshot.objects.create(metal_type="GOLD", price_usd_per_troy_oz=Decimal("2500.00"))
+    alice.is_active = True
+    alice.save(update_fields=["is_active"])
+    alice_ws = alice.owned_workspaces.first()
+    cred = ProviderCredential.objects.create(workspace=alice_ws, provider=ProviderCredential.Provider.GEMINI)
+    cred.set_secret("AIzaSecretLeakTest999999")
+    cred.save()
+    coin = CollectionItem.objects.create(
+        workspace=alice_ws,
+        title="Redaction Coin",
+        metal_type="GOLD",
+        weight_value=Decimal("1"),
+        market_value_unit=Decimal("2500.00"),
+        ai_enrichment_pending=True,
+    )
+    leaked_msg = "Upstream failed: https://api.example/v1?key=AIzaSecretLeakTest999999 Authorization: Bearer secretBearerToken123"
+    with patch("apps.vision.services.estimate_item_value_with_ai", side_effect=RuntimeError(leaked_msg)):
+        appraise_item(coin, alice_ws)
+    vh = ValuationHistory.objects.filter(item=coin).first()
+    assert vh is not None
+    assert "AIzaSecretLeakTest999999" not in json.dumps(vh.raw_payload)
+    assert "secretBearerToken123" not in json.dumps(vh.raw_payload)
+
+    with patch("apps.valuation.services.appraise_item", side_effect=RuntimeError(leaked_msg)):
+        failed_job = start_appraisal_job(coin, alice_ws, sync=True)
+    assert "AIzaSecretLeakTest999999" not in failed_job.error_message
+    assert "secretBearerToken123" not in failed_job.error_message
+
+    with patch("apps.valuation.tasks.appraise_item", side_effect=RuntimeError(leaked_msg)):
+        process_deferred_ai_enrichment_task(batch_size=5)
+    coin.refresh_from_db()
+    assert "AIzaSecretLeakTest999999" not in coin.ai_enrichment_last_error
+    assert "secretBearerToken123" not in coin.ai_enrichment_last_error
+
 
 @pytest.mark.django_db
-def test_a10_ssrf_url_validation_redirect_and_stream_cap(monkeypatch):
+def test_a10_ssrf_url_validation_redirect_and_stream_cap(api_client, user_a, monkeypatch):
+    from apps.accounts.models import validate_ollama_url
+
+    _, alice_ws, alice_token = user_a
+
+    # OLLAMA_URL SSRF checks: cloud metadata, cluster services, credentials, link-local, non-allowlisted IPs/locals
+    bad_ollama_urls = [
+        "file:///etc/passwd",
+        "ftp://ollama.example.com:11434",
+        "http://user:pass@ollama.example.com:11434",
+        "http://169.254.169.254/latest/meta-data",
+        "http://169.254.1.1:11434",
+        "http://0.0.0.0:11434",
+        "http://postgresql.postgresql.svc.cluster.local:5432",
+        "http://redis.redis.svc:6379",
+        "http://10.0.0.8:11434",
+        "http://unlisted.local:11434",
+    ]
+    for bad_ol in bad_ollama_urls:
+        with pytest.raises(ValueError):
+            validate_ollama_url(bad_ol)
+
+    assert validate_ollama_url("https://ollama.example.com:11434/") == "https://ollama.example.com:11434"
+    assert (
+        api_client.put(
+            "/api/v1/settings/credentials/OLLAMA_URL",
+            data=json.dumps({"value": "http://169.254.169.254/latest/meta-data"}),
+            content_type="application/json",
+            **_headers(alice_token, alice_ws.id),
+        ).status_code
+        == 400
+    )
+    assert (
+        api_client.put(
+            "/api/v1/settings/credentials/OLLAMA_URL",
+            data=json.dumps({"value": "https://ollama.example.com:11434"}),
+            content_type="application/json",
+            **_headers(alice_token, alice_ws.id),
+        ).status_code
+        == 200
+    )
+
     # Direct private / loopback / metadata / non-HTTP schemes rejected
     blocked_urls = [
         "file:///etc/passwd",

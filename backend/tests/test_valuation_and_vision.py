@@ -14,9 +14,21 @@ from apps.catalog.models import CollectionItem
 
 @pytest.mark.django_db
 @respx.mock
-def test_spot_refresh_melt_and_analytics(api_client, user_a):
+def test_spot_refresh_melt_and_analytics(api_client, user_a, user_b):
     _, ws, token = user_a
+    _, ws_b, _ = user_b
     headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    other_vault_coin = CollectionItem.objects.create(
+        workspace=ws_b,
+        category="COIN",
+        title="Vault B Silver Eagle",
+        metal_type="SILVER",
+        weight_value=Decimal("1"),
+        weight_unit="OZ_T",
+        purity=Decimal("0.999"),
+        melt_value_unit=Decimal("0.00"),
+    )
 
     respx.get("https://api.gold-api.com/price/XAU").mock(
         return_value=httpx.Response(200, json={"price": 2700.00})
@@ -62,6 +74,15 @@ def test_spot_refresh_melt_and_analytics(api_client, user_a):
     assert resp.status_code == 200
     assert resp.json()["SILVER"] == "30.0000"
     assert resp.json()["COPPER"] == "0.3003"
+
+    # Vault B item was NOT mutated by Vault A's user-triggered spot refresh
+    other_vault_coin.refresh_from_db()
+    assert other_vault_coin.melt_value_unit == Decimal("0.00")
+
+    # Calling refresh again within the cooldown window reuses cached snapshots without re-hitting gold-api
+    resp_cached = api_client.post("/api/v1/valuation/spots/refresh", **headers)
+    assert resp_cached.status_code == 200
+    assert resp_cached.json()["SILVER"] == "30.0000"
 
     summary = api_client.get("/api/v1/analytics/summary", **headers).json()
     assert summary["gold_silver_ratio"] == "90.00"

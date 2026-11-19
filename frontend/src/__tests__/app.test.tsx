@@ -1,9 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
+import { AppRoutes } from "../App";
 import { ImportWizardModal } from "../components/ImportWizardModal";
+import { api, setAuthToken } from "../lib/api";
 import { formatOz, formatUsd } from "../lib/format";
+import * as offlineCache from "../lib/offlineCache";
 import { AdminPortalPage } from "../pages/AdminPortalPage";
 import { AuthPage } from "../pages/AuthPage";
 import { ComingSoonPage } from "../pages/ComingSoonPage";
@@ -262,5 +265,57 @@ describe("ImportWizardModal", () => {
     fireEvent.click(screen.getByRole("button", { name: "Import 1 Items" }));
     expect(await screen.findByText(/Successfully imported/i)).toBeInTheDocument();
     expect(onImported).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("AppRoutes logout cache purge", () => {
+  it("purges IndexedDB offlineCache and both Workbox caches on logout", async () => {
+    setAuthToken("jwt-logout-test");
+    vi.spyOn(api, "me").mockResolvedValue({
+      id: "u1",
+      email: "user@example.com",
+      display_name: "User",
+      is_staff: false,
+      is_superuser: false,
+      workspace: { id: "ws-1", name: "Vault 1", slug: "vault-1", default_currency: "USD" },
+      workspaces: [{ id: "ws-1", name: "Vault 1", slug: "vault-1", default_currency: "USD" }],
+    });
+    vi.spyOn(api, "listPendingInvites").mockResolvedValue([]);
+    vi.spyOn(api, "getSummary").mockResolvedValue({
+      total_items: 0,
+      unique_entries: 0,
+      total_market_value: "0.00",
+      total_melt_value: "0.00",
+      total_cost_basis: "0.00",
+      unrealized_pnl: "0.00",
+      realized_pnl: "0.00",
+      gold_silver_ratio: "80.00",
+      spot_prices: {},
+      metal_breakdown: [],
+      category_breakdown: [],
+      top_valuable_items: [],
+    });
+    const clearSpy = vi.spyOn(offlineCache, "clearOfflineCache").mockResolvedValue(undefined);
+    const cacheDelete = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal("caches", { delete: cacheDelete });
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={["/"]}>
+          <AppRoutes />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+
+    const signOutBtns = await screen.findAllByRole("button", { name: /Sign out/i });
+    fireEvent.click(signOutBtns[0]);
+
+    await waitFor(() => {
+      expect(clearSpy).toHaveBeenCalled();
+      expect(cacheDelete).toHaveBeenCalledWith("api-items-valuation-cache");
+      expect(cacheDelete).toHaveBeenCalledWith("item-media-cache");
+    });
+    setAuthToken(null);
   });
 });

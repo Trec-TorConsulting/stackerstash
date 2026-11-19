@@ -49,6 +49,16 @@ def test_health_error_and_unconfigured_redis(client):
         assert ok is False
         assert "REDIS_URL" in (err or "")
 
+    api_resp = client.get("/api/v1/billing/plans")
+    assert api_resp.status_code == 200
+    assert api_resp["Cache-Control"] == "no-store"
+    assert api_resp["Referrer-Policy"] == "strict-origin-when-cross-origin"
+    assert api_resp["X-Content-Type-Options"] == "nosniff"
+
+    with override_settings(DEBUG=False):
+        assert client.get("/api/v1/docs").status_code == 404
+        assert client.get("/api/v1/openapi.json").status_code == 404
+
 
 def test_media_signing_edge_cases(tmp_path):
     assert build_signed_media_url("") == ""
@@ -86,11 +96,15 @@ def test_settings_production_branches_and_database_url(monkeypatch):
             importlib.reload(settings_mod)
 
         monkeypatch.setenv("FIELD_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
-        monkeypatch.setenv("DATABASE_URL", "postgres://stackuser:stackpass@dbhost:5433/stackdb")
+        monkeypatch.setenv("DATABASE_URL", "postgres://stackuser:stackpass@dbhost:5433/stackdb?sslmode=require")
         importlib.reload(settings_mod)
         assert settings_mod.DATABASES["default"]["ENGINE"] == "django.db.backends.postgresql"
         assert settings_mod.DATABASES["default"]["HOST"] == "dbhost"
+        assert settings_mod.DATABASES["default"]["OPTIONS"] == {"sslmode": "require"}
         assert settings_mod.SESSION_COOKIE_SECURE is True
+
+        monkeypatch.setenv("DATABASE_URL", "postgres://stackuser:stackpass@dbhost:5433/stackdb")
+        assert "OPTIONS" not in settings_mod._build_databases()["default"]
 
         monkeypatch.setenv("DATABASE_URL", "mysql://bad/db")
         with pytest.raises(ValueError, match="Unsupported DATABASE_URL scheme"):

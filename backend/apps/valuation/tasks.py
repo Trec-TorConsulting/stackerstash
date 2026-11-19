@@ -49,9 +49,12 @@ def process_deferred_ai_enrichment_task(batch_size: int = 5) -> dict[str, int]:
                 # Stop batch early if Gemini is still returning 429 quota errors
                 break
         except Exception as exc:
-            logger.warning("Deferred AI enrichment failed for item %s: %s", item.id, exc)
+            from apps.vision.services import _sanitize_error_message
+
+            sanitized_err = _sanitize_error_message(str(exc))
+            logger.warning("Deferred AI enrichment failed for item %s: %s", item.id, sanitized_err)
             item.ai_enrichment_attempts += 1
-            item.ai_enrichment_last_error = str(exc)[:500]
+            item.ai_enrichment_last_error = sanitized_err[:500]
             item.save(update_fields=["ai_enrichment_attempts", "ai_enrichment_last_error", "updated_at"])
             deferred += 1
 

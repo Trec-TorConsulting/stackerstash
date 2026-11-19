@@ -13,6 +13,7 @@ import {
   setAuthToken,
   type AuthUser,
 } from "./lib/api";
+import { clearOfflineCache } from "./lib/offlineCache";
 import { AdminPortalPage } from "./pages/AdminPortalPage";
 import { AuthPage } from "./pages/AuthPage";
 import { CollectionPage } from "./pages/CollectionPage";
@@ -54,19 +55,25 @@ export function AppRoutes() {
       .finally(() => setChecking(false));
   }, []);
 
+  async function purgeClientVaultCaches() {
+    await clearOfflineCache();
+    if (typeof caches !== "undefined") {
+      try {
+        await caches.delete("api-items-valuation-cache");
+        await caches.delete("item-media-cache");
+      } catch {
+        // ignore cache API restrictions
+      }
+    }
+  }
+
   async function refreshUserSession(nextWorkspaceId?: string) {
     if (nextWorkspaceId) {
       setActiveWorkspaceId(nextWorkspaceId);
     }
     await queryClient.cancelQueries();
     queryClient.clear();
-    if (typeof caches !== "undefined") {
-      try {
-        await caches.delete("api-items-valuation-cache");
-      } catch {
-        // ignore cache API restrictions
-      }
-    }
+    await purgeClientVaultCaches();
     const updatedUser = await api.me();
     setActiveWorkspaceId(updatedUser.workspace.id);
     setUser(updatedUser);
@@ -84,6 +91,7 @@ export function AppRoutes() {
     setAuthToken(null);
     setActiveWorkspaceId(null);
     queryClient.clear();
+    void purgeClientVaultCaches();
     setUser(null);
   }
 
