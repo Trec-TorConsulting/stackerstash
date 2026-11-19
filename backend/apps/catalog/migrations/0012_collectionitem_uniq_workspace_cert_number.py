@@ -3,16 +3,56 @@
 from django.db import migrations, models
 
 
+def deduplicate_workspace_cert_numbers(apps, schema_editor) -> None:
+    CollectionItem = apps.get_model("catalog", "CollectionItem")
+    db_alias = schema_editor.connection.alias
+
+    duplicates = (
+        CollectionItem.objects.using(db_alias)
+        .exclude(cert_number="")
+        .values("workspace_id", "cert_number")
+        .annotate(item_count=models.Count("id"))
+        .filter(item_count__gt=1)
+    )
+    for group in duplicates:
+        items = list(
+            CollectionItem.objects.using(db_alias)
+            .filter(
+                workspace_id=group["workspace_id"],
+                cert_number=group["cert_number"],
+            )
+            .order_by("-created_at", "-id")
+        )
+        for duplicate_item in items[1:]:
+            old_cert = duplicate_item.cert_number
+            note_suffix = f"[Auto-cleared duplicate cert #{old_cert} during migration]"
+            duplicate_item.notes = (
+                f"{duplicate_item.notes}\n{note_suffix}".strip()
+                if duplicate_item.notes
+                else note_suffix
+            )
+            duplicate_item.cert_number = ""
+            duplicate_item.save(update_fields=["cert_number", "notes"])
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('accounts', '0005_alter_providercredential_provider'),
-        ('catalog', '0011_itemphoto_thumbnail'),
+        ("accounts", "0005_alter_providercredential_provider"),
+        ("catalog", "0011_itemphoto_thumbnail"),
     ]
 
     operations = [
+        migrations.RunPython(
+            deduplicate_workspace_cert_numbers,
+            reverse_code=migrations.RunPython.noop,
+        ),
         migrations.AddConstraint(
-            model_name='collectionitem',
-            constraint=models.UniqueConstraint(condition=models.Q(('cert_number', ''), _negated=True), fields=('workspace', 'cert_number'), name='uniq_workspace_cert_number'),
+            model_name="collectionitem",
+            constraint=models.UniqueConstraint(
+                condition=models.Q(("cert_number", ""), _negated=True),
+                fields=("workspace", "cert_number"),
+                name="uniq_workspace_cert_number",
+            ),
         ),
     ]

@@ -1621,3 +1621,80 @@ def test_catalog_models_goldback_filters_cards_photos_and_import_edges(api_clien
         ).status_code
         == 402
     )
+
+
+@pytest.mark.django_db
+def test_migration_0012_deduplicate_workspace_cert_numbers() -> None:
+    import importlib
+    from types import SimpleNamespace
+
+    from django.apps import apps as django_apps
+    from django.db import connection
+
+    from apps.accounts.models import User, create_default_workspace_for_user
+    from apps.catalog.models import CollectionItem
+
+    mig = importlib.import_module(
+        "apps.catalog.migrations.0012_collectionitem_uniq_workspace_cert_number"
+    )
+    user = User.objects.create_user(email="mig0012@example.com", password="Password123!")
+    ws = create_default_workspace_for_user(user)
+
+    older = CollectionItem.objects.create(
+        workspace=ws,
+        title="2007-S Utah Quarter Older",
+        category="COIN",
+        grading_service="NGC",
+        cert_number="",
+        notes="Existing note",
+    )
+    newer = CollectionItem.objects.create(
+        workspace=ws,
+        title="2007-S Utah Quarter PF67 Ultra Cameo",
+        category="COIN",
+        grading_service="NGC",
+        cert_number="8866470-119",
+    )
+
+    class _FakeQuerySet(list):
+        def order_by(self, *_args: str):
+            return [newer, older]
+
+    class _FakeManager:
+        def using(self, _alias: str):
+            return self
+
+        def exclude(self, **_kwargs):
+            return self
+
+        def values(self, *_args: str):
+            return self
+
+        def annotate(self, **_kwargs):
+            return self
+
+        def filter(self, **kwargs):
+            if "item_count__gt" in kwargs:
+                return [{"workspace_id": ws.id, "cert_number": "8866470-119", "item_count": 2}]
+            older.cert_number = "8866470-119"
+            return _FakeQuerySet([newer, older])
+
+    class _FakeModel:
+        objects = _FakeManager()
+
+    class _FakeApps:
+        def get_model(self, app_label: str, model_name: str):
+            assert (app_label, model_name) == ("catalog", "CollectionItem")
+            return _FakeModel
+
+    editor = SimpleNamespace(connection=connection)
+    mig.deduplicate_workspace_cert_numbers(_FakeApps(), editor)
+    # Also verify no-op when there are no duplicates in real DB
+    mig.deduplicate_workspace_cert_numbers(django_apps, editor)
+
+    older.refresh_from_db()
+    newer.refresh_from_db()
+    assert newer.cert_number == "8866470-119"
+    assert older.cert_number == ""
+    assert "Auto-cleared duplicate cert #8866470-119" in older.notes
+
