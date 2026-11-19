@@ -36,3 +36,10 @@ The system SHALL classify each appraised item into a `collectibility_tier` (`BUL
 #### Scenario: Viewing collectibility thesis for a raw key-date coin
 - **WHEN** an unslabbed key-date coin is appraised
 - **THEN** the Collectibility & Hold Thesis card displays its tier badge, hold rationale, and actionable upside note (such as potential value impact of third-party grading)
+
+### Requirement: Valuation Freshness and Manual Lock Controls
+The UI SHALL display when an item's market value was last updated (`valued_at`), highlight stale valuations, and provide a one-click re-appraise action as well as a manual value lock/override toggle.
+
+#### Scenario: Stale valuation indicator
+- **WHEN** an item's `valued_at` timestamp exceeds the configured freshness threshold (e.g., 7 days)
+- **THEN** the item detail and collection views SHALL display a stale-valuation indicator with a quick action to re-appraise.
