@@ -17,7 +17,13 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { PhotoCropRotateView } from "../components/PhotoCropRotateView";
-import { api, type ContainerNode, type UserWorkspace, type VisionCandidate } from "../lib/api";
+import {
+  api,
+  isPlanLimitError,
+  type ContainerNode,
+  type UserWorkspace,
+  type VisionCandidate,
+} from "../lib/api";
 import { useWorkspacePermissions } from "../lib/workspaceContext";
 import {
   autoCropImageFile,
@@ -236,6 +242,7 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
   const [quotaDeferred, setQuotaDeferred] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [planLimitError, setPlanLimitError] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [batchMode, setBatchMode] = useState(false);
   const [fastBulkMode, setFastBulkMode] = useState(true);
@@ -678,6 +685,7 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
           : `/items/${created.id}`
       );
     } catch (err) {
+      setPlanLimitError(isPlanLimitError(err));
       setError(err instanceof Error ? err.message : "Failed to save item");
     } finally {
       setSaving(false);
@@ -755,6 +763,7 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
       qc.invalidateQueries({ queryKey: ["portfolio-summary"] });
       navigate("/collection");
     } catch (err) {
+      setPlanLimitError(isPlanLimitError(err));
       setError(err instanceof Error ? err.message : "Batch catalog failed");
     } finally {
       setBatchProgress(null);
@@ -1237,8 +1246,16 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
       )}
 
       {error && (
-        <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm">
-          {error}
+        <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm flex flex-wrap items-center justify-between gap-2">
+          <span>{error}</span>
+          {planLimitError && (
+            <Link
+              to="/settings#billing"
+              className="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs"
+            >
+              Upgrade Plan
+            </Link>
+          )}
         </div>
       )}
 

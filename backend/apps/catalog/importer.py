@@ -13,7 +13,11 @@ import httpx
 from django.core.files.base import ContentFile
 from PIL import Image
 
-from apps.accounts.models import Workspace
+from apps.accounts.models import (
+    Workspace,
+    assert_can_add_active_items,
+    get_remaining_active_item_slots,
+)
 from apps.valuation.services import refresh_item_melt_from_latest_spot
 
 from .image_processing import generate_image_thumbnail, process_item_image
@@ -642,6 +646,9 @@ def import_mapped_csv(
     created_item_ids: list[Any] = []
     container_cache: dict[str, Container] = {}
 
+    initial_remaining = get_remaining_active_item_slots(workspace.owner)
+    remaining = initial_remaining
+
     for idx, row in enumerate(reader, start=2):
         extracted = _extract_mapped_row(row, effective_mapping)
         if not extracted:
@@ -649,6 +656,16 @@ def import_mapped_csv(
             continue
         try:
             kwargs = _normalize_item_kwargs(extracted, preset=preset)
+            row_status = str(kwargs.get("status") or CollectionItem.Status.IN_COLLECTION)
+            is_active_row = row_status != CollectionItem.Status.SOLD
+            if is_active_row and remaining is not None and remaining <= 0:
+                if initial_remaining == 0 and result.created_count == 0:
+                    assert_can_add_active_items(workspace.owner, adding=1)
+                result.errors.append({
+                    "row": idx,
+                    "error": "Plan active item quota reached; remaining active items were skipped.",
+                })
+                continue
             if kwargs.get("title"):
                 kwargs["title"] = _clean_item_title(kwargs["title"])
             container = _resolve_container_by_name(
@@ -660,6 +677,8 @@ def import_mapped_csv(
                 intake_source=CollectionItem.IntakeSource.CSV,
                 **kwargs,
             )
+            if is_active_row and remaining is not None:
+                remaining -= 1
             refresh_item_melt_from_latest_spot(item)
             from apps.catalog.auto_sort import enqueue_item_auto_sort
 

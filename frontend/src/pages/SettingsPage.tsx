@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
   Copy,
+  CreditCard,
   ExternalLink,
   FolderTree,
   KeyRound,
@@ -11,6 +12,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Server,
   Star,
   Trash2,
   UserCheck,
@@ -145,6 +147,7 @@ export function SettingsPage({
   const [inviteRole, setInviteRole] = useState<"VIEWER" | "EDITOR">("VIEWER");
   const [pendingRemoveMember, setPendingRemoveMember] = useState<WorkspaceMember | null>(null);
   const [confirmLeaveOpen, setConfirmLeaveOpen] = useState(false);
+  const [requestedSubdomain, setRequestedSubdomain] = useState("");
 
   const { data: meData } = useQuery({
     queryKey: ["auth-me"],
@@ -427,6 +430,49 @@ export function SettingsPage({
     enabled: isOwner,
   });
 
+  const { data: billingStatus } = useQuery({
+    queryKey: ["billing-status"],
+    queryFn: () =>
+      typeof api.getBillingStatus === "function"
+        ? api.getBillingStatus()
+        : Promise.resolve(null),
+  });
+
+  const { data: plans = [] } = useQuery({
+    queryKey: ["billing-plans"],
+    queryFn: () =>
+      typeof api.getPlans === "function"
+        ? api.getPlans()
+        : Promise.resolve([]),
+  });
+
+  const checkoutMut = useMutation({
+    mutationFn: (payload: {
+      tier: "PLUS" | "UNLIMITED" | "DEDICATED";
+      requested_subdomain?: string;
+    }) => api.createCheckoutSession(payload),
+    onSuccess: (session) => {
+      if (session?.url) {
+        window.location.assign(session.url);
+      }
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Unable to start Stripe Checkout.");
+    },
+  });
+
+  const portalMut = useMutation({
+    mutationFn: () => api.createPortalSession(),
+    onSuccess: (session) => {
+      if (session?.url) {
+        window.location.assign(session.url);
+      }
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Unable to open Billing Portal.");
+    },
+  });
+
   const saveMut = useMutation({
     mutationFn: ({ provider, value }: { provider: string; value: string }) =>
       api.upsertCredential(provider, value),
@@ -467,6 +513,200 @@ export function SettingsPage({
         <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-sm">
           {notice}
         </div>
+      )}
+
+      {billingStatus && (
+        <section
+          id="billing"
+          className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-4"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <CreditCard className="h-5 w-5 text-amber-400 mt-0.5 shrink-0" />
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-sm font-semibold text-slate-100">
+                    Plan &amp; Billing
+                  </h2>
+                  <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[11px] font-semibold">
+                    {billingStatus.plan_name} ({billingStatus.price_display})
+                  </span>
+                  {!billingStatus.enforce_tiers && (
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[11px] font-semibold">
+                      Self-Hosted Mode (Unmetered)
+                    </span>
+                  )}
+                  {billingStatus.source === "ADMIN_OVERRIDE" && (
+                    <span className="px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/30 text-[11px] font-medium">
+                      Admin Override
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Account tier limits apply to vaults you own and active non-sold items
+                  inside them.
+                </p>
+              </div>
+            </div>
+            {billingStatus.has_stripe_customer && (
+              <button
+                type="button"
+                disabled={portalMut.isPending}
+                onClick={() => portalMut.mutate()}
+                className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 disabled:opacity-50"
+              >
+                {portalMut.isPending ? "Opening..." : "Manage Subscription"}
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+            <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 space-y-1.5">
+              <div className="flex items-center justify-between text-slate-300">
+                <span>Owned Vaults</span>
+                <span className="font-mono font-semibold text-slate-100">
+                  {billingStatus.owned_vault_count} /{" "}
+                  {billingStatus.max_vaults ?? "Unlimited"}
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                <div
+                  className="h-full bg-amber-400 rounded-full"
+                  style={{
+                    width: billingStatus.max_vaults
+                      ? `${Math.min(100, (billingStatus.owned_vault_count / billingStatus.max_vaults) * 100)}%`
+                      : "15%",
+                  }}
+                />
+              </div>
+            </div>
+            <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 space-y-1.5">
+              <div className="flex items-center justify-between text-slate-300">
+                <span>Active Catalog Items</span>
+                <span className="font-mono font-semibold text-slate-100">
+                  {billingStatus.active_item_count} /{" "}
+                  {billingStatus.max_items ?? "Unlimited"}
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                <div
+                  className="h-full bg-emerald-400 rounded-full"
+                  style={{
+                    width: billingStatus.max_items
+                      ? `${Math.min(100, (billingStatus.active_item_count / billingStatus.max_items) * 100)}%`
+                      : "15%",
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {billingStatus.dedicated_instance && (
+            <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 space-y-2 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 font-semibold text-emerald-300">
+                  <Server className="h-4 w-4" />
+                  Dedicated Server Provisioning:{" "}
+                  <span>{billingStatus.dedicated_instance.status}</span>
+                </div>
+                {billingStatus.dedicated_instance.status === "ACTIVE" &&
+                  billingStatus.dedicated_instance.dedicated_url && (
+                    <a
+                      href={billingStatus.dedicated_instance.dedicated_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-emerald-500 text-slate-950 font-semibold hover:bg-emerald-400"
+                    >
+                      Open Dedicated Server
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+              </div>
+              {billingStatus.dedicated_instance.requested_subdomain && (
+                <div className="text-slate-300">
+                  Requested Subdomain:{" "}
+                  <span className="font-mono text-slate-100">
+                    {billingStatus.dedicated_instance.requested_subdomain}
+                  </span>
+                </div>
+              )}
+              {billingStatus.dedicated_instance.admin_notes && (
+                <div className="text-slate-400">
+                  {billingStatus.dedicated_instance.admin_notes}
+                </div>
+              )}
+            </div>
+          )}
+
+          {plans.some((p) => p.tier !== "FREE" && p.tier !== billingStatus.tier) && (
+            <div className="space-y-2.5 pt-2 border-t border-slate-800/80">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-medium text-slate-300">
+                  Available Plan Upgrades
+                </span>
+                <input
+                  type="text"
+                  aria-label="Dedicated server subdomain preference"
+                  value={requestedSubdomain}
+                  onChange={(e) => setRequestedSubdomain(e.target.value)}
+                  placeholder="Optional subdomain for Dedicated ($99.99)"
+                  className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-200 w-64"
+                />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                {plans
+                  .filter((p) => p.tier !== "FREE")
+                  .map((p) => {
+                    const isCurrent = p.tier === billingStatus.tier;
+                    const paidTier = p.tier as "PLUS" | "UNLIMITED" | "DEDICATED";
+                    return (
+                      <div
+                        key={p.tier}
+                        className={`p-3 rounded-xl border text-xs flex flex-col justify-between gap-2 ${
+                          isCurrent
+                            ? "bg-amber-500/10 border-amber-500/40"
+                            : "bg-slate-950/70 border-slate-800"
+                        }`}
+                      >
+                        <div>
+                          <div className="font-semibold text-slate-100 flex items-center justify-between">
+                            <span>{p.name}</span>
+                            <span className="text-amber-300">{p.price_display}</span>
+                          </div>
+                          <div className="text-[11px] text-slate-400 mt-1">
+                            {p.summary}
+                          </div>
+                        </div>
+                        {isCurrent ? (
+                          <span className="text-center py-1 rounded-lg bg-amber-500/20 text-amber-300 font-semibold">
+                            Current Plan
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={
+                              checkoutMut.isPending ||
+                              (!billingStatus.checkout_configured && !p.checkout_enabled)
+                            }
+                            onClick={() =>
+                              checkoutMut.mutate({
+                                tier: paidTier,
+                                requested_subdomain:
+                                  paidTier === "DEDICATED" ? requestedSubdomain : "",
+                              })
+                            }
+                            className="py-1.5 px-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold disabled:opacity-40"
+                          >
+                            Upgrade to {p.name}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+        </section>
       )}
 
       {/* My Vaults */}

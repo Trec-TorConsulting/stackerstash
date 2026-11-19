@@ -13,6 +13,7 @@ Welcome to **Stacker Stash** — your self-hosted or SaaS vault for tracking coi
 6. [Appraisals, Cert Verification & Insurance Reports](#6-appraisals-cert-verification--insurance-reports)
 7. [Multi-Vault Management, Shared Vaults & BYOK API Keys (Settings)](#7-multi-vault-management-account-security--byok-api-keys-settings)
 8. [Django Operator Admin Portal](#8-django-operator-admin-portal)
+9. [Subscription Tiers, Billing & Dedicated Hosting](#9-subscription-tiers-billing--dedicated-hosting)
 
 ---
 
@@ -116,4 +117,26 @@ There is no default admin password. To create an operator superuser:
 cd backend
 .venv/bin/python manage.py createsuperuser
 ```
+
+---
+
+## 9. Subscription Tiers, Billing & Dedicated Hosting
+
+Stacker Stash offers four transparent access plans while keeping **CSV import/export, BYOK AI, and Shared Vaults** enabled on every tier:
+
+| Plan | Monthly Price | Owned Vaults | Active Items | Hosting |
+| :--- | :--- | :--- | :--- | :--- |
+| **Collector Vault (Free)** | `$0` | `1` vault | `100` active entries | Shared cloud |
+| **Plus** | `$9.99/mo` | `10` vaults | Unlimited | Shared cloud |
+| **Unlimited** | `$19.99/mo` | Unlimited | Unlimited | Shared cloud |
+| **Dedicated Server** | `$99.99/mo` | Unlimited | Unlimited | Isolated dedicated server |
+
+- **How Vaults & Items Are Counted**:
+  - **Owned Vaults**: Only vaults you own count against your vault cap; shared vaults you join as an `Editor` or `Viewer` do not consume your quota.
+  - **Active Items**: Each non-`SOLD` catalog entry counts as `1` item regardless of quantity (for example, a tube of `20` Silver Eagles counts as `1` active entry). Marking items `SOLD` frees active quota, and downgrading never deletes existing vaults or items.
+  - **Shared Vault Quotas**: Shared vaults evaluate active-item capacity against the **vault owner's** plan tier.
+- **Stripe Checkout & Billing Portal**: Open **Settings → Plan & Billing** to view live usage meters, upgrade via **Stripe Checkout**, or click **Manage Subscription** for invoices and cancellations.
+- **Dedicated Server Provisioning (`$99.99/mo`)**: Subscribing to **Dedicated Server** automatically creates a tracking request (`REQUESTED` → `PROVISIONING` → `ACTIVE`). Once provisioned by a Global Admin in **Admin → Dedicated Servers**, an **Open Dedicated Server** link appears in your **Plan & Billing** panel.
+- **Self-Hosted Instances (`BILLING_ENFORCE_TIERS`)**: Self-hosted operators can set `BILLING_ENFORCE_TIERS=false` in `.env` to bypass plan paywalls (displayed in Settings as **Self-Hosted Mode (Unmetered)**).
+
 

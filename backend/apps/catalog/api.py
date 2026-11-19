@@ -17,6 +17,10 @@ from ninja.errors import HttpError
 from PIL import Image
 
 from apps.accounts.auth import WorkspaceAuth, require_editor
+from apps.accounts.models import (
+    assert_can_add_active_items,
+    get_remaining_active_item_slots,
+)
 from config.media_signing import build_signed_media_url
 
 from .image_processing import generate_image_thumbnail, process_item_image, rotate_item_image
@@ -768,6 +772,8 @@ def _check_duplicate_cert_number(
 @catalog_router.post("/items", response={201: ItemOut})
 def create_item(request, payload: ItemIn):
     require_editor(request)
+    if payload.status != CollectionItem.Status.SOLD:
+        assert_can_add_active_items(request.workspace.owner, adding=1)
     container = _validate_container(request.workspace, payload.container_id)
     _check_duplicate_cert_number(request.workspace, payload.cert_number)
     item = CollectionItem(
@@ -909,6 +915,13 @@ def bulk_update_items(request, payload: BulkUpdateIn):
     if not items:
         return BulkUpdateOut(updated_count=0)
 
+    if payload.status is not None and payload.status != CollectionItem.Status.SOLD:
+        reactivating = sum(
+            1 for it in items if it.status == CollectionItem.Status.SOLD
+        )
+        if reactivating > 0:
+            assert_can_add_active_items(request.workspace.owner, adding=reactivating)
+
     from apps.valuation.services import refresh_item_melt_from_latest_spot
 
     add_tags = [t.strip() for t in (payload.add_tags or []) if t.strip()]
@@ -1014,6 +1027,13 @@ def update_item(request, item_id: UUID, payload: ItemPatch):
         workspace=request.workspace,
     )
     data = payload.dict(exclude_unset=True)
+    if (
+        item.status == CollectionItem.Status.SOLD
+        and "status" in data
+        and data["status"] is not None
+        and data["status"] != CollectionItem.Status.SOLD
+    ):
+        assert_can_add_active_items(request.workspace.owner, adding=1)
     if "quantity" in data and (data["quantity"] is None or data["quantity"] < 1):
         raise HttpError(400, "quantity must be at least 1")
     if "cert_number" in data:
@@ -1060,6 +1080,7 @@ def duplicate_item(request, item_id: UUID):
     from apps.valuation.services import refresh_item_melt_from_latest_spot
 
     require_editor(request)
+    assert_can_add_active_items(request.workspace.owner, adding=1)
     src = get_object_or_404(
         CollectionItem.objects.select_related("container"),
         id=item_id,
@@ -1453,15 +1474,37 @@ def export_items_json(request):
 def import_items_csv(request, file: UploadedFile = File(...)):
     require_editor(request)
     raw = file.read().decode("utf-8-sig")
-    reader = csv.DictReader(io.StringIO(raw))
+    rows = list(csv.DictReader(io.StringIO(raw)))
     created_count = 0
     errors: list[CsvImportRowError] = []
 
-    for idx, row in enumerate(reader, start=2):
+    initial_remaining = get_remaining_active_item_slots(request.workspace.owner)
+    remaining = initial_remaining
+    if initial_remaining == 0:
+        has_active_rows = any(
+            (r.get("title") or "").strip()
+            and (r.get("status") or "IN_COLLECTION").strip().upper()
+            != CollectionItem.Status.SOLD
+            for r in rows
+        )
+        if has_active_rows:
+            assert_can_add_active_items(request.workspace.owner, adding=1)
+
+    for idx, row in enumerate(rows, start=2):
         title = (row.get("title") or "").strip()
         if not title:
             errors.append(CsvImportRowError(row=idx, error="Missing required 'title' column."))
             continue
+        row_status = (row.get("status") or "IN_COLLECTION").strip().upper()
+        if row_status != CollectionItem.Status.SOLD and remaining is not None:
+            if remaining <= 0:
+                errors.append(
+                    CsvImportRowError(
+                        row=idx,
+                        error="Plan active item quota reached; remaining active items were skipped.",
+                    )
+                )
+                continue
         try:
             qty = int(row.get("quantity") or 1)
             weight_val = Decimal(row.get("weight_value") or "0")
@@ -1474,7 +1517,7 @@ def import_items_csv(request, file: UploadedFile = File(...)):
                 workspace=request.workspace,
                 title=title,
                 category=(row.get("category") or "COIN").upper(),
-                status=(row.get("status") or "IN_COLLECTION").upper(),
+                status=row_status,
                 country=row.get("country") or "",
                 year=row.get("year") or "",
                 mint_or_refiner=row.get("mint_or_refiner") or "",
@@ -1491,6 +1534,8 @@ def import_items_csv(request, file: UploadedFile = File(...)):
                 market_value_unit=market_val,
                 notes=row.get("notes") or "",
             )
+            if row_status != CollectionItem.Status.SOLD and remaining is not None:
+                remaining -= 1
             from apps.catalog.auto_sort import enqueue_item_auto_sort
 
             enqueue_item_auto_sort(created_item)

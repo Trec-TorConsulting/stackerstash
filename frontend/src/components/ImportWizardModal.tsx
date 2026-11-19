@@ -1,6 +1,7 @@
 import { CheckCircle2, FileSpreadsheet, Upload, X } from "lucide-react";
 import { useRef, useState } from "react";
-import { api, type CsvImportPreview, type MappedCsvImportResult } from "../lib/api";
+import { Link } from "react-router-dom";
+import { api, isPlanLimitError, type CsvImportPreview, type MappedCsvImportResult } from "../lib/api";
 
 interface ImportWizardModalProps {
   isOpen: boolean;
@@ -64,6 +65,7 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [planLimitReached, setPlanLimitReached] = useState(false);
   const [result, setResult] = useState<MappedCsvImportResult | null>(null);
 
   if (!isOpen) return null;
@@ -109,6 +111,7 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
     if (!selectedFile) return;
     setIsImporting(true);
     setErrorMsg(null);
+    setPlanLimitReached(false);
     try {
       const res = await api.importMappedCsv(selectedFile, mapping, importPhotos);
       setResult(res);
@@ -117,6 +120,7 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
       }${res.warnings.length ? ` (${res.warnings.length} photo warnings)` : ""}.`;
       onImported(summary);
     } catch (err) {
+      setPlanLimitReached(isPlanLimitError(err));
       setErrorMsg(err instanceof Error ? err.message : "Failed to import CSV.");
     } finally {
       setIsImporting(false);
@@ -184,8 +188,17 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
         )}
 
         {errorMsg && (
-          <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-200 text-xs">
-            {errorMsg}
+          <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-200 text-xs flex flex-wrap items-center justify-between gap-2">
+            <span>{errorMsg}</span>
+            {planLimitReached && (
+              <Link
+                to="/settings#billing"
+                onClick={handleClose}
+                className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold"
+              >
+                Upgrade Plan
+              </Link>
+            )}
           </div>
         )}
 

@@ -16,11 +16,17 @@ from config.health import check_db_health, check_redis_health
 
 from .auth import WorkspaceAuth, resolve_user_workspace
 from .models import (
+    AccountSubscription,
+    DedicatedServerInstance,
+    PlanTier,
     ProviderCredential,
     User,
     Workspace,
     WorkspaceMembership,
+    ensure_dedicated_instance,
+    get_or_create_subscription,
     get_owner_default_workspace,
+    get_user_entitlement_status,
 )
 
 
@@ -79,6 +85,38 @@ class AdminUserOut(Schema):
     item_count: int
     container_count: int
     total_market_value: str
+    tier: str = PlanTier.FREE
+    subscription_source: str = AccountSubscription.Source.DEFAULT
+    subscription_status: str = AccountSubscription.Status.ACTIVE
+    owned_vault_count: int = 0
+    active_item_count: int = 0
+
+
+class AdminSubscriptionPatchIn(Schema):
+    tier: str | None = None
+    clear_override: bool = False
+    admin_notes: str | None = None
+    requested_subdomain: str = ""
+
+
+class AdminDedicatedInstanceOut(Schema):
+    id: UUID
+    user_id: UUID
+    user_email: str
+    user_display_name: str
+    status: str
+    requested_subdomain: str
+    dedicated_url: str
+    admin_notes: str
+    provisioned_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminDedicatedInstancePatchIn(Schema):
+    status: str | None = None
+    dedicated_url: str | None = None
+    admin_notes: str | None = None
 
 
 class AdminUserPatchIn(Schema):
@@ -147,6 +185,7 @@ def _serialize_admin_user(user: User) -> AdminUserOut:
     else:
         item_count, container_count, market_val = 0, 0, Decimal("0.00")
 
+    ent = get_user_entitlement_status(user)
     return AdminUserOut(
         id=user.id,
         email=user.email,
@@ -161,6 +200,11 @@ def _serialize_admin_user(user: User) -> AdminUserOut:
         item_count=item_count,
         container_count=container_count,
         total_market_value=_decimal_str(market_val),
+        tier=ent["tier"],
+        subscription_source=ent["source"],
+        subscription_status=ent["status"],
+        owned_vault_count=ent["owned_vault_count"],
+        active_item_count=ent["active_item_count"],
     )
 
 
@@ -288,3 +332,105 @@ def list_admin_workspaces(request, q: str = ""):
             )
         )
     return results
+
+
+def _serialize_admin_dedicated_instance(
+    inst: DedicatedServerInstance,
+) -> AdminDedicatedInstanceOut:
+    return AdminDedicatedInstanceOut(
+        id=inst.id,
+        user_id=inst.user_id,
+        user_email=inst.user.email,
+        user_display_name=inst.user.display_name,
+        status=inst.status,
+        requested_subdomain=inst.requested_subdomain,
+        dedicated_url=inst.dedicated_url,
+        admin_notes=inst.admin_notes,
+        provisioned_at=inst.provisioned_at,
+        created_at=inst.created_at,
+        updated_at=inst.updated_at,
+    )
+
+
+@admin_router.patch("/users/{user_id}/subscription", response=AdminUserOut)
+def update_user_subscription(
+    request, user_id: UUID, payload: AdminSubscriptionPatchIn
+):
+    target = User.objects.filter(id=user_id).first()
+    if target is None:
+        raise HttpError(404, "User not found.")
+
+    sub = get_or_create_subscription(target)
+    if payload.clear_override:
+        if sub.stripe_subscription_id:
+            sub.source = AccountSubscription.Source.STRIPE
+        else:
+            sub.tier = PlanTier.FREE
+            sub.source = AccountSubscription.Source.DEFAULT
+            sub.status = AccountSubscription.Status.ACTIVE
+    elif payload.tier is not None:
+        tier = (payload.tier or "").strip().upper()
+        if tier not in PlanTier.values:
+            raise HttpError(400, f"Invalid plan tier: {payload.tier}")
+        sub.tier = tier
+        sub.source = AccountSubscription.Source.ADMIN_OVERRIDE
+        sub.status = AccountSubscription.Status.ACTIVE
+        if tier == PlanTier.DEDICATED:
+            ensure_dedicated_instance(target, payload.requested_subdomain)
+
+    if payload.admin_notes is not None:
+        sub.admin_notes = payload.admin_notes.strip()
+    sub.save()
+    return _serialize_admin_user(target)
+
+
+@admin_router.get(
+    "/dedicated-instances", response=list[AdminDedicatedInstanceOut]
+)
+def list_dedicated_instances(request):
+    instances = DedicatedServerInstance.objects.select_related("user").order_by(
+        "-updated_at"
+    )
+    return [_serialize_admin_dedicated_instance(inst) for inst in instances]
+
+
+@admin_router.patch(
+    "/dedicated-instances/{instance_id}", response=AdminDedicatedInstanceOut
+)
+def update_dedicated_instance(
+    request, instance_id: UUID, payload: AdminDedicatedInstancePatchIn
+):
+    inst = (
+        DedicatedServerInstance.objects.select_related("user")
+        .filter(id=instance_id)
+        .first()
+    )
+    if inst is None:
+        raise HttpError(404, "Dedicated server instance not found.")
+
+    if payload.status is not None:
+        status_val = (payload.status or "").strip().upper()
+        if status_val not in DedicatedServerInstance.Status.values:
+            raise HttpError(400, f"Invalid status: {payload.status}")
+        inst.status = status_val
+        if (
+            status_val == DedicatedServerInstance.Status.ACTIVE
+            and inst.provisioned_at is None
+        ):
+            inst.provisioned_at = timezone.now()
+
+    if payload.dedicated_url is not None:
+        url_val = payload.dedicated_url.strip()
+        if url_val and not (
+            url_val.startswith("https://") or url_val.startswith("http://")
+        ):
+            raise HttpError(
+                400, "dedicated_url must start with https:// or http://"
+            )
+        inst.dedicated_url = url_val
+
+    if payload.admin_notes is not None:
+        inst.admin_notes = payload.admin_notes.strip()
+
+    inst.save()
+    return _serialize_admin_dedicated_instance(inst)

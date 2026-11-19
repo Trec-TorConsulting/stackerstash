@@ -3,7 +3,9 @@ from __future__ import annotations
 import secrets
 import uuid
 from datetime import timedelta
+from typing import Any
 
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 from django.utils import timezone
@@ -282,4 +284,266 @@ def create_default_workspace_for_user(
         role=WorkspaceMembership.Role.OWNER,
     )
     return workspace
+
+
+class PlanTier(models.TextChoices):
+    """Supported subscription tiers."""
+
+    FREE = "FREE", "Free"
+    PLUS = "PLUS", "Plus ($9.99/mo)"
+    UNLIMITED = "UNLIMITED", "Unlimited ($19.99/mo)"
+    DEDICATED = "DEDICATED", "Dedicated Server ($99.99/mo)"
+
+
+PLAN_CATALOG: dict[str, dict[str, Any]] = {
+    PlanTier.FREE: {
+        "tier": PlanTier.FREE,
+        "name": "Collector Vault (Free)",
+        "monthly_price_cents": 0,
+        "price_display": "Free",
+        "max_vaults": 1,
+        "max_items": 100,
+        "dedicated_server": False,
+        "summary": "1 Vault / 100 Items",
+    },
+    PlanTier.PLUS: {
+        "tier": PlanTier.PLUS,
+        "name": "Plus",
+        "monthly_price_cents": 999,
+        "price_display": "$9.99/mo",
+        "max_vaults": 10,
+        "max_items": None,
+        "dedicated_server": False,
+        "summary": "10 Vaults / Unlimited Items",
+    },
+    PlanTier.UNLIMITED: {
+        "tier": PlanTier.UNLIMITED,
+        "name": "Unlimited",
+        "monthly_price_cents": 1999,
+        "price_display": "$19.99/mo",
+        "max_vaults": None,
+        "max_items": None,
+        "dedicated_server": False,
+        "summary": "Unlimited Vaults / Unlimited Items",
+    },
+    PlanTier.DEDICATED: {
+        "tier": PlanTier.DEDICATED,
+        "name": "Dedicated Server",
+        "monthly_price_cents": 9999,
+        "price_display": "$99.99/mo",
+        "max_vaults": None,
+        "max_items": None,
+        "dedicated_server": True,
+        "summary": "Dedicated Servers with Unlimited Vaults / Unlimited Items",
+    },
+}
+
+
+class AccountSubscription(models.Model):
+    """Stores the subscription tier, Stripe billing linkage, and admin overrides per User."""
+
+    class Source(models.TextChoices):
+        DEFAULT = "DEFAULT", "Default Free"
+        STRIPE = "STRIPE", "Stripe Subscription"
+        ADMIN_OVERRIDE = "ADMIN_OVERRIDE", "Global Admin Override"
+
+    class Status(models.TextChoices):
+        ACTIVE = "ACTIVE", "Active"
+        TRIALING = "TRIALING", "Trialing"
+        PAST_DUE = "PAST_DUE", "Past Due"
+        CANCELED = "CANCELED", "Canceled"
+        INCOMPLETE = "INCOMPLETE", "Incomplete"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE, related_name="subscription"
+    )
+    tier = models.CharField(
+        max_length=16, choices=PlanTier.choices, default=PlanTier.FREE
+    )
+    source = models.CharField(
+        max_length=24, choices=Source.choices, default=Source.DEFAULT
+    )
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.ACTIVE
+    )
+    stripe_customer_id = models.CharField(max_length=128, blank=True, default="")
+    stripe_subscription_id = models.CharField(max_length=128, blank=True, default="")
+    stripe_price_id = models.CharField(max_length=128, blank=True, default="")
+    current_period_end = models.DateTimeField(null=True, blank=True)
+    cancel_at_period_end = models.BooleanField(default=False)
+    admin_notes = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"{self.user.email}: {self.tier} ({self.source}/{self.status})"
+
+
+class DedicatedServerInstance(models.Model):
+    """Tracks provisioning state and host URL for $99.99 Dedicated Server accounts."""
+
+    class Status(models.TextChoices):
+        REQUESTED = "REQUESTED", "Requested"
+        PROVISIONING = "PROVISIONING", "Provisioning"
+        ACTIVE = "ACTIVE", "Active"
+        SUSPENDED = "SUSPENDED", "Suspended"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE, related_name="dedicated_instance"
+    )
+    status = models.CharField(
+        max_length=24, choices=Status.choices, default=Status.REQUESTED
+    )
+    requested_subdomain = models.CharField(max_length=80, blank=True, default="")
+    dedicated_url = models.URLField(blank=True, default="")
+    admin_notes = models.TextField(blank=True, default="")
+    provisioned_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"{self.user.email}: {self.status} ({self.dedicated_url or 'pending'})"
+
+
+class PlanLimitExceeded(Exception):
+    """Raised when an account exceeds its active tier vault or item quota."""
+
+    def __init__(
+        self,
+        *,
+        detail: str,
+        limit_type: str,
+        current_usage: int,
+        limit: int,
+        current_tier: str,
+    ) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.limit_type = limit_type
+        self.current_usage = current_usage
+        self.limit = limit
+        self.current_tier = current_tier
+
+
+def get_or_create_subscription(user: User) -> AccountSubscription:
+    """Lazy-create or return the user's AccountSubscription defaulting to FREE."""
+    sub, _ = AccountSubscription.objects.get_or_create(user=user)
+    return sub
+
+
+def ensure_dedicated_instance(
+    user: User, requested_subdomain: str = ""
+) -> DedicatedServerInstance:
+    """Create or update a DedicatedServerInstance tracking record when DEDICATED activates."""
+    cleaned_sub = (requested_subdomain or "").strip()[:80]
+    inst, created = DedicatedServerInstance.objects.get_or_create(
+        user=user,
+        defaults={"requested_subdomain": cleaned_sub},
+    )
+    if not created and cleaned_sub and not inst.requested_subdomain:
+        inst.requested_subdomain = cleaned_sub
+        inst.save(update_fields=["requested_subdomain", "updated_at"])
+    return inst
+
+
+def _resolve_effective_tier(sub: AccountSubscription) -> str:
+    if sub.source == AccountSubscription.Source.ADMIN_OVERRIDE:
+        return sub.tier
+    if sub.tier == PlanTier.FREE:
+        return PlanTier.FREE
+    if sub.status in {
+        AccountSubscription.Status.ACTIVE,
+        AccountSubscription.Status.TRIALING,
+    }:
+        return sub.tier
+    return PlanTier.FREE
+
+
+def get_user_usage_counts(user: User) -> tuple[int, int]:
+    """Return `(owned_vault_count, active_item_count)` across vaults owned by `user`."""
+    from apps.catalog.models import CollectionItem
+
+    owned_vaults = Workspace.objects.filter(owner=user).count()
+    active_items = (
+        CollectionItem.objects.filter(workspace__owner=user)
+        .exclude(status=CollectionItem.Status.SOLD)
+        .count()
+    )
+    return owned_vaults, active_items
+
+
+def get_user_entitlement_status(user: User) -> dict[str, Any]:
+    """Evaluate active tier limits, enforcement toggle, usage counts, and dedicated server info."""
+    enforce = bool(getattr(settings, "BILLING_ENFORCE_TIERS", True))
+    sub = get_or_create_subscription(user)
+    effective_tier = _resolve_effective_tier(sub)
+    plan = PLAN_CATALOG.get(effective_tier, PLAN_CATALOG[PlanTier.FREE])
+    owned_vault_count, active_item_count = get_user_usage_counts(user)
+    dedicated = DedicatedServerInstance.objects.filter(user=user).first()
+    return {
+        "tier": effective_tier,
+        "plan": plan,
+        "source": sub.source,
+        "status": sub.status,
+        "enforce_tiers": enforce,
+        "max_vaults": plan["max_vaults"] if enforce else None,
+        "max_items": plan["max_items"] if enforce else None,
+        "owned_vault_count": owned_vault_count,
+        "active_item_count": active_item_count,
+        "cancel_at_period_end": sub.cancel_at_period_end,
+        "current_period_end": sub.current_period_end,
+        "has_stripe_customer": bool(sub.stripe_customer_id),
+        "dedicated_instance": dedicated,
+    }
+
+
+def get_remaining_active_item_slots(user: User) -> int | None:
+    """Return remaining non-SOLD catalog item slots for `user`, or None when unlimited."""
+    ent = get_user_entitlement_status(user)
+    if not ent["enforce_tiers"] or ent["max_items"] is None:
+        return None
+    return max(0, int(ent["max_items"]) - int(ent["active_item_count"]))
+
+
+def assert_can_create_vault(user: User, adding: int = 1) -> None:
+    """Raise `PlanLimitExceeded` if creating another owned vault exceeds the user's tier."""
+    if adding <= 0:
+        return
+    ent = get_user_entitlement_status(user)
+    if not ent["enforce_tiers"] or ent["max_vaults"] is None:
+        return
+    if ent["owned_vault_count"] + adding > ent["max_vaults"]:
+        raise PlanLimitExceeded(
+            detail=(
+                f"Your {ent['plan']['name']} plan includes up to "
+                f"{ent['max_vaults']} owned vault(s). Upgrade your plan to add more vaults."
+            ),
+            limit_type="vaults",
+            current_usage=ent["owned_vault_count"],
+            limit=ent["max_vaults"],
+            current_tier=ent["tier"],
+        )
+
+
+def assert_can_add_active_items(user: User, adding: int = 1) -> None:
+    """Raise `PlanLimitExceeded` if adding non-SOLD catalog items exceeds `user`'s tier."""
+    if adding <= 0:
+        return
+    ent = get_user_entitlement_status(user)
+    if not ent["enforce_tiers"] or ent["max_items"] is None:
+        return
+    if ent["active_item_count"] + adding > ent["max_items"]:
+        raise PlanLimitExceeded(
+            detail=(
+                f"Your {ent['plan']['name']} plan includes up to "
+                f"{ent['max_items']} active items across your vaults. "
+                "Upgrade your plan or mark sold items as Sold to add more."
+            ),
+            limit_type="items",
+            current_usage=ent["active_item_count"],
+            limit=ent["max_items"],
+            current_tier=ent["tier"],
+        )
 

@@ -6,6 +6,7 @@ import {
   Coins,
   ExternalLink,
   Search,
+  Server,
   ShieldAlert,
   ShieldCheck,
   UserCheck,
@@ -15,7 +16,12 @@ import {
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useToast } from "../components/ToastProvider";
-import { api, type AdminUserRecord, type AuthUser } from "../lib/api";
+import {
+  api,
+  type AdminDedicatedInstanceRecord,
+  type AdminUserRecord,
+  type AuthUser,
+} from "../lib/api";
 import { formatUsd } from "../lib/format";
 
 interface AdminPortalPageProps {
@@ -25,11 +31,14 @@ interface AdminPortalPageProps {
 export function AdminPortalPage({ currentUser }: AdminPortalPageProps) {
   const qc = useQueryClient();
   const toast = useToast();
-  const [tab, setTab] = useState<"users" | "workspaces">("users");
+  const [tab, setTab] = useState<"users" | "workspaces" | "dedicated">("users");
   const [userSearch, setUserSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive" | "admins">("all");
   const [workspaceSearch, setWorkspaceSearch] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+  const [instanceDrafts, setInstanceDrafts] = useState<
+    Record<string, { status: string; dedicated_url: string; admin_notes: string }>
+  >({});
 
   const isGlobalAdmin = currentUser.is_staff || currentUser.is_superuser;
 
@@ -49,6 +58,60 @@ export function AdminPortalPage({ currentUser }: AdminPortalPageProps) {
     queryKey: ["admin-workspaces", workspaceSearch],
     queryFn: () => api.adminWorkspaces(workspaceSearch),
     enabled: isGlobalAdmin && tab === "workspaces",
+  });
+
+  const dedicatedQuery = useQuery({
+    queryKey: ["admin-dedicated-instances"],
+    queryFn: () =>
+      typeof api.adminListDedicatedInstances === "function"
+        ? api.adminListDedicatedInstances()
+        : Promise.resolve([]),
+    enabled: isGlobalAdmin && tab === "dedicated",
+  });
+
+  const updateSubMutation = useMutation({
+    mutationFn: ({
+      userId,
+      payload,
+    }: {
+      userId: string;
+      payload: {
+        tier?: string;
+        clear_override?: boolean;
+        admin_notes?: string;
+      };
+    }) => api.adminUpdateUserSubscription(userId, payload),
+    onSuccess: () => {
+      setActionError(null);
+      toast.success("Subscription tier updated.");
+      qc.invalidateQueries({ queryKey: ["admin-users"] });
+      qc.invalidateQueries({ queryKey: ["admin-dedicated-instances"] });
+    },
+    onError: (err: Error) => {
+      const msg = err.message || "Failed to update subscription.";
+      setActionError(msg);
+      toast.error(msg);
+    },
+  });
+
+  const updateDedicatedMutation = useMutation({
+    mutationFn: ({
+      instanceId,
+      payload,
+    }: {
+      instanceId: string;
+      payload: { status?: string; dedicated_url?: string; admin_notes?: string };
+    }) => api.adminUpdateDedicatedInstance(instanceId, payload),
+    onSuccess: () => {
+      setActionError(null);
+      toast.success("Dedicated server instance updated.");
+      qc.invalidateQueries({ queryKey: ["admin-dedicated-instances"] });
+    },
+    onError: (err: Error) => {
+      const msg = err.message || "Failed to update dedicated instance.";
+      setActionError(msg);
+      toast.error(msg);
+    },
   });
 
   const updateUserMutation = useMutation({
@@ -284,6 +347,18 @@ export function AdminPortalPage({ currentUser }: AdminPortalPageProps) {
         >
           Workspaces
         </button>
+        <button
+          type="button"
+          onClick={() => setTab("dedicated")}
+          className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold transition ${
+            tab === "dedicated"
+              ? "bg-amber-500/15 text-amber-300 border border-amber-500/30"
+              : "text-slate-400 hover:text-slate-200 hover:bg-slate-900"
+          }`}
+        >
+          <Server className="h-3.5 w-3.5" />
+          Dedicated Servers
+        </button>
       </div>
 
       {/* Users Tab */}
@@ -426,10 +501,57 @@ export function AdminPortalPage({ currentUser }: AdminPortalPageProps) {
                                 Staff
                               </span>
                             )}
+                            <span className="text-[11px] px-2 py-0.5 rounded-full font-semibold bg-amber-500/10 text-amber-300 border border-amber-500/30">
+                              {u.tier || "FREE"}
+                            </span>
+                            {u.subscription_source === "ADMIN_OVERRIDE" && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+                                Override
+                              </span>
+                            )}
                           </div>
+                          {(u.owned_vault_count !== undefined ||
+                            u.active_item_count !== undefined) && (
+                            <div className="text-[11px] text-slate-500 mt-1">
+                              {u.owned_vault_count ?? u.workspace_count} owned •{" "}
+                              {u.active_item_count ?? u.item_count} active
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3.5 text-right">
-                          <div className="inline-flex items-center gap-2">
+                          <div className="inline-flex flex-wrap items-center justify-end gap-2">
+                            <select
+                              aria-label={`Plan tier for ${u.email}`}
+                              value={u.tier || "FREE"}
+                              disabled={updateSubMutation.isPending}
+                              onChange={(e) =>
+                                updateSubMutation.mutate({
+                                  userId: u.id,
+                                  payload: { tier: e.target.value },
+                                })
+                              }
+                              className="px-2 py-1 rounded-lg text-xs bg-slate-950 border border-slate-700 text-slate-200"
+                            >
+                              <option value="FREE">Free</option>
+                              <option value="PLUS">Plus ($9.99)</option>
+                              <option value="UNLIMITED">Unlimited ($19.99)</option>
+                              <option value="DEDICATED">Dedicated ($99.99)</option>
+                            </select>
+                            {u.subscription_source === "ADMIN_OVERRIDE" && (
+                              <button
+                                type="button"
+                                disabled={updateSubMutation.isPending}
+                                onClick={() =>
+                                  updateSubMutation.mutate({
+                                    userId: u.id,
+                                    payload: { clear_override: true },
+                                  })
+                                }
+                                className="px-2 py-1 rounded-lg text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300"
+                              >
+                                Clear Override
+                              </button>
+                            )}
                             <button
                               type="button"
                               disabled={isSelf || updateUserMutation.isPending}
@@ -560,6 +682,116 @@ export function AdminPortalPage({ currentUser }: AdminPortalPageProps) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Dedicated Servers Tab */}
+      {tab === "dedicated" && (
+        <div className="space-y-4">
+          {dedicatedQuery.isLoading ? (
+            <div className="p-8 text-center text-sm text-slate-400">
+              Loading dedicated instances...
+            </div>
+          ) : (dedicatedQuery.data?.length ?? 0) === 0 ? (
+            <div className="p-8 text-center rounded-2xl bg-slate-900/70 border border-slate-800 text-sm text-slate-400">
+              No Dedicated Server subscriptions or requests yet.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {dedicatedQuery.data?.map((inst: AdminDedicatedInstanceRecord) => {
+                const draft = instanceDrafts[inst.id] ?? {
+                  status: inst.status,
+                  dedicated_url: inst.dedicated_url || "",
+                  admin_notes: inst.admin_notes || "",
+                };
+                return (
+                  <div
+                    key={inst.id}
+                    className="p-4 rounded-2xl bg-slate-900/70 border border-slate-800 space-y-3"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="font-semibold text-sm text-slate-100">
+                          {inst.user_display_name || inst.user_email}
+                        </div>
+                        <div className="text-xs text-slate-400">
+                          {inst.user_email}
+                          {inst.requested_subdomain
+                            ? ` • Requested subdomain: ${inst.requested_subdomain}`
+                            : ""}
+                        </div>
+                      </div>
+                      <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                        {inst.status}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-2.5 text-xs">
+                      <select
+                        aria-label={`Status for ${inst.user_email}`}
+                        value={draft.status}
+                        onChange={(e) =>
+                          setInstanceDrafts((prev) => ({
+                            ...prev,
+                            [inst.id]: { ...draft, status: e.target.value },
+                          }))
+                        }
+                        className="px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-200"
+                      >
+                        <option value="REQUESTED">Requested</option>
+                        <option value="PROVISIONING">Provisioning</option>
+                        <option value="ACTIVE">Active</option>
+                        <option value="SUSPENDED">Suspended</option>
+                      </select>
+                      <input
+                        type="url"
+                        aria-label={`Dedicated URL for ${inst.user_email}`}
+                        value={draft.dedicated_url}
+                        onChange={(e) =>
+                          setInstanceDrafts((prev) => ({
+                            ...prev,
+                            [inst.id]: { ...draft, dedicated_url: e.target.value },
+                          }))
+                        }
+                        placeholder="https://tenant.stackerstash.com"
+                        className="px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-100"
+                      />
+                      <input
+                        type="text"
+                        aria-label={`Admin notes for ${inst.user_email}`}
+                        value={draft.admin_notes}
+                        onChange={(e) =>
+                          setInstanceDrafts((prev) => ({
+                            ...prev,
+                            [inst.id]: { ...draft, admin_notes: e.target.value },
+                          }))
+                        }
+                        placeholder="Provisioning notes..."
+                        className="px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-100"
+                      />
+                      <button
+                        type="button"
+                        disabled={updateDedicatedMutation.isPending}
+                        onClick={() =>
+                          updateDedicatedMutation.mutate({
+                            instanceId: inst.id,
+                            payload: {
+                              status: draft.status,
+                              dedicated_url: draft.dedicated_url,
+                              admin_notes: draft.admin_notes,
+                            },
+                          })
+                        }
+                        className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold disabled:opacity-50"
+                      >
+                        Save Instance
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>
