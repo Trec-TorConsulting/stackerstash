@@ -24,7 +24,7 @@ class UserAdmin(BaseUserAdmin):
 
 @admin.register(Workspace)
 class WorkspaceAdmin(admin.ModelAdmin):
-    list_display = ("name", "slug", "owner", "default_currency", "created_at")
+    list_display = ("name", "slug", "owner", "default_currency", "is_default", "created_at")
     search_fields = ("name", "slug", "owner__email")
 
 

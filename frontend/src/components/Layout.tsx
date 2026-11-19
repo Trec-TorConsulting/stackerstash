@@ -11,10 +11,12 @@ import { NavLink, Outlet } from "react-router-dom";
 import type { AuthUser } from "../lib/api";
 import { BrandLogo } from "./BrandLogo";
 import { SiteFooter } from "./SiteFooter";
+import { VaultSwitcher } from "./VaultSwitcher";
 
 interface LayoutProps {
   user: AuthUser;
   onLogout: () => void;
+  onSwitchWorkspace?: (workspaceId: string) => Promise<void> | void;
 }
 
 const NAV_ITEMS = [
@@ -25,7 +27,7 @@ const NAV_ITEMS = [
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
-export function Layout({ user, onLogout }: LayoutProps) {
+export function Layout({ user, onLogout, onSwitchWorkspace }: LayoutProps) {
   const isGlobalAdmin = user.is_staff || user.is_superuser;
   const navItems = isGlobalAdmin
     ? [...NAV_ITEMS, { to: "/admin", label: "Admin", icon: ShieldCheck }]
@@ -36,8 +38,11 @@ export function Layout({ user, onLogout }: LayoutProps) {
       {/* Desktop Sidebar */}
       <aside className="no-print hidden md:flex md:w-64 md:flex-col md:border-r md:border-slate-800/80 md:bg-slate-900/60 p-4 justify-between">
         <div>
-          <div className="px-2 py-3 mb-6">
+          <div className="px-2 py-3 mb-3">
             <BrandLogo size="md" subtitle={user.workspace.name} />
+          </div>
+          <div className="mb-5">
+            <VaultSwitcher user={user} onSwitchWorkspace={onSwitchWorkspace} />
           </div>
           <nav className="space-y-1">
             {navItems.map(({ to, label, icon: Icon }) => (
@@ -75,14 +80,17 @@ export function Layout({ user, onLogout }: LayoutProps) {
       </aside>
 
       {/* Mobile Top Bar */}
-      <header className="no-print md:hidden flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30">
+      <header className="no-print md:hidden flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30">
         <BrandLogo size="sm" />
-        <button
-          onClick={onLogout}
-          className="text-xs text-slate-400 hover:text-rose-300 flex items-center gap-1"
-        >
-          <LogOut className="h-3.5 w-3.5" /> Sign out
-        </button>
+        <div className="flex items-center gap-2">
+          <VaultSwitcher user={user} onSwitchWorkspace={onSwitchWorkspace} compact />
+          <button
+            onClick={onLogout}
+            className="text-xs text-slate-400 hover:text-rose-300 flex items-center gap-1 shrink-0"
+          >
+            <LogOut className="h-3.5 w-3.5" /> Sign out
+          </button>
+        </div>
       </header>
 
       {/* Main Content */}

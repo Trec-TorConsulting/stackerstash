@@ -1,17 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  Check,
   ExternalLink,
   FolderTree,
   KeyRound,
   Lock,
+  Pencil,
+  Plus,
   RefreshCw,
+  Star,
   Trash2,
   UserCheck,
+  Vault,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../components/ToastProvider";
-import { api, setAuthToken, type AuthUser } from "../lib/api";
+import { api, setAuthToken, type AuthUser, type UserWorkspace } from "../lib/api";
+import { formatUsd } from "../lib/format";
 
 const PROVIDER_GROUPS: { title: string; subtitle: string; providers: string[] }[] = [
   {
@@ -90,17 +96,31 @@ interface SettingsPageProps {
   currentUser?: AuthUser;
   onUserUpdated?: (user: AuthUser) => void;
   onAccountDeleted?: () => void;
+  onSwitchWorkspace?: (workspaceId: string) => Promise<void> | void;
+  onWorkspacesChanged?: () => Promise<void> | void;
 }
 
 export function SettingsPage({
   currentUser,
   onUserUpdated,
   onAccountDeleted,
+  onSwitchWorkspace,
+  onWorkspacesChanged,
 }: SettingsPageProps = {}) {
   const qc = useQueryClient();
   const toast = useToast();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<string | null>(null);
+
+  const [newVaultName, setNewVaultName] = useState("");
+  const [newVaultDesc, setNewVaultDesc] = useState("");
+  const [newVaultCurrency, setNewVaultCurrency] = useState("USD");
+  const [editingVault, setEditingVault] = useState<UserWorkspace | null>(null);
+  const [editVaultName, setEditVaultName] = useState("");
+  const [editVaultDesc, setEditVaultDesc] = useState("");
+  const [editVaultCurrency, setEditVaultCurrency] = useState("USD");
+  const [editVaultAutoSort, setEditVaultAutoSort] = useState(true);
+  const [pendingDeleteVault, setPendingDeleteVault] = useState<UserWorkspace | null>(null);
 
   const [displayName, setDisplayName] = useState(currentUser?.display_name || "");
   const [currentPassword, setCurrentPassword] = useState("");
@@ -166,6 +186,91 @@ export function SettingsPage({
     },
     onError: (err: Error) => {
       toast.error(err.message || "Account deletion failed.");
+    },
+  });
+
+  const { data: vaults = [] } = useQuery({
+    queryKey: ["workspaces"],
+    queryFn: api.getWorkspaces,
+  });
+
+  const createVaultMut = useMutation({
+    mutationFn: () =>
+      api.createWorkspace({
+        name: newVaultName.trim(),
+        description: newVaultDesc.trim(),
+        default_currency: newVaultCurrency.trim() || "USD",
+      }),
+    onSuccess: async (created) => {
+      setNewVaultName("");
+      setNewVaultDesc("");
+      setNotice(`Created vault "${created.name}".`);
+      toast.success(`Created vault "${created.name}".`);
+      await qc.invalidateQueries({ queryKey: ["workspaces"] });
+      await onWorkspacesChanged?.();
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to create vault.");
+    },
+  });
+
+  const updateVaultMut = useMutation({
+    mutationFn: ({
+      id,
+      payload,
+    }: {
+      id: string;
+      payload: {
+        name?: string;
+        description?: string;
+        default_currency?: string;
+        auto_sort_enabled?: boolean;
+      };
+    }) => api.updateWorkspace(id, payload),
+    onSuccess: async (updated) => {
+      setEditingVault(null);
+      setNotice(`Updated vault "${updated.name}".`);
+      toast.success(`Updated vault "${updated.name}".`);
+      await qc.invalidateQueries({ queryKey: ["workspaces"] });
+      await qc.invalidateQueries({ queryKey: ["workspace-settings"] });
+      await onWorkspacesChanged?.();
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to update vault.");
+    },
+  });
+
+  const setDefaultVaultMut = useMutation({
+    mutationFn: (id: string) => api.setDefaultWorkspace(id),
+    onSuccess: async (updated) => {
+      setNotice(`"${updated.name}" is now your default vault.`);
+      toast.success(`"${updated.name}" set as default.`);
+      await qc.invalidateQueries({ queryKey: ["workspaces"] });
+      await qc.invalidateQueries({ queryKey: ["workspace-settings"] });
+      await qc.invalidateQueries({ queryKey: ["credentials"] });
+      await onWorkspacesChanged?.();
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to set default vault.");
+    },
+  });
+
+  const deleteVaultMut = useMutation({
+    mutationFn: (id: string) => api.deleteWorkspace(id),
+    onSuccess: async (_, deletedId) => {
+      const remaining = vaults.filter((v) => v.id !== deletedId);
+      const fallback = remaining.find((v) => v.is_default) || remaining[0];
+      setPendingDeleteVault(null);
+      toast.success("Vault deleted.");
+      await qc.invalidateQueries({ queryKey: ["workspaces"] });
+      if (resolvedUser?.workspace.id === deletedId && fallback && onSwitchWorkspace) {
+        await onSwitchWorkspace(fallback.id);
+      } else {
+        await onWorkspacesChanged?.();
+      }
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to delete vault.");
     },
   });
 
@@ -248,6 +353,252 @@ export function SettingsPage({
           {notice}
         </div>
       )}
+
+      {/* My Vaults */}
+      <section className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
+        <div className="flex items-start gap-3">
+          <Vault className="h-5 w-5 text-amber-400 mt-0.5 shrink-0" />
+          <div>
+            <h2 className="text-sm font-semibold text-slate-100">My Vaults</h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Organize separate collections (Personal Stack, IRA Bullion, Trading Cards). Secondary
+              vaults automatically inherit BYOK API keys from your default vault unless overridden.
+            </p>
+          </div>
+        </div>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (newVaultName.trim() && !createVaultMut.isPending) {
+              createVaultMut.mutate();
+            }
+          }}
+          className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 items-end"
+        >
+          <div className="sm:col-span-2">
+            <label htmlFor="new-vault-name" className="block text-xs text-slate-400 mb-1">
+              New Vault Name
+            </label>
+            <input
+              id="new-vault-name"
+              required
+              value={newVaultName}
+              onChange={(e) => setNewVaultName(e.target.value)}
+              placeholder="e.g. IRA Bullion"
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+            />
+          </div>
+          <div>
+            <label htmlFor="new-vault-desc" className="block text-xs text-slate-400 mb-1">
+              Description
+            </label>
+            <input
+              id="new-vault-desc"
+              value={newVaultDesc}
+              onChange={(e) => setNewVaultDesc(e.target.value)}
+              placeholder="Optional description"
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+            />
+          </div>
+          <div className="flex gap-2">
+            <div className="w-20">
+              <label htmlFor="new-vault-currency" className="block text-xs text-slate-400 mb-1">
+                Curr
+              </label>
+              <input
+                id="new-vault-currency"
+                maxLength={3}
+                value={newVaultCurrency}
+                onChange={(e) => setNewVaultCurrency(e.target.value.toUpperCase())}
+                className="w-full px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm uppercase"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={!newVaultName.trim() || createVaultMut.isPending}
+              className="flex-1 inline-flex items-center justify-center gap-1 px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs disabled:opacity-50"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {createVaultMut.isPending ? "Creating..." : "Create Vault"}
+            </button>
+          </div>
+        </form>
+
+        {vaults.length > 0 && (
+          <div className="space-y-2.5">
+            {vaults.map((v) => {
+              const isActive = v.id === resolvedUser?.workspace.id || v.id === workspaceSettings?.id;
+              const isEditingThis = editingVault?.id === v.id;
+              return (
+                <div
+                  key={v.id}
+                  className={`p-3.5 rounded-xl border space-y-3 ${
+                    isActive
+                      ? "bg-amber-500/5 border-amber-500/40"
+                      : "bg-slate-950/70 border-slate-800"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold text-sm text-slate-100">{v.name}</span>
+                        {v.is_default && (
+                          <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-medium">
+                            Default
+                          </span>
+                        )}
+                        {isActive && (
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-medium">
+                            Active
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-slate-400 mt-0.5">
+                        {v.item_count ?? 0} entries • {formatUsd(v.total_market_value)} •{" "}
+                        {v.default_currency}
+                        {v.description ? ` • ${v.description}` : ""}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {!isActive && onSwitchWorkspace && (
+                        <button
+                          type="button"
+                          onClick={() => void onSwitchWorkspace(v.id)}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200"
+                        >
+                          Switch
+                        </button>
+                      )}
+                      {!v.is_default && (
+                        <button
+                          type="button"
+                          disabled={setDefaultVaultMut.isPending}
+                          onClick={() => setDefaultVaultMut.mutate(v.id)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-amber-300 disabled:opacity-50"
+                        >
+                          <Star className="h-3 w-3" /> Set Default
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        aria-label={`Edit vault ${v.name}`}
+                        onClick={() => {
+                          if (isEditingThis) {
+                            setEditingVault(null);
+                          } else {
+                            setEditingVault(v);
+                            setEditVaultName(v.name);
+                            setEditVaultDesc(v.description || "");
+                            setEditVaultCurrency(v.default_currency || "USD");
+                            setEditVaultAutoSort(v.auto_sort_enabled ?? true);
+                          }
+                        }}
+                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={vaults.length <= 1 || deleteVaultMut.isPending}
+                        title={
+                          vaults.length <= 1
+                            ? "You must keep at least one vault"
+                            : `Delete ${v.name}`
+                        }
+                        aria-label={`Delete vault ${v.name}`}
+                        onClick={() => setPendingDeleteVault(v)}
+                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 disabled:opacity-30"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {isEditingThis && (
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (!editVaultName.trim()) return;
+                        updateVaultMut.mutate({
+                          id: v.id,
+                          payload: {
+                            name: editVaultName.trim(),
+                            description: editVaultDesc.trim(),
+                            default_currency: editVaultCurrency.trim() || "USD",
+                            auto_sort_enabled: editVaultAutoSort,
+                          },
+                        });
+                      }}
+                      className="pt-2.5 border-t border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-2.5"
+                    >
+                      <input
+                        aria-label="Edit vault name"
+                        required
+                        value={editVaultName}
+                        onChange={(e) => setEditVaultName(e.target.value)}
+                        className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs"
+                      />
+                      <input
+                        aria-label="Edit vault description"
+                        value={editVaultDesc}
+                        onChange={(e) => setEditVaultDesc(e.target.value)}
+                        placeholder="Description"
+                        className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs"
+                      />
+                      <div className="flex items-center gap-2">
+                        <input
+                          aria-label="Edit vault currency"
+                          maxLength={3}
+                          value={editVaultCurrency}
+                          onChange={(e) => setEditVaultCurrency(e.target.value.toUpperCase())}
+                          className="w-16 px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs uppercase"
+                        />
+                        <label className="inline-flex items-center gap-1.5 text-xs text-slate-300">
+                          <input
+                            type="checkbox"
+                            checked={editVaultAutoSort}
+                            onChange={(e) => setEditVaultAutoSort(e.target.checked)}
+                            className="h-3.5 w-3.5 accent-amber-500"
+                          />
+                          Auto-Sort
+                        </label>
+                        <button
+                          type="submit"
+                          disabled={updateVaultMut.isPending}
+                          className="ml-auto inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-500 text-slate-950 font-semibold text-xs"
+                        >
+                          <Check className="h-3 w-3" /> Save
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <ConfirmDialog
+        open={pendingDeleteVault !== null}
+        title="Delete Vault?"
+        description={
+          pendingDeleteVault
+            ? `Deleting "${pendingDeleteVault.name}" will permanently delete all catalog items, containers, photos, and overrides inside it.${
+                pendingDeleteVault.is_default
+                  ? " Your earliest remaining vault will become your default vault and inherit any non-overridden BYOK keys."
+                  : ""
+              }`
+            : ""
+        }
+        confirmLabel="Delete Vault"
+        isPending={deleteVaultMut.isPending}
+        onCancel={() => setPendingDeleteVault(null)}
+        onConfirm={() => {
+          if (pendingDeleteVault) deleteVaultMut.mutate(pendingDeleteVault.id);
+        }}
+      />
 
       {/* Profile & Account Security */}
       <section className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
@@ -463,19 +814,33 @@ export function SettingsPage({
                     {cred.is_configured ? (
                       <div className="flex items-center gap-2 min-w-0">
                         <span
-                          title={`Configured (${cred.masked_hint})`}
-                          className="text-xs font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 max-w-[240px] truncate"
+                          title={
+                            cred.is_inherited
+                              ? `Inherited from ${cred.inherited_from_workspace_name || "Default Vault"} (${cred.masked_hint})`
+                              : `Configured (${cred.masked_hint})`
+                          }
+                          className={`text-xs font-mono px-2 py-0.5 rounded-full border max-w-[260px] truncate ${
+                            cred.is_inherited
+                              ? "bg-sky-500/15 text-sky-300 border-sky-500/30"
+                              : "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+                          }`}
                         >
-                          Configured ({cred.masked_hint})
+                          {cred.is_inherited
+                            ? `Inherited from ${cred.inherited_from_workspace_name || "Default"} (${cred.masked_hint})`
+                            : workspaceSettings && workspaceSettings.is_default === false
+                              ? `Vault Override Configured (${cred.masked_hint})`
+                              : `Configured (${cred.masked_hint})`}
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => deleteMut.mutate(cred.provider)}
-                          className="text-slate-500 hover:text-rose-400 shrink-0"
-                          aria-label={`Remove ${cred.label}`}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        {!cred.is_inherited && (
+                          <button
+                            type="button"
+                            onClick={() => deleteMut.mutate(cred.provider)}
+                            className="text-slate-500 hover:text-rose-400 shrink-0"
+                            aria-label={`Remove ${cred.label}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
                       </div>
                     ) : (
                       <span className="text-xs text-slate-500">Not configured</span>

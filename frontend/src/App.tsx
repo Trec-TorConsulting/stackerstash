@@ -1,10 +1,17 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Layout } from "./components/Layout";
 import { ToastProvider } from "./components/ToastProvider";
-import { api, getAuthToken, setAuthToken, type AuthUser } from "./lib/api";
+import {
+  api,
+  getActiveWorkspaceId,
+  getAuthToken,
+  setActiveWorkspaceId,
+  setAuthToken,
+  type AuthUser,
+} from "./lib/api";
 import { AdminPortalPage } from "./pages/AdminPortalPage";
 import { AuthPage } from "./pages/AuthPage";
 import { CollectionPage } from "./pages/CollectionPage";
@@ -28,6 +35,8 @@ const queryClient = new QueryClient({
 });
 
 export function AppRoutes() {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [checking, setChecking] = useState(Boolean(getAuthToken()));
 
@@ -35,10 +44,46 @@ export function AppRoutes() {
     if (!getAuthToken()) return;
     api
       .me()
-      .then(setUser)
+      .then((u) => {
+        setActiveWorkspaceId(u.workspace.id);
+        setUser(u);
+      })
       .catch(() => setAuthToken(null))
       .finally(() => setChecking(false));
   }, []);
+
+  async function refreshUserSession(nextWorkspaceId?: string) {
+    if (nextWorkspaceId) {
+      setActiveWorkspaceId(nextWorkspaceId);
+    }
+    await queryClient.cancelQueries();
+    queryClient.clear();
+    if (typeof caches !== "undefined") {
+      try {
+        await caches.delete("api-items-valuation-cache");
+      } catch {
+        // ignore cache API restrictions
+      }
+    }
+    const updatedUser = await api.me();
+    setActiveWorkspaceId(updatedUser.workspace.id);
+    setUser(updatedUser);
+    if (nextWorkspaceId && location.pathname.startsWith("/items/")) {
+      navigate("/", { replace: true });
+    }
+  }
+
+  function handleAuthenticated(u: AuthUser) {
+    setActiveWorkspaceId(u.workspace.id);
+    setUser(u);
+  }
+
+  function handleLogout() {
+    setAuthToken(null);
+    setActiveWorkspaceId(null);
+    queryClient.clear();
+    setUser(null);
+  }
 
   if (checking) {
     return (
@@ -55,8 +100,14 @@ export function AppRoutes() {
         <Route path="/" element={publicHome} />
         <Route path="/coming-soon" element={<ComingSoonPage />} />
         <Route path="/marketing" element={<MarketingPage />} />
-        <Route path="/login" element={<AuthPage onAuth={setUser} initialMode="login" />} />
-        <Route path="/register" element={<AuthPage onAuth={setUser} initialMode="register" />} />
+        <Route
+          path="/login"
+          element={<AuthPage onAuth={handleAuthenticated} initialMode="login" />}
+        />
+        <Route
+          path="/register"
+          element={<AuthPage onAuth={handleAuthenticated} initialMode="register" />}
+        />
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     );
@@ -70,11 +121,8 @@ export function AppRoutes() {
         element={
           <Layout
             user={user}
-            onLogout={() => {
-              setAuthToken(null);
-              queryClient.clear();
-              setUser(null);
-            }}
+            onLogout={handleLogout}
+            onSwitchWorkspace={(wsId) => refreshUserSession(wsId)}
           />
         }
       >
@@ -89,11 +137,9 @@ export function AppRoutes() {
             <SettingsPage
               currentUser={user}
               onUserUpdated={setUser}
-              onAccountDeleted={() => {
-                setAuthToken(null);
-                queryClient.clear();
-                setUser(null);
-              }}
+              onAccountDeleted={handleLogout}
+              onSwitchWorkspace={(wsId) => refreshUserSession(wsId)}
+              onWorkspacesChanged={() => refreshUserSession(getActiveWorkspaceId() || undefined)}
             />
           }
         />

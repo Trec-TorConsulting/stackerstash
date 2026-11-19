@@ -12,7 +12,7 @@ from celery import shared_task
 from django.db import transaction
 from django.utils import timezone
 
-from apps.accounts.models import ProviderCredential
+from apps.accounts.models import ProviderCredential, Workspace, resolve_workspace_secret
 from apps.catalog.models import CollectionItem
 
 logger = logging.getLogger(__name__)
@@ -395,18 +395,14 @@ def classify_item_deterministic(item: CollectionItem) -> SortResult:
 
 
 def _get_workspace_ollama_config(workspace_id: Any) -> tuple[str | None, str]:
-    creds = {
-        c.provider: c.get_secret().strip()
-        for c in ProviderCredential.objects.filter(
-            workspace_id=workspace_id,
-            provider__in=[
-                ProviderCredential.Provider.OLLAMA_URL,
-                ProviderCredential.Provider.OLLAMA_MODEL,
-            ],
-        )
-    }
-    url = creds.get(ProviderCredential.Provider.OLLAMA_URL, "").rstrip("/")
-    model = creds.get(ProviderCredential.Provider.OLLAMA_MODEL, "") or "llama3.2"
+    ws = Workspace.objects.select_related("owner").filter(id=workspace_id).first()
+    if ws is None:
+        return None, "llama3.2"
+    url = resolve_workspace_secret(ws, ProviderCredential.Provider.OLLAMA_URL).strip().rstrip("/")
+    model = (
+        resolve_workspace_secret(ws, ProviderCredential.Provider.OLLAMA_MODEL).strip()
+        or "llama3.2"
+    )
     return (url or None, model)
 
 
