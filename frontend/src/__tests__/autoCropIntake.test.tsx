@@ -280,7 +280,10 @@ describe("ScanAddPage auto-crop", () => {
     expect(await screen.findByText(/Subject near edge — reframe for full border/i)).toBeInTheDocument();
     expect(screen.getByText(/Glare detected — tilt item or diffuse light/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Quality warning for OBVERSE photo/i)).toBeInTheDocument();
-    // Save button remains available (non-blocking)
+    // Expand the Item Details accordion manually and verify Save button remains enabled (non-blocking)
+    const detailsToggle = screen.getByRole("button", { name: /Item Details/i });
+    expect(detailsToggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(detailsToggle);
     expect(screen.getByRole("button", { name: /Save to Collection|Save Item|Add to Collection/i })).toBeEnabled();
   });
 });

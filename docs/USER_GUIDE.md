@@ -43,6 +43,7 @@ Welcome to **Stacker Stash** — your self-hosted or SaaS vault for tracking coi
    - **Coins & Paper Notes** require both **Front (Obverse)** and **Back (Reverse)** photos before AI identification; Bars and Slabs accept a single photo.
    - Uploaded photos undergo deeper quality and authenticity checks (resolution, blur, exposure, EXIF software/AI/screenshot markers, and screen-moiré detection). If a photo is flagged, you can review the warning and either replace the photo or click **Proceed Anyway** (which records an `OVERRIDDEN` verification badge on the item).
 5. Click **Identify with AI** to auto-fill specs, metal, estimated raw grade, and market value, then click **Save Item to Vault**.
+   - The **Item Details** section below photo capture starts collapsed by default and opens automatically once **Identify with AI** returns item details (you can also click **Item Details** anytime to expand it for manual entry).
    - Titles are automatically normalized for uniformity across your vault, and a background appraisal job starts immediately upon saving (you will see live appraisal progress on the item's detail page).
 
 ---
