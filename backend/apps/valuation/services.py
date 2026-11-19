@@ -18,16 +18,16 @@ from .providers import (
     fetch_spot_prices_from_gold_api,
     lookup_bullion_dealer_benchmark,
     lookup_cert_metadata,
+    lookup_collectr_price,
     lookup_ebay_sold_comps,
     lookup_goldback_exchange_benchmark,
     lookup_greysheet,
     lookup_numismedia,
     lookup_numista_specs,
     lookup_pokemon_tcg_card,
-    lookup_collectr_price,
     lookup_pricecharting_card,
-    lookup_tcgplayer_price,
     lookup_scryfall_card,
+    lookup_tcgplayer_price,
 )
 
 logger = logging.getLogger(__name__)

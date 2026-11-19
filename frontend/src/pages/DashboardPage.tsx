@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpRight, Camera, RefreshCw, TrendingUp } from "lucide-react";
+import { AlertCircle, ArrowUpRight, Camera, RefreshCw, TrendingUp } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
+import { useToast } from "../components/ToastProvider";
 import { api } from "../lib/api";
 import { CATEGORY_LABELS, METAL_LABELS, formatOz, formatUsd } from "../lib/format";
 
@@ -9,9 +10,16 @@ const SPOT_AUTO_REFRESH_MS = 5 * 60 * 1000;
 
 export function DashboardPage() {
   const qc = useQueryClient();
+  const toast = useToast();
   const didAutoRefreshRef = useRef(false);
 
-  const { data: summary, isLoading } = useQuery({
+  const {
+    data: summary,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ["portfolio-summary"],
     queryFn: api.getSummary,
     refetchInterval: SPOT_AUTO_REFRESH_MS,
@@ -22,6 +30,9 @@ export function DashboardPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["portfolio-summary"] });
       qc.invalidateQueries({ queryKey: ["items"] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to refresh live spot prices.");
     },
   });
 
@@ -36,6 +47,29 @@ export function DashboardPage() {
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  if (isError && !summary) {
+    return (
+      <div className="p-6 rounded-2xl bg-rose-950/20 border border-rose-500/30 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3 text-sm text-rose-200">
+          <AlertCircle className="h-5 w-5 text-rose-400 shrink-0" />
+          <div>
+            <div className="font-semibold">Unable to load portfolio overview</div>
+            <div className="text-xs text-rose-300/80 mt-0.5">
+              {error instanceof Error ? error.message : "Network or server error."}
+            </div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => refetch()}
+          className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-100 shrink-0"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   if (isLoading || !summary) {
     return (

@@ -337,7 +337,6 @@ def _match_goldback(upper: str, hints: dict[str, Any]) -> dict[str, Any] | None:
         if ym:
             year = ym.group(1)
 
-    parts = [p for p in (year, state, "Goldback", f"{denom} Goldback" if denom else "") if p]
     # Avoid duplicating "Goldback"
     if denom:
         title = " ".join(p for p in (year, state, denom, "Goldback") if p)

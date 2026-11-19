@@ -40,6 +40,13 @@ export interface AdminOverview {
   total_market_value: string;
   total_melt_value: string;
   last_spot_sync: string | null;
+  pending_appraisals?: number;
+  running_appraisals?: number;
+  failed_appraisals_24h?: number;
+  deferred_ai_items?: number;
+  recent_identifications_24h?: number;
+  db_healthy?: boolean;
+  redis_healthy?: boolean;
 }
 
 export interface AdminUserRecord {
@@ -328,7 +335,7 @@ export interface VisionIdentifyResponse {
   quota_deferred?: boolean;
 }
 
-async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function _authorizedFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const token = getAuthToken();
   const headers = new Headers(init.headers);
   if (token) {
@@ -352,10 +359,20 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
     }
     throw new Error(detail);
   }
+  return resp;
+}
+
+export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const resp = await _authorizedFetch(path, init);
   if (resp.status === 204) {
     return undefined as T;
   }
   return resp.json() as Promise<T>;
+}
+
+export async function apiFetchBlob(path: string, init: RequestInit = {}): Promise<Blob> {
+  const resp = await _authorizedFetch(path, init);
+  return resp.blob();
 }
 
 export const api = {
@@ -370,6 +387,21 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   me: () => apiFetch<AuthUser>("/auth/me"),
+  updateProfile: (payload: { display_name: string }) =>
+    apiFetch<AuthUser>("/auth/me", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  changePassword: (payload: { current_password: string; new_password: string }) =>
+    apiFetch<{ detail: string }>("/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteAccount: (password: string) =>
+    apiFetch<void>("/auth/me", {
+      method: "DELETE",
+      body: JSON.stringify({ password }),
+    }),
 
   getSummary: () => apiFetch<PortfolioSummary>("/analytics/summary"),
   refreshSpots: () => apiFetch<Record<string, string>>("/valuation/spots/refresh", { method: "POST" }),
@@ -389,8 +421,13 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  duplicateItem: (id: string) =>
+    apiFetch<CollectionItem>(`/catalog/items/${id}/duplicate`, { method: "POST" }),
   deleteItem: (id: string) =>
     apiFetch<void>(`/catalog/items/${id}`, { method: "DELETE" }),
+  exportCsv: () => apiFetchBlob("/catalog/items/export/csv"),
+  exportJson: () => apiFetchBlob("/catalog/items/export/json"),
+  exportInsuranceReport: () => apiFetchBlob("/catalog/items/export/insurance-report"),
   resortCollection: () =>
     apiFetch<{ queued_count: number }>("/catalog/items/resort", { method: "POST" }),
   bulkDeleteItems: (itemIds: string[]) =>
@@ -461,6 +498,19 @@ export const api = {
   }) =>
     apiFetch<ContainerNode>("/catalog/containers", {
       method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateContainer: (
+    id: string,
+    payload: {
+      name: string;
+      container_type: string;
+      parent_id?: string | null;
+      location_notes?: string;
+    }
+  ) =>
+    apiFetch<ContainerNode>(`/catalog/containers/${id}`, {
+      method: "PATCH",
       body: JSON.stringify(payload),
     }),
   deleteContainer: (id: string) =>

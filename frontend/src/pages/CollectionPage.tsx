@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertCircle,
   CheckSquare,
   ChevronDown,
   ChevronRight,
@@ -17,6 +18,7 @@ import {
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ImportWizardModal } from "../components/ImportWizardModal";
+import { useToast } from "../components/ToastProvider";
 import { api, type CollectionItem, type ContainerNode } from "../lib/api";
 import { getValuationFreshness } from "../components/valuation/ValuationBreakdownCard";
 import {
@@ -43,8 +45,9 @@ function flattenContainers(nodes: ContainerNode[], depth = 0): Array<{ id: strin
 }
 
 export function CollectionPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const qc = useQueryClient();
+  const toast = useToast();
 
   const [viewMode, setViewMode] = useState<"grid" | "table" | "grouped">("grid");
   const [q, setQ] = useState("");
@@ -54,10 +57,12 @@ export function CollectionPage() {
   const [gradedFilter, setGradedFilter] = useState("");
   const [metalType, setMetalType] = useState("");
   const [status, setStatus] = useState("");
+  const containerId = searchParams.get("container_id") || "";
   const [sort, setSort] = useState(searchParams.get("sort") || "-created_at");
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [isImportOpen, setIsImportOpen] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState<"csv" | "json" | null>(null);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkCategory, setBulkCategory] = useState("");
@@ -67,10 +72,26 @@ export function CollectionPage() {
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [bulkMsg, setBulkMsg] = useState<string | null>(null);
 
-  const { data: items = [], isLoading } = useQuery({
+  const {
+    data: items = [],
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: [
       "items",
-      { q, category, sortCategory, sortSubcategory, gradedFilter, metalType, status, sort },
+      {
+        q,
+        category,
+        sortCategory,
+        sortSubcategory,
+        gradedFilter,
+        metalType,
+        status,
+        containerId,
+        sort,
+      },
     ],
     queryFn: () =>
       api.getItems({
@@ -81,6 +102,7 @@ export function CollectionPage() {
         graded: gradedFilter,
         metal_type: metalType,
         status,
+        container_id: containerId,
         sort,
       }),
   });
@@ -166,7 +188,7 @@ export function CollectionPage() {
   };
 
   const bulkUpdateMut = useMutation({
-    mutationFn: api.bulkUpdateItems,
+    mutationFn: (payload: Parameters<typeof api.bulkUpdateItems>[0]) => api.bulkUpdateItems(payload),
     onSuccess: (res) => {
       setBulkMsg(`Updated ${res.updated_count} item${res.updated_count === 1 ? "" : "s"}.`);
       setBulkCategory("");
@@ -175,17 +197,44 @@ export function CollectionPage() {
       setBulkTag("");
       invalidateCollection();
     },
+    onError: (err: Error) => {
+      toast.error(err.message || "Bulk update failed.");
+    },
   });
 
   const bulkDeleteMut = useMutation({
-    mutationFn: api.bulkDeleteItems,
+    mutationFn: (itemIds: string[]) => api.bulkDeleteItems(itemIds),
     onSuccess: (res) => {
       setBulkMsg(`Deleted ${res.deleted_count} item${res.deleted_count === 1 ? "" : "s"}.`);
       setSelectedIds(new Set());
       setConfirmBulkDelete(false);
       invalidateCollection();
     },
+    onError: (err: Error) => {
+      toast.error(err.message || "Bulk delete failed.");
+    },
   });
+
+  async function handleExport(format: "csv" | "json") {
+    setExportingFormat(format);
+    try {
+      const blob = format === "csv" ? await api.exportCsv() : await api.exportJson();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download =
+        format === "csv" ? "stackerstash-collection.csv" : "stackerstash-collection.json";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success(`Exported collection ${format.toUpperCase()}.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : `Failed to export ${format.toUpperCase()}.`);
+    } finally {
+      setExportingFormat(null);
+    }
+  }
 
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
@@ -348,12 +397,22 @@ export function CollectionPage() {
           >
             <Upload className="h-3.5 w-3.5" /> Import / Migrate CSV
           </button>
-          <a
-            href="/api/v1/catalog/items/export/csv"
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-medium"
+          <button
+            type="button"
+            disabled={exportingFormat !== null}
+            onClick={() => void handleExport("csv")}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-medium disabled:opacity-50"
           >
-            <Download className="h-3.5 w-3.5" /> Export CSV
-          </a>
+            <Download className="h-3.5 w-3.5" /> {exportingFormat === "csv" ? "Exporting..." : "Export CSV"}
+          </button>
+          <button
+            type="button"
+            disabled={exportingFormat !== null}
+            onClick={() => void handleExport("json")}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-medium disabled:opacity-50"
+          >
+            <Download className="h-3.5 w-3.5" /> {exportingFormat === "json" ? "Exporting..." : "Export JSON"}
+          </button>
           <button
             onClick={() => window.print()}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-medium"
@@ -499,7 +558,7 @@ export function CollectionPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
           <select
             aria-label="Filter by category"
             value={category}
@@ -510,6 +569,28 @@ export function CollectionPage() {
             {Object.entries(CATEGORY_LABELS).map(([k, v]) => (
               <option key={k} value={k}>
                 {v}
+              </option>
+            ))}
+          </select>
+
+          <select
+            aria-label="Filter by container"
+            value={containerId}
+            onChange={(e) => {
+              const next = new URLSearchParams(searchParams);
+              if (e.target.value) {
+                next.set("container_id", e.target.value);
+              } else {
+                next.delete("container_id");
+              }
+              setSearchParams(next, { replace: true });
+            }}
+            className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300"
+          >
+            <option value="">All Containers</option>
+            {flatContainers.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.label}
               </option>
             ))}
           </select>
@@ -722,7 +803,21 @@ export function CollectionPage() {
       )}
 
       {/* Results */}
-      {isLoading ? (
+      {isError ? (
+        <div className="p-6 rounded-2xl bg-rose-950/20 border border-rose-500/30 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-sm text-rose-200">
+            <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
+            <span>{error instanceof Error ? error.message : "Failed to load collection."}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => refetch()}
+            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200"
+          >
+            Retry
+          </button>
+        </div>
+      ) : isLoading ? (
         <div className="text-sm text-slate-400">Loading collection...</div>
       ) : items.length === 0 ? (
         <div className="p-10 text-center rounded-2xl bg-slate-900 border border-slate-800 text-slate-400 text-sm">

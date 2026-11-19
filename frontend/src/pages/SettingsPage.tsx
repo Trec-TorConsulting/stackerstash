@@ -1,7 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, FolderTree, KeyRound, RefreshCw, Trash2 } from "lucide-react";
-import { useState } from "react";
-import { api } from "../lib/api";
+import {
+  ExternalLink,
+  FolderTree,
+  KeyRound,
+  Lock,
+  RefreshCw,
+  Trash2,
+  UserCheck,
+} from "lucide-react";
+import { useEffect, useState } from "react";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { useToast } from "../components/ToastProvider";
+import { api, setAuthToken, type AuthUser } from "../lib/api";
 
 const PROVIDER_GROUPS: { title: string; subtitle: string; providers: string[] }[] = [
   {
@@ -76,10 +86,88 @@ const PROVIDER_LINKS: Record<string, { label: string; url: string }> = {
   POKEMON_TCG_API_KEY: { label: "Pokémon TCG Dev Portal", url: "https://dev.pokemontcg.io/" },
 };
 
-export function SettingsPage() {
+interface SettingsPageProps {
+  currentUser?: AuthUser;
+  onUserUpdated?: (user: AuthUser) => void;
+  onAccountDeleted?: () => void;
+}
+
+export function SettingsPage({
+  currentUser,
+  onUserUpdated,
+  onAccountDeleted,
+}: SettingsPageProps = {}) {
   const qc = useQueryClient();
+  const toast = useToast();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<string | null>(null);
+
+  const [displayName, setDisplayName] = useState(currentUser?.display_name || "");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [deletePassword, setDeletePassword] = useState("");
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+
+  const { data: meData } = useQuery({
+    queryKey: ["auth-me"],
+    queryFn: api.me,
+    enabled: !currentUser,
+  });
+
+  const resolvedUser = currentUser || meData;
+
+  useEffect(() => {
+    if (resolvedUser?.display_name !== undefined) {
+      setDisplayName(resolvedUser.display_name);
+    }
+  }, [resolvedUser?.display_name]);
+
+  const updateProfileMut = useMutation({
+    mutationFn: () => api.updateProfile({ display_name: displayName }),
+    onSuccess: (updated) => {
+      setNotice("Profile display name updated.");
+      toast.success("Profile updated.");
+      onUserUpdated?.(updated);
+      qc.invalidateQueries({ queryKey: ["auth-me"] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to update profile.");
+    },
+  });
+
+  const changePasswordMut = useMutation({
+    mutationFn: () =>
+      api.changePassword({ current_password: currentPassword, new_password: newPassword }),
+    onSuccess: () => {
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+      setNotice("Password changed successfully.");
+      toast.success("Password changed.");
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to change password.");
+    },
+  });
+
+  const deleteAccountMut = useMutation({
+    mutationFn: () => api.deleteAccount(deletePassword),
+    onSuccess: () => {
+      setConfirmDeleteOpen(false);
+      setDeletePassword("");
+      toast.success("Account permanently deleted.");
+      if (onAccountDeleted) {
+        onAccountDeleted();
+      } else {
+        setAuthToken(null);
+        qc.clear();
+      }
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Account deletion failed.");
+    },
+  });
 
   const { data: workspaceSettings } = useQuery({
     queryKey: ["workspace-settings"],
@@ -89,20 +177,28 @@ export function SettingsPage() {
   const toggleAutoSortMut = useMutation({
     mutationFn: (enabled: boolean) => api.updateWorkspaceSettings({ auto_sort_enabled: enabled }),
     onSuccess: (ws) => {
-      setNotice(
-        ws.auto_sort_enabled
-          ? "Auto-Sort enabled for new items."
-          : "Auto-Sort disabled. New items will not be sorted automatically."
-      );
+      const msg = ws.auto_sort_enabled
+        ? "Auto-Sort enabled for new items."
+        : "Auto-Sort disabled. New items will not be sorted automatically.";
+      setNotice(msg);
+      toast.success(msg);
       qc.invalidateQueries({ queryKey: ["workspace-settings"] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to update Auto-Sort setting.");
     },
   });
 
   const resortMut = useMutation({
     mutationFn: api.resortCollection,
     onSuccess: (res) => {
-      setNotice(`Queued background re-sort for ${res.queued_count} unpinned item(s).`);
+      const msg = `Queued background re-sort for ${res.queued_count} unpinned item(s).`;
+      setNotice(msg);
+      toast.success(msg);
       qc.invalidateQueries({ queryKey: ["items"] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to trigger re-sort.");
     },
   });
 
@@ -116,16 +212,25 @@ export function SettingsPage() {
       api.upsertCredential(provider, value),
     onSuccess: (res) => {
       setDrafts((d) => ({ ...d, [res.provider]: "" }));
-      setNotice(`${res.label} saved securely.`);
+      const msg = `${res.label} saved securely.`;
+      setNotice(msg);
+      toast.success(msg);
       qc.invalidateQueries({ queryKey: ["credentials"] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to save credential.");
     },
   });
 
   const deleteMut = useMutation({
-    mutationFn: api.deleteCredential,
+    mutationFn: (provider: string) => api.deleteCredential(provider),
     onSuccess: () => {
       setNotice("Credential removed.");
+      toast.success("Credential removed.");
       qc.invalidateQueries({ queryKey: ["credentials"] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to remove credential.");
     },
   });
 
@@ -143,6 +248,149 @@ export function SettingsPage() {
           {notice}
         </div>
       )}
+
+      {/* Profile & Account Security */}
+      <section className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
+        <div className="flex items-start gap-3">
+          <UserCheck className="h-5 w-5 text-amber-400 mt-0.5 shrink-0" />
+          <div>
+            <h2 className="text-sm font-semibold text-slate-100">
+              Profile &amp; Account Security
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              {resolvedUser?.email ? `Signed in as ${resolvedUser.email}` : "Manage your profile, password, or account deletion."}
+            </p>
+          </div>
+        </div>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            updateProfileMut.mutate();
+          }}
+          className="flex flex-wrap items-end gap-2.5"
+        >
+          <div className="flex-1 min-w-[200px]">
+            <label htmlFor="settings-display-name" className="block text-xs text-slate-400 mb-1">
+              Display Name
+            </label>
+            <input
+              id="settings-display-name"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="Collector Name"
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={updateProfileMut.isPending}
+            className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs disabled:opacity-50"
+          >
+            {updateProfileMut.isPending ? "Saving..." : "Save Profile"}
+          </button>
+        </form>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (newPassword !== confirmNewPassword) {
+              toast.error("New passwords do not match.");
+              return;
+            }
+            changePasswordMut.mutate();
+          }}
+          className="pt-3 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-4 gap-2.5 items-end"
+        >
+          <div>
+            <label htmlFor="settings-current-pw" className="block text-xs text-slate-400 mb-1">
+              Current Password
+            </label>
+            <input
+              id="settings-current-pw"
+              type="password"
+              required
+              autoComplete="current-password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+            />
+          </div>
+          <div>
+            <label htmlFor="settings-new-pw" className="block text-xs text-slate-400 mb-1">
+              New Password
+            </label>
+            <input
+              id="settings-new-pw"
+              type="password"
+              required
+              minLength={8}
+              autoComplete="new-password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+            />
+          </div>
+          <div>
+            <label htmlFor="settings-confirm-pw" className="block text-xs text-slate-400 mb-1">
+              Confirm Password
+            </label>
+            <input
+              id="settings-confirm-pw"
+              type="password"
+              required
+              minLength={8}
+              autoComplete="new-password"
+              value={confirmNewPassword}
+              onChange={(e) => setConfirmNewPassword(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={changePasswordMut.isPending}
+            className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold disabled:opacity-50"
+          >
+            <Lock className="h-3.5 w-3.5" />
+            {changePasswordMut.isPending ? "Updating..." : "Change Password"}
+          </button>
+        </form>
+
+        <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-end justify-between gap-3">
+          <div className="flex-1 min-w-[200px]">
+            <label htmlFor="settings-delete-pw" className="block text-xs text-rose-300/90 mb-1">
+              Confirm Password to Delete Account Permanently
+            </label>
+            <input
+              id="settings-delete-pw"
+              type="password"
+              autoComplete="current-password"
+              value={deletePassword}
+              onChange={(e) => setDeletePassword(e.target.value)}
+              placeholder="Enter current password"
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-rose-500/30 text-sm"
+            />
+          </div>
+          <button
+            type="button"
+            disabled={!deletePassword || deleteAccountMut.isPending}
+            onClick={() => setConfirmDeleteOpen(true)}
+            className="px-4 py-2 rounded-xl bg-rose-600/20 hover:bg-rose-600/35 border border-rose-500/40 text-rose-300 text-xs font-semibold disabled:opacity-40"
+          >
+            Delete Account
+          </button>
+        </div>
+      </section>
+
+      <ConfirmDialog
+        open={confirmDeleteOpen}
+        title="Permanently Delete Account?"
+        description="This permanently removes your account, owned vaults, catalog records, and uploaded photos. This action cannot be undone."
+        confirmLabel="Delete Account"
+        isPending={deleteAccountMut.isPending}
+        onCancel={() => setConfirmDeleteOpen(false)}
+        onConfirm={() => deleteAccountMut.mutate()}
+      />
 
       <section className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">

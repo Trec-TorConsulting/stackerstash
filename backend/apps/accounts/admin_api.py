@@ -10,7 +10,9 @@ from ninja import Router, Schema
 from ninja.errors import HttpError
 
 from apps.catalog.models import CollectionItem, Container
-from apps.valuation.models import SpotPriceSnapshot
+from apps.valuation.models import AppraisalJob, SpotPriceSnapshot
+from apps.vision.models import IdentificationJob
+from config.health import check_db_health, check_redis_health
 
 from .auth import WorkspaceAuth, resolve_user_workspace
 from .models import ProviderCredential, User, Workspace, WorkspaceMembership
@@ -42,6 +44,13 @@ class AdminOverviewOut(Schema):
     total_market_value: str
     total_melt_value: str
     last_spot_sync: datetime | None = None
+    pending_appraisals: int = 0
+    running_appraisals: int = 0
+    failed_appraisals_24h: int = 0
+    deferred_ai_items: int = 0
+    recent_identifications_24h: int = 0
+    db_healthy: bool = True
+    redis_healthy: bool = False
 
 
 class AdminUserWorkspaceOut(Schema):
@@ -137,13 +146,17 @@ def _serialize_admin_user(user: User) -> AdminUserOut:
 
 @admin_router.get("/overview", response=AdminOverviewOut)
 def get_admin_overview(request):
-    seven_days_ago = timezone.now() - timedelta(days=7)
+    now = timezone.now()
+    seven_days_ago = now - timedelta(days=7)
+    one_day_ago = now - timedelta(days=1)
     item_agg = CollectionItem.objects.filter(status=CollectionItem.Status.IN_COLLECTION).aggregate(
         total_items=Count("id"),
         market=Sum(F("market_value_unit") * F("quantity")),
         melt=Sum(F("melt_value_unit") * F("quantity")),
     )
     latest_spot = SpotPriceSnapshot.objects.order_by("-fetched_at").first()
+    db_healthy, _ = check_db_health()
+    redis_healthy, _ = check_redis_health()
 
     return AdminOverviewOut(
         total_users=User.objects.count(),
@@ -156,6 +169,17 @@ def get_admin_overview(request):
         total_market_value=_decimal_str(item_agg["market"]),
         total_melt_value=_decimal_str(item_agg["melt"]),
         last_spot_sync=latest_spot.fetched_at if latest_spot else None,
+        pending_appraisals=AppraisalJob.objects.filter(status=AppraisalJob.Status.PENDING).count(),
+        running_appraisals=AppraisalJob.objects.filter(status=AppraisalJob.Status.RUNNING).count(),
+        failed_appraisals_24h=AppraisalJob.objects.filter(
+            status=AppraisalJob.Status.FAILED, created_at__gte=one_day_ago
+        ).count(),
+        deferred_ai_items=CollectionItem.objects.filter(ai_enrichment_pending=True).count(),
+        recent_identifications_24h=IdentificationJob.objects.filter(
+            created_at__gte=one_day_ago
+        ).count(),
+        db_healthy=db_healthy,
+        redis_healthy=redis_healthy,
     )
 
 

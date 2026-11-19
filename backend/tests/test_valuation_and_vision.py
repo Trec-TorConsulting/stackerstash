@@ -553,7 +553,7 @@ def test_goldback_candidate_normalization_and_exchange_rate_valuation(user_a, mo
     from apps.catalog.auto_sort import classify_item_deterministic
     from apps.catalog.goldback import GOLDBACK_DENOMINATION_WEIGHTS
     from apps.catalog.models import CollectionItem
-    from apps.valuation.models import SpotPriceSnapshot, ValuationHistory
+    from apps.valuation.models import SpotPriceSnapshot
     from apps.valuation.services import appraise_item
     from apps.vision.services import _normalize_candidate
 
@@ -681,8 +681,10 @@ def test_ocr_and_vision_card_normalization():
 def test_reappraise_stale_items_preserves_user_locked_value(monkeypatch):
     from datetime import timedelta
     from decimal import Decimal
+
     from django.contrib.auth import get_user_model
     from django.utils import timezone
+
     from apps.accounts.models import Workspace
     from apps.catalog.models import CollectionItem
     from apps.valuation.models import SpotPriceSnapshot

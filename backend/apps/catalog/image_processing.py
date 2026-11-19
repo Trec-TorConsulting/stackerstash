@@ -1358,7 +1358,7 @@ def _detect_salient_subject_bounds(img: Image.Image) -> tuple[float, float, floa
         kept_thresholds = [float(min(120.0, max(30.0, np.percentile(dists_c, 90) * 1.6 + 14.0)))]
 
     is_bg = np.zeros((sh, sw), dtype=bool)
-    for center, thresh in zip(kept_centers, kept_thresholds):
+    for center, thresh in zip(kept_centers, kept_thresholds, strict=True):
         dist_map = np.abs(rgb - center.reshape(1, 1, 3)).sum(axis=2)
         is_bg |= dist_map <= thresh
 
@@ -1679,7 +1679,10 @@ def align_crop_box_to_size(
 
     t_aspect = tw / th
     c_aspect = bw / bh
-    is_sq = lambda a: 0.85 <= a <= 1.18
+
+    def is_sq(a: float) -> bool:
+        return 0.85 <= a <= 1.18
+
     if (tw >= th) != (bw >= bh) and not (is_sq(t_aspect) or is_sq(c_aspect)):
         return box
 

@@ -3,7 +3,6 @@ from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.test import Client
 
 from apps.accounts.models import Workspace
 from apps.catalog.models import CollectionItem

@@ -156,6 +156,7 @@ def test_card_cert_verification_urls():
 @patch("apps.valuation.providers.httpx.Client")
 def test_lookup_pokemon_tcg_and_scryfall_and_pricecharting(mock_client_cls):
     from django.core.cache import cache
+
     from apps.valuation.providers import (
         lookup_pokemon_tcg_card,
         lookup_pricecharting_card,
@@ -223,6 +224,7 @@ def test_lookup_pokemon_tcg_and_scryfall_and_pricecharting(mock_client_cls):
 
 def test_lookup_psa_cert_extracts_pop_and_spec_id(monkeypatch):
     from django.core.cache import cache
+
     from apps.valuation.providers import lookup_psa_cert
 
     cache.clear()
@@ -271,6 +273,7 @@ def test_lookup_psa_cert_extracts_pop_and_spec_id(monkeypatch):
 
 def test_lookup_pricecharting_card_multi_grade_tiers(monkeypatch):
     from django.core.cache import cache
+
     from apps.valuation.providers import lookup_pricecharting_card
 
     cache.clear()
@@ -318,6 +321,7 @@ def test_lookup_pricecharting_card_multi_grade_tiers(monkeypatch):
 
 def test_lookup_tcgplayer_and_collectr_optional_byok(monkeypatch):
     from django.core.cache import cache
+
     from apps.valuation.providers import lookup_collectr_price, lookup_tcgplayer_price
 
     cache.clear()
@@ -367,6 +371,7 @@ def test_lookup_tcgplayer_and_collectr_optional_byok(monkeypatch):
 
 def test_filter_comp_listings_excludes_lots_replicas_and_empty_boxes():
     from decimal import Decimal
+
     from apps.valuation.providers import _filter_comp_listings
 
     listings = [

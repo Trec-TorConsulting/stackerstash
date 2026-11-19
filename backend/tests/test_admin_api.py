@@ -92,3 +92,33 @@ def test_global_admin_overview_users_and_workspaces(client):
     workspaces = ws_resp.json()
     assert len(workspaces) == 2
     assert any(w["id"] == str(admin_ws.id) for w in workspaces)
+
+
+@pytest.mark.django_db
+def test_admin_overview_reports_background_job_and_dependency_health(client):
+    from apps.valuation.models import AppraisalJob
+    from apps.vision.models import IdentificationJob
+
+    admin = User.objects.create_superuser(email="ops@stackerstash.com", password="password123")
+    ws = create_default_workspace_for_user(admin, name="Ops Vault")
+    item = CollectionItem.objects.create(
+        workspace=ws,
+        title="Queued Eagle",
+        ai_enrichment_pending=True,
+    )
+    AppraisalJob.objects.create(workspace=ws, item=item, status=AppraisalJob.Status.PENDING)
+    AppraisalJob.objects.create(workspace=ws, item=item, status=AppraisalJob.Status.RUNNING)
+    AppraisalJob.objects.create(workspace=ws, item=item, status=AppraisalJob.Status.FAILED)
+    IdentificationJob.objects.create(workspace=ws, provider_used="mock")
+
+    token = issue_access_token(admin)
+    resp = client.get("/api/v1/admin/overview", HTTP_AUTHORIZATION=f"Bearer {token}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["pending_appraisals"] == 1
+    assert body["running_appraisals"] == 1
+    assert body["failed_appraisals_24h"] == 1
+    assert body["deferred_ai_items"] == 1
+    assert body["recent_identifications_24h"] == 1
+    assert body["db_healthy"] is True
+    assert isinstance(body["redis_healthy"], bool)

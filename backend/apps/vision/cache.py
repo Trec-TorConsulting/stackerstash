@@ -24,7 +24,9 @@ def compute_dhash(img_bytes: bytes) -> str:
             img = ImageOps.exif_transpose(opened).convert("L").resize(
                 (9, 8), Image.Resampling.LANCZOS
             )
-            pixels = list(img.getdata())
+            pixels = list(
+                img.get_flattened_data() if hasattr(img, "get_flattened_data") else img.getdata()
+            )
         bits = 0
         for row in range(8):
             offset = row * 9
@@ -129,7 +131,7 @@ def store_image_cache(
 
 
 def _cert_redis_key(svc: str, num: str) -> str:
-    digest = hashlib.sha256(f"{svc}:{num}".encode("utf-8")).hexdigest()[:24]
+    digest = hashlib.sha256(f"{svc}:{num}".encode()).hexdigest()[:24]
     return f"vision:certcache:{svc}:{digest}"
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from django.conf import settings
@@ -78,7 +78,7 @@ class Command(BaseCommand):
             if backup_dir_opt:
                 backup_dir = Path(backup_dir_opt)
             else:
-                stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
                 media_root = Path(getattr(settings, "MEDIA_ROOT", "") or ".")
                 backup_dir = media_root / "recrop_backups" / stamp
             backup_dir.mkdir(parents=True, exist_ok=True)
