@@ -3,12 +3,14 @@ import { AlertCircle, ArrowUpRight, Camera, RefreshCw, TrendingUp } from "lucide
 import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { useToast } from "../components/ToastProvider";
-import { api } from "../lib/api";
+import { api, type UserWorkspace } from "../lib/api";
 import { CATEGORY_LABELS, METAL_LABELS, formatOz, formatUsd } from "../lib/format";
+import { useWorkspacePermissions } from "../lib/workspaceContext";
 
 const SPOT_AUTO_REFRESH_MS = 5 * 60 * 1000;
 
-export function DashboardPage() {
+export function DashboardPage({ activeWorkspace }: { activeWorkspace?: UserWorkspace } = {}) {
+  const { canEdit } = useWorkspacePermissions(activeWorkspace);
   const qc = useQueryClient();
   const toast = useToast();
   const didAutoRefreshRef = useRef(false);
@@ -95,15 +97,17 @@ export function DashboardPage() {
             {summary.total_items} items across {summary.unique_entries} catalog entries
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Link
-            to="/scan"
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-semibold transition"
-          >
-            <Camera className="h-4 w-4" />
-            Scan / Add
-          </Link>
-        </div>
+        {canEdit && (
+          <div className="flex items-center gap-2">
+            <Link
+              to="/scan"
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-semibold transition"
+            >
+              <Camera className="h-4 w-4" />
+              Scan / Add
+            </Link>
+          </div>
+        )}
       </div>
 
       {/* Live Spot Ticker */}
@@ -260,8 +264,14 @@ export function DashboardPage() {
         </div>
         {summary.top_valuable_items.length === 0 ? (
           <div className="text-center py-8 text-slate-500 text-sm">
-            Your vault is empty. Tap <strong className="text-amber-400">Scan / Add</strong> to
-            catalog your first coin, banknote, bar, or slab.
+            {canEdit ? (
+              <>
+                Your vault is empty. Tap <strong className="text-amber-400">Scan / Add</strong> to
+                catalog your first coin, banknote, bar, or slab.
+              </>
+            ) : (
+              "This shared vault is currently empty (read-only access)."
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

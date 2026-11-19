@@ -3,7 +3,13 @@ from __future__ import annotations
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
-from .models import ProviderCredential, User, Workspace, WorkspaceMembership
+from .models import (
+    ProviderCredential,
+    User,
+    Workspace,
+    WorkspaceInvitation,
+    WorkspaceMembership,
+)
 
 
 @admin.register(User)
@@ -32,6 +38,22 @@ class WorkspaceAdmin(admin.ModelAdmin):
 class WorkspaceMembershipAdmin(admin.ModelAdmin):
     list_display = ("workspace", "user", "role", "created_at")
     list_filter = ("role",)
+
+
+@admin.register(WorkspaceInvitation)
+class WorkspaceInvitationAdmin(admin.ModelAdmin):
+    list_display = (
+        "email",
+        "workspace",
+        "role",
+        "status",
+        "invited_by",
+        "expires_at",
+        "created_at",
+    )
+    list_filter = ("status", "role")
+    search_fields = ("email", "workspace__name", "invited_by__email")
+    readonly_fields = ("token", "created_at", "responded_at")
 
 
 @admin.register(ProviderCredential)

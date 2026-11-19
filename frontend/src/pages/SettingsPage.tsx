@@ -1,22 +1,34 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
+  Copy,
   ExternalLink,
   FolderTree,
   KeyRound,
   Lock,
+  LogOut,
+  MailPlus,
   Pencil,
   Plus,
   RefreshCw,
   Star,
   Trash2,
   UserCheck,
+  Users,
   Vault,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../components/ToastProvider";
-import { api, setAuthToken, type AuthUser, type UserWorkspace } from "../lib/api";
+import {
+  api,
+  getWorkspaceRole,
+  setActiveWorkspaceId,
+  setAuthToken,
+  type AuthUser,
+  type UserWorkspace,
+  type WorkspaceMember,
+} from "../lib/api";
 import { formatUsd } from "../lib/format";
 
 const PROVIDER_GROUPS: { title: string; subtitle: string; providers: string[] }[] = [
@@ -128,6 +140,11 @@ export function SettingsPage({
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
   const [deletePassword, setDeletePassword] = useState("");
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<"VIEWER" | "EDITOR">("VIEWER");
+  const [pendingRemoveMember, setPendingRemoveMember] = useState<WorkspaceMember | null>(null);
+  const [confirmLeaveOpen, setConfirmLeaveOpen] = useState(false);
 
   const { data: meData } = useQuery({
     queryKey: ["auth-me"],
@@ -279,6 +296,103 @@ export function SettingsPage({
     queryFn: api.getWorkspaceSettings,
   });
 
+  const activeWorkspaceObj = workspaceSettings ?? resolvedUser?.workspace;
+  const activeRole = getWorkspaceRole(activeWorkspaceObj);
+  const isOwner = activeRole === "OWNER";
+  const isSharedActive = Boolean(activeWorkspaceObj?.is_shared);
+  const activeWorkspaceId = activeWorkspaceObj?.id;
+
+  const { data: members = [] } = useQuery({
+    queryKey: ["workspace-members", activeWorkspaceId],
+    queryFn: () =>
+      typeof api.listWorkspaceMembers === "function" && activeWorkspaceId
+        ? api.listWorkspaceMembers(activeWorkspaceId)
+        : Promise.resolve([]),
+    enabled: Boolean(activeWorkspaceId),
+  });
+
+  const { data: invites = [] } = useQuery({
+    queryKey: ["workspace-invites", activeWorkspaceId],
+    queryFn: () =>
+      typeof api.listWorkspaceInvites === "function" && activeWorkspaceId
+        ? api.listWorkspaceInvites(activeWorkspaceId)
+        : Promise.resolve([]),
+    enabled: Boolean(activeWorkspaceId && isOwner),
+  });
+
+  const createInviteMut = useMutation({
+    mutationFn: () =>
+      api.createWorkspaceInvite(activeWorkspaceId!, {
+        email: inviteEmail.trim(),
+        role: inviteRole,
+      }),
+    onSuccess: (created) => {
+      setInviteEmail("");
+      toast.success(`Invitation sent to ${created.email} (${created.role}).`);
+      qc.invalidateQueries({ queryKey: ["workspace-invites", activeWorkspaceId] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to send invitation.");
+    },
+  });
+
+  const revokeInviteMut = useMutation({
+    mutationFn: (inviteId: string) =>
+      api.revokeWorkspaceInvite(activeWorkspaceId!, inviteId),
+    onSuccess: () => {
+      toast.success("Invitation revoked.");
+      qc.invalidateQueries({ queryKey: ["workspace-invites", activeWorkspaceId] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to revoke invitation.");
+    },
+  });
+
+  const updateMemberMut = useMutation({
+    mutationFn: ({
+      membershipId,
+      role,
+    }: {
+      membershipId: string;
+      role: "EDITOR" | "VIEWER";
+    }) => api.updateWorkspaceMember(activeWorkspaceId!, membershipId, role),
+    onSuccess: (updated) => {
+      toast.success(`Updated ${updated.email} to ${updated.role}.`);
+      qc.invalidateQueries({ queryKey: ["workspace-members", activeWorkspaceId] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to update member role.");
+    },
+  });
+
+  const removeMemberMut = useMutation({
+    mutationFn: (membershipId: string) =>
+      api.removeWorkspaceMember(activeWorkspaceId!, membershipId),
+    onSuccess: () => {
+      setPendingRemoveMember(null);
+      toast.success("Member removed from vault.");
+      qc.invalidateQueries({ queryKey: ["workspace-members", activeWorkspaceId] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to remove member.");
+    },
+  });
+
+  const leaveVaultMut = useMutation({
+    mutationFn: () => api.leaveWorkspace(activeWorkspaceId!),
+    onSuccess: async () => {
+      setConfirmLeaveOpen(false);
+      setActiveWorkspaceId(null);
+      toast.success("Left shared vault.");
+      qc.invalidateQueries({ queryKey: ["workspaces"] });
+      qc.invalidateQueries({ queryKey: ["auth-me"] });
+      await onWorkspacesChanged?.();
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to leave vault.");
+    },
+  });
+
   const toggleAutoSortMut = useMutation({
     mutationFn: (enabled: boolean) => api.updateWorkspaceSettings({ auto_sort_enabled: enabled }),
     onSuccess: (ws) => {
@@ -310,6 +424,7 @@ export function SettingsPage({
   const { data: credentials = [] } = useQuery({
     queryKey: ["credentials"],
     queryFn: api.getCredentials,
+    enabled: isOwner,
   });
 
   const saveMut = useMutation({
@@ -427,95 +542,115 @@ export function SettingsPage({
 
         {vaults.length > 0 && (
           <div className="space-y-2.5">
-            {vaults.map((v) => {
-              const isActive = v.id === resolvedUser?.workspace.id || v.id === workspaceSettings?.id;
-              const isEditingThis = editingVault?.id === v.id;
-              return (
-                <div
-                  key={v.id}
-                  className={`p-3.5 rounded-xl border space-y-3 ${
-                    isActive
-                      ? "bg-amber-500/5 border-amber-500/40"
-                      : "bg-slate-950/70 border-slate-800"
-                  }`}
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-semibold text-sm text-slate-100">{v.name}</span>
-                        {v.is_default && (
-                          <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-medium">
-                            Default
-                          </span>
+            {(() => {
+              const ownedCount = vaults.filter((item) => !item.is_shared).length;
+              return vaults.map((v) => {
+                const isActive = v.id === resolvedUser?.workspace.id || v.id === workspaceSettings?.id;
+                const isEditingThis = editingVault?.id === v.id;
+                const isSharedVault = Boolean(v.is_shared);
+                const vaultRole = getWorkspaceRole(v);
+                return (
+                  <div
+                    key={v.id}
+                    className={`p-3.5 rounded-xl border space-y-3 ${
+                      isActive
+                        ? "bg-amber-500/5 border-amber-500/40"
+                        : "bg-slate-950/70 border-slate-800"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-sm text-slate-100">{v.name}</span>
+                          {isSharedVault ? (
+                            <>
+                              <span className="px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/30 text-[10px] font-medium">
+                                Shared
+                              </span>
+                              <span className="px-2 py-0.5 rounded-full bg-slate-800 text-amber-300 border border-slate-700 text-[10px] font-medium">
+                                {vaultRole === "EDITOR" ? "Editor" : "Viewer"}
+                              </span>
+                            </>
+                          ) : (
+                            v.is_default && (
+                              <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-medium">
+                                Default
+                              </span>
+                            )
+                          )}
+                          {isActive && (
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-medium">
+                              Active
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-slate-400 mt-0.5">
+                          {v.item_count ?? 0} entries • {formatUsd(v.total_market_value)} •{" "}
+                          {v.default_currency}
+                          {isSharedVault && v.owner_email ? ` • Owner: ${v.owner_email}` : ""}
+                          {v.description ? ` • ${v.description}` : ""}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {!isActive && onSwitchWorkspace && (
+                          <button
+                            type="button"
+                            onClick={() => void onSwitchWorkspace(v.id)}
+                            className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200"
+                          >
+                            Switch
+                          </button>
                         )}
-                        {isActive && (
-                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-medium">
-                            Active
-                          </span>
+                        {!isSharedVault && !v.is_default && (
+                          <button
+                            type="button"
+                            disabled={setDefaultVaultMut.isPending}
+                            onClick={() => setDefaultVaultMut.mutate(v.id)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-amber-300 disabled:opacity-50"
+                          >
+                            <Star className="h-3 w-3" /> Set Default
+                          </button>
+                        )}
+                        {!isSharedVault && (
+                          <>
+                            <button
+                              type="button"
+                              aria-label={`Edit vault ${v.name}`}
+                              onClick={() => {
+                                if (isEditingThis) {
+                                  setEditingVault(null);
+                                } else {
+                                  setEditingVault(v);
+                                  setEditVaultName(v.name);
+                                  setEditVaultDesc(v.description || "");
+                                  setEditVaultCurrency(v.default_currency || "USD");
+                                  setEditVaultAutoSort(v.auto_sort_enabled ?? true);
+                                }
+                              }}
+                              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={ownedCount <= 1 || deleteVaultMut.isPending}
+                              title={
+                                ownedCount <= 1
+                                  ? "You must keep at least one vault"
+                                  : `Delete ${v.name}`
+                              }
+                              aria-label={`Delete vault ${v.name}`}
+                              onClick={() => setPendingDeleteVault(v)}
+                              className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 disabled:opacity-30"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </>
                         )}
                       </div>
-                      <div className="text-xs text-slate-400 mt-0.5">
-                        {v.item_count ?? 0} entries • {formatUsd(v.total_market_value)} •{" "}
-                        {v.default_currency}
-                        {v.description ? ` • ${v.description}` : ""}
-                      </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {!isActive && onSwitchWorkspace && (
-                        <button
-                          type="button"
-                          onClick={() => void onSwitchWorkspace(v.id)}
-                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200"
-                        >
-                          Switch
-                        </button>
-                      )}
-                      {!v.is_default && (
-                        <button
-                          type="button"
-                          disabled={setDefaultVaultMut.isPending}
-                          onClick={() => setDefaultVaultMut.mutate(v.id)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-amber-300 disabled:opacity-50"
-                        >
-                          <Star className="h-3 w-3" /> Set Default
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        aria-label={`Edit vault ${v.name}`}
-                        onClick={() => {
-                          if (isEditingThis) {
-                            setEditingVault(null);
-                          } else {
-                            setEditingVault(v);
-                            setEditVaultName(v.name);
-                            setEditVaultDesc(v.description || "");
-                            setEditVaultCurrency(v.default_currency || "USD");
-                            setEditVaultAutoSort(v.auto_sort_enabled ?? true);
-                          }
-                        }}
-                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={vaults.length <= 1 || deleteVaultMut.isPending}
-                        title={
-                          vaults.length <= 1
-                            ? "You must keep at least one vault"
-                            : `Delete ${v.name}`
-                        }
-                        aria-label={`Delete vault ${v.name}`}
-                        onClick={() => setPendingDeleteVault(v)}
-                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 disabled:opacity-30"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  </div>
 
-                  {isEditingThis && (
+                    {isEditingThis && !isSharedVault && (
                     <form
                       onSubmit={(e) => {
                         e.preventDefault();
@@ -573,12 +708,264 @@ export function SettingsPage({
                       </div>
                     </form>
                   )}
-                </div>
-              );
-            })}
+                  </div>
+                );
+              });
+            })()}
           </div>
         )}
       </section>
+
+      {activeWorkspaceId && (
+        <section className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
+          {isOwner && !isSharedActive ? (
+            <>
+              <div className="flex items-start gap-3">
+                <Users className="h-5 w-5 text-amber-400 mt-0.5 shrink-0" />
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-100">
+                    Vault Sharing &amp; Members
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Invite collectors to collaborate on{" "}
+                    <span className="text-slate-200 font-medium">
+                      {activeWorkspaceObj?.name || "this vault"}
+                    </span>{" "}
+                    as Viewers (read-only) or Editors (catalog, scan &amp; appraise without
+                    accessing your BYOK API keys).
+                  </p>
+                </div>
+              </div>
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!inviteEmail.trim() || createInviteMut.isPending) return;
+                  createInviteMut.mutate();
+                }}
+                className="flex flex-wrap gap-2 items-center p-3 rounded-xl bg-slate-950/70 border border-slate-800/80"
+              >
+                <input
+                  type="email"
+                  required
+                  aria-label="Invite member email"
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                  placeholder="collaborator@example.com"
+                  className="flex-1 min-w-[200px] px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-sm text-slate-100"
+                />
+                <select
+                  aria-label="Invite member role"
+                  value={inviteRole}
+                  onChange={(e) =>
+                    setInviteRole(e.target.value === "EDITOR" ? "EDITOR" : "VIEWER")
+                  }
+                  className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-sm text-slate-200"
+                >
+                  <option value="VIEWER">Viewer (Read-only)</option>
+                  <option value="EDITOR">Editor (View &amp; Catalog)</option>
+                </select>
+                <button
+                  type="submit"
+                  disabled={!inviteEmail.trim() || createInviteMut.isPending}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs disabled:opacity-40"
+                >
+                  <MailPlus className="h-3.5 w-3.5" />
+                  {createInviteMut.isPending ? "Sending..." : "Send Invite"}
+                </button>
+              </form>
+
+              {invites.filter((inv) => inv.status === "PENDING" && !inv.is_expired).length >
+                0 && (
+                <div className="space-y-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Pending Invitations
+                  </h3>
+                  {invites
+                    .filter((inv) => inv.status === "PENDING" && !inv.is_expired)
+                    .map((inv) => {
+                      const inviteUrl = `${window.location.origin}${inv.invite_path}`;
+                      return (
+                        <div
+                          key={inv.id}
+                          className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 text-xs"
+                        >
+                          <div className="min-w-0">
+                            <span className="font-medium text-slate-100">{inv.email}</span>
+                            <span className="text-slate-400">
+                              {" "}
+                              • {inv.role === "EDITOR" ? "Editor" : "Viewer"}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (navigator.clipboard?.writeText) {
+                                  void navigator.clipboard.writeText(inviteUrl);
+                                }
+                                toast.success("Invite link copied.");
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200"
+                            >
+                              <Copy className="h-3 w-3" /> Copy Link
+                            </button>
+                            <button
+                              type="button"
+                              disabled={revokeInviteMut.isPending}
+                              onClick={() => revokeInviteMut.mutate(inv.id)}
+                              className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-rose-300 disabled:opacity-50"
+                            >
+                              Revoke
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+
+              {members.length > 0 && (
+                <div className="space-y-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Vault Members ({members.length})
+                  </h3>
+                  {members.map((m) => (
+                    <div
+                      key={m.id}
+                      className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-medium text-slate-100">
+                          {m.display_name ? `${m.display_name} (${m.email})` : m.email}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {m.is_owner ? (
+                          <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 font-medium">
+                            Owner
+                          </span>
+                        ) : (
+                          <>
+                            <select
+                              aria-label={`Role for ${m.email}`}
+                              value={m.role === "EDITOR" ? "EDITOR" : "VIEWER"}
+                              disabled={updateMemberMut.isPending}
+                              onChange={(e) =>
+                                updateMemberMut.mutate({
+                                  membershipId: m.id,
+                                  role:
+                                    e.target.value === "EDITOR" ? "EDITOR" : "VIEWER",
+                                })
+                              }
+                              className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-200"
+                            >
+                              <option value="VIEWER">Viewer</option>
+                              <option value="EDITOR">Editor</option>
+                            </select>
+                            <button
+                              type="button"
+                              aria-label={`Remove ${m.email}`}
+                              onClick={() => setPendingRemoveMember(m)}
+                              className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-300"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <Users className="h-5 w-5 text-sky-400 mt-0.5 shrink-0" />
+                  <div>
+                    <h2 className="text-sm font-semibold text-slate-100">
+                      Shared Vault Access
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      You have{" "}
+                      <span className="font-semibold text-amber-300">
+                        {activeRole === "EDITOR"
+                          ? "Editor (View & Catalog)"
+                          : "Viewer (Read-only)"}
+                      </span>{" "}
+                      access to{" "}
+                      <span className="text-slate-200 font-medium">
+                        {activeWorkspaceObj?.name}
+                      </span>
+                      {activeWorkspaceObj?.owner_email
+                        ? ` owned by ${activeWorkspaceObj.owner_email}`
+                        : ""}
+                      . Owner BYOK API keys and vault configuration remain hidden.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setConfirmLeaveOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 text-xs font-medium"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  Leave Shared Vault
+                </button>
+              </div>
+
+              {members.length > 0 && (
+                <div className="space-y-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Vault Members ({members.length})
+                  </h3>
+                  {members.map((m) => (
+                    <div
+                      key={m.id}
+                      className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 text-xs"
+                    >
+                      <span className="text-slate-200 truncate">
+                        {m.display_name ? `${m.display_name} (${m.email})` : m.email}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-[10px] font-medium">
+                        {m.is_owner ? "Owner" : m.role === "EDITOR" ? "Editor" : "Viewer"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
+      <ConfirmDialog
+        open={pendingRemoveMember !== null}
+        title="Remove Vault Member?"
+        description={
+          pendingRemoveMember
+            ? `Remove ${pendingRemoveMember.email} from this shared vault? They will immediately lose access.`
+            : ""
+        }
+        confirmLabel="Remove Member"
+        isPending={removeMemberMut.isPending}
+        onCancel={() => setPendingRemoveMember(null)}
+        onConfirm={() => {
+          if (pendingRemoveMember) removeMemberMut.mutate(pendingRemoveMember.id);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmLeaveOpen}
+        title="Leave Shared Vault?"
+        description={`Are you sure you want to leave "${activeWorkspaceObj?.name || "this shared vault"}"? You can only regain access through a new invitation.`}
+        confirmLabel="Leave Vault"
+        isPending={leaveVaultMut.isPending}
+        onCancel={() => setConfirmLeaveOpen(false)}
+        onConfirm={() => leaveVaultMut.mutate()}
+      />
 
       <ConfirmDialog
         open={pendingDeleteVault !== null}
@@ -743,7 +1130,9 @@ export function SettingsPage({
         onConfirm={() => deleteAccountMut.mutate()}
       />
 
-      <section className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
+      {isOwner && !isSharedActive && (
+        <>
+          <section className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-start gap-3">
             <FolderTree className="h-5 w-5 text-amber-400 mt-0.5 shrink-0" />
@@ -901,7 +1290,9 @@ export function SettingsPage({
             </section>
           );
         })}
-      </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

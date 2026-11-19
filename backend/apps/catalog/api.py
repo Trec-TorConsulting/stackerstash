@@ -16,7 +16,7 @@ from ninja import File, Form, Router, Schema, Status, UploadedFile
 from ninja.errors import HttpError
 from PIL import Image
 
-from apps.accounts.auth import WorkspaceAuth
+from apps.accounts.auth import WorkspaceAuth, require_editor
 from config.media_signing import build_signed_media_url
 
 from .image_processing import generate_image_thumbnail, process_item_image, rotate_item_image
@@ -593,6 +593,7 @@ def list_containers(request):
 
 @catalog_router.post("/containers", response={201: ContainerOut})
 def create_container(request, payload: ContainerIn):
+    require_editor(request)
     parent = _validate_container(request.workspace, payload.parent_id)
     container = Container.objects.create(
         workspace=request.workspace,
@@ -620,6 +621,7 @@ def create_container(request, payload: ContainerIn):
 
 @catalog_router.patch("/containers/{container_id}", response=ContainerOut)
 def update_container(request, container_id: UUID, payload: ContainerIn):
+    require_editor(request)
     container = get_object_or_404(Container, id=container_id, workspace=request.workspace)
     parent = _validate_container(request.workspace, payload.parent_id)
     _assert_no_container_cycle(container, parent)
@@ -648,6 +650,7 @@ def update_container(request, container_id: UUID, payload: ContainerIn):
 
 @catalog_router.delete("/containers/{container_id}", response={204: None})
 def delete_container(request, container_id: UUID):
+    require_editor(request)
     container = get_object_or_404(Container, id=container_id, workspace=request.workspace)
     container.delete()
     return Status(204, None)
@@ -764,6 +767,7 @@ def _check_duplicate_cert_number(
 
 @catalog_router.post("/items", response={201: ItemOut})
 def create_item(request, payload: ItemIn):
+    require_editor(request)
     container = _validate_container(request.workspace, payload.container_id)
     _check_duplicate_cert_number(request.workspace, payload.cert_number)
     item = CollectionItem(
@@ -856,6 +860,7 @@ def create_item(request, payload: ItemIn):
 @catalog_router.post("/items/bulk-delete", response=BulkDeleteOut)
 @transaction.atomic
 def bulk_delete_items(request, payload: BulkDeleteIn):
+    require_editor(request)
     if not payload.item_ids:
         return BulkDeleteOut(deleted_count=0)
     qs = CollectionItem.objects.filter(
@@ -874,6 +879,7 @@ def bulk_delete_items(request, payload: BulkDeleteIn):
 @catalog_router.post("/items/bulk-update", response=BulkUpdateOut)
 @transaction.atomic
 def bulk_update_items(request, payload: BulkUpdateIn):
+    require_editor(request)
     if not payload.item_ids:
         return BulkUpdateOut(updated_count=0)
 
@@ -968,6 +974,7 @@ class ResortOut(Schema):
 def resort_workspace_items(request):
     from apps.catalog.auto_sort import enqueue_workspace_resort
 
+    require_editor(request)
     queued = enqueue_workspace_resort(request.workspace.id)
     return ResortOut(queued_count=queued)
 
@@ -1000,6 +1007,7 @@ SPEC_FIELDS = {
 
 @catalog_router.patch("/items/{item_id}", response=ItemOut)
 def update_item(request, item_id: UUID, payload: ItemPatch):
+    require_editor(request)
     item = get_object_or_404(
         CollectionItem.objects.select_related("container").prefetch_related("photos"),
         id=item_id,
@@ -1051,6 +1059,7 @@ def duplicate_item(request, item_id: UUID):
     from apps.catalog.auto_sort import enqueue_item_auto_sort
     from apps.valuation.services import refresh_item_melt_from_latest_spot
 
+    require_editor(request)
     src = get_object_or_404(
         CollectionItem.objects.select_related("container"),
         id=item_id,
@@ -1114,6 +1123,7 @@ def duplicate_item(request, item_id: UUID):
 
 @catalog_router.delete("/items/{item_id}", response={204: None})
 def delete_item(request, item_id: UUID):
+    require_editor(request)
     item = get_object_or_404(CollectionItem, id=item_id, workspace=request.workspace)
     for photo in item.photos.all():
         _delete_photo_files(photo)
@@ -1198,6 +1208,7 @@ def upload_item_photo(
     Clients send ``auto_crop=false`` when they have already cropped the photo or
     the user explicitly chose the framing.
     """
+    require_editor(request)
     item = get_object_or_404(CollectionItem, id=item_id, workspace=request.workspace)
     if label not in dict(ItemPhoto.Label.choices):
         raise HttpError(400, f"Invalid photo label: {label}")
@@ -1282,6 +1293,7 @@ class RotatePhotoIn(Schema):
 @catalog_router.post("/items/{item_id}/photos/{photo_id}/rotate", response=PhotoOut)
 @transaction.atomic
 def rotate_item_photo(request, item_id: UUID, photo_id: UUID, payload: RotatePhotoIn | None = None):
+    require_editor(request)
     item = get_object_or_404(CollectionItem, id=item_id, workspace=request.workspace)
     photo = get_object_or_404(ItemPhoto, id=photo_id, item=item, workspace=request.workspace)
     degrees = payload.degrees if payload is not None else 90
@@ -1318,6 +1330,7 @@ def rotate_item_photo(request, item_id: UUID, photo_id: UUID, payload: RotatePho
 @catalog_router.patch("/items/{item_id}/photos/{photo_id}/primary", response=PhotoOut)
 @transaction.atomic
 def set_primary_photo(request, item_id: UUID, photo_id: UUID):
+    require_editor(request)
     item = get_object_or_404(CollectionItem, id=item_id, workspace=request.workspace)
     photo = get_object_or_404(ItemPhoto, id=photo_id, item=item, workspace=request.workspace)
     item.photos.update(is_primary=False)
@@ -1328,6 +1341,7 @@ def set_primary_photo(request, item_id: UUID, photo_id: UUID):
 
 @catalog_router.delete("/items/{item_id}/photos/{photo_id}", response={204: None})
 def delete_item_photo(request, item_id: UUID, photo_id: UUID):
+    require_editor(request)
     item = get_object_or_404(CollectionItem, id=item_id, workspace=request.workspace)
     photo = get_object_or_404(ItemPhoto, id=photo_id, item=item, workspace=request.workspace)
     was_primary = photo.is_primary
@@ -1437,6 +1451,7 @@ def export_items_json(request):
 
 @catalog_router.post("/items/import/csv", response=CsvImportResult)
 def import_items_csv(request, file: UploadedFile = File(...)):
+    require_editor(request)
     raw = file.read().decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(raw))
     created_count = 0
@@ -1488,6 +1503,7 @@ def import_items_csv(request, file: UploadedFile = File(...)):
 
 @catalog_router.post("/items/import/preview", response=CsvImportPreviewOut)
 def preview_items_csv_import(request, file: UploadedFile = File(...)):
+    require_editor(request)
     preview = preview_csv(file.read())
     return CsvImportPreviewOut(
         detected_preset=preview.detected_preset,
@@ -1507,6 +1523,7 @@ def import_items_csv_mapped(
     mapping: str = Form(""),
     import_photos: bool = Form(False),
 ):
+    require_editor(request)
     parsed_mapping: dict[str, str] | None = None
     if mapping.strip():
         try:

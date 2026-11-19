@@ -4,7 +4,7 @@ import type { CollectionItem } from "../../lib/api";
 
 interface NumismaticSpecsCardProps {
   item: CollectionItem;
-  onSaveSpecs: (patch: Partial<CollectionItem>) => Promise<void>;
+  onSaveSpecs?: (patch: Partial<CollectionItem>) => Promise<void>;
   isSaving?: boolean;
 }
 
@@ -46,6 +46,7 @@ export function NumismaticSpecsCard({ item, onSaveSpecs, isSaving }: NumismaticS
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!onSaveSpecs) return;
     await onSaveSpecs({
       mint_mark: form.mint_mark.trim(),
       mintage: form.mintage ? Number(form.mintage) : null,
@@ -100,23 +101,24 @@ export function NumismaticSpecsCard({ item, onSaveSpecs, isSaving }: NumismaticS
             Numismatic Specifications
           </h2>
         </div>
-        {!editing ? (
-          <button
-            type="button"
-            onClick={startEdit}
-            className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-amber-300 transition"
-          >
-            <Edit3 className="h-3.5 w-3.5" /> Edit Specs
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setEditing(false)}
-            className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition"
-          >
-            <X className="h-3.5 w-3.5" /> Cancel
-          </button>
-        )}
+        {onSaveSpecs &&
+          (!editing ? (
+            <button
+              type="button"
+              onClick={startEdit}
+              className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-amber-300 transition"
+            >
+              <Edit3 className="h-3.5 w-3.5" /> Edit Specs
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setEditing(false)}
+              className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition"
+            >
+              <X className="h-3.5 w-3.5" /> Cancel
+            </button>
+          ))}
       </div>
 
       {editing ? (

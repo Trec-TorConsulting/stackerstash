@@ -1,7 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, Plus, Vault, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api, type AuthUser, type UserWorkspace } from "../lib/api";
+import {
+  api,
+  getWorkspaceRole,
+  type AuthUser,
+  type UserWorkspace,
+} from "../lib/api";
 import { formatUsd } from "../lib/format";
 import { useToast } from "./ToastProvider";
 
@@ -77,6 +82,11 @@ export function VaultSwitcher({
           <span className="text-xs font-medium text-slate-200 truncate">
             {user.workspace.name}
           </span>
+          {user.workspace.is_shared && (
+            <span className="px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 text-[10px] font-medium shrink-0">
+              {getWorkspaceRole(user.workspace) === "EDITOR" ? "Editor" : "Viewer"}
+            </span>
+          )}
         </div>
         <ChevronDown className="h-3.5 w-3.5 text-slate-400 shrink-0" />
       </button>
@@ -106,14 +116,30 @@ export function VaultSwitcher({
                   }`}
                 >
                   <div className="min-w-0">
-                    <div className="font-medium truncate flex items-center gap-1.5">
+                    <div className="font-medium truncate flex items-center gap-1.5 flex-wrap">
                       <span className="truncate">{ws.name}</span>
-                      {ws.is_default && (
-                        <span className="px-1.5 py-0.2 rounded bg-slate-800 text-[10px] text-slate-400">
-                          Default
-                        </span>
+                      {ws.is_shared ? (
+                        <>
+                          <span className="px-1.5 py-0.2 rounded bg-sky-500/15 text-sky-300 text-[10px]">
+                            Shared
+                          </span>
+                          <span className="px-1.5 py-0.2 rounded bg-slate-800 text-[10px] text-amber-300">
+                            {getWorkspaceRole(ws) === "EDITOR" ? "Editor" : "Viewer"}
+                          </span>
+                        </>
+                      ) : (
+                        ws.is_default && (
+                          <span className="px-1.5 py-0.2 rounded bg-slate-800 text-[10px] text-slate-400">
+                            Default
+                          </span>
+                        )
                       )}
                     </div>
+                    {ws.is_shared && ws.owner_email && (
+                      <div className="text-[10px] text-slate-500 truncate">
+                        Shared by {ws.owner_email}
+                      </div>
+                    )}
                     {ws.item_count !== undefined && (
                       <div className="text-[10px] text-slate-500">
                         {ws.item_count} entries • {formatUsd(ws.total_market_value)}

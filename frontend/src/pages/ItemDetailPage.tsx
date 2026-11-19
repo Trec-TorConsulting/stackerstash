@@ -25,8 +25,10 @@ import {
   type CollectionItem,
   type ContainerNode,
   type ItemPhoto,
+  type UserWorkspace,
   type ValuationHistoryEntry,
 } from "../lib/api";
+import { useWorkspacePermissions } from "../lib/workspaceContext";
 import {
   CARD_GRADING_SERVICES,
   CATEGORY_LABELS,
@@ -59,7 +61,8 @@ function flattenContainers(nodes: ContainerNode[], depth = 0): Array<{ id: strin
   return out;
 }
 
-export function ItemDetailPage() {
+export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWorkspace } = {}) {
+  const { canEdit } = useWorkspacePermissions(activeWorkspace);
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const initialJobId = searchParams.get("job");
@@ -527,67 +530,75 @@ export function ItemDetailPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => (isEditing ? setIsEditing(false) : startEditing())}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-amber-500/40 text-slate-200 text-sm font-medium transition"
-          >
-            {isEditing ? <X className="h-4 w-4" /> : <Edit3 className="h-4 w-4" />}
-            {isEditing ? "Cancel" : "Edit Details"}
-          </button>
-          <button
-            onClick={() => appraiseMut.mutate()}
-            disabled={!isOnline || appraiseMut.isPending || activeJob?.status === "PENDING" || activeJob?.status === "RUNNING"}
-            title={!isOnline ? "Unavailable while offline" : "Run multi-source appraisal"}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-medium transition disabled:opacity-50"
-          >
-            <Sparkles className="h-4 w-4" />
-            {appraiseMut.isPending || activeJob?.status === "PENDING" || activeJob?.status === "RUNNING"
-              ? "Appraising..."
-              : "Appraise Now"}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const nextProv = { ...(item.specs_provenance || {}) };
-              if (nextProv.market_value_unit === "USER") {
-                delete nextProv.market_value_unit;
-              } else {
-                nextProv.market_value_unit = "USER";
-              }
-              updateMut.mutate({ specs_provenance: nextProv });
-            }}
-            disabled={!isOnline || updateMut.isPending}
-            title={
-              item.specs_provenance?.market_value_unit === "USER"
-                ? "Unlock market value for scheduled re-appraisal"
-                : "Lock market value against scheduled re-appraisal"
-            }
-            className={`px-3 py-2 rounded-xl text-sm font-medium border transition ${
-              item.specs_provenance?.market_value_unit === "USER"
-                ? "bg-sky-500/20 text-sky-200 border-sky-500/40 hover:bg-sky-500/30"
-                : "bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800"
-            } disabled:opacity-50`}
-          >
-            {item.specs_provenance?.market_value_unit === "USER" ? "Value Locked" : "Lock Value"}
-          </button>
-          <button
-            type="button"
-            disabled={!isOnline || duplicateMut.isPending}
-            onClick={() => duplicateMut.mutate()}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-amber-500/40 text-slate-200 text-sm font-medium transition disabled:opacity-50"
-          >
-            <Copy className="h-4 w-4" />
-            {duplicateMut.isPending ? "Duplicating..." : "Duplicate Item"}
-          </button>
-          <button
-            type="button"
-            onClick={() => setConfirmDeleteItem(true)}
-            className="p-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-rose-500/40 text-slate-400 hover:text-rose-400 transition"
-            aria-label="Delete item"
-          >
-            <Trash2 className="h-4 w-4" />
-          </button>
+          {!canEdit ? (
+            <span className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs font-medium text-sky-300">
+              Read-Only Viewer
+            </span>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => (isEditing ? setIsEditing(false) : startEditing())}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-amber-500/40 text-slate-200 text-sm font-medium transition"
+              >
+                {isEditing ? <X className="h-4 w-4" /> : <Edit3 className="h-4 w-4" />}
+                {isEditing ? "Cancel" : "Edit Details"}
+              </button>
+              <button
+                onClick={() => appraiseMut.mutate()}
+                disabled={!isOnline || appraiseMut.isPending || activeJob?.status === "PENDING" || activeJob?.status === "RUNNING"}
+                title={!isOnline ? "Unavailable while offline" : "Run multi-source appraisal"}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-medium transition disabled:opacity-50"
+              >
+                <Sparkles className="h-4 w-4" />
+                {appraiseMut.isPending || activeJob?.status === "PENDING" || activeJob?.status === "RUNNING"
+                  ? "Appraising..."
+                  : "Appraise Now"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const nextProv = { ...(item.specs_provenance || {}) };
+                  if (nextProv.market_value_unit === "USER") {
+                    delete nextProv.market_value_unit;
+                  } else {
+                    nextProv.market_value_unit = "USER";
+                  }
+                  updateMut.mutate({ specs_provenance: nextProv });
+                }}
+                disabled={!isOnline || updateMut.isPending}
+                title={
+                  item.specs_provenance?.market_value_unit === "USER"
+                    ? "Unlock market value for scheduled re-appraisal"
+                    : "Lock market value against scheduled re-appraisal"
+                }
+                className={`px-3 py-2 rounded-xl text-sm font-medium border transition ${
+                  item.specs_provenance?.market_value_unit === "USER"
+                    ? "bg-sky-500/20 text-sky-200 border-sky-500/40 hover:bg-sky-500/30"
+                    : "bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800"
+                } disabled:opacity-50`}
+              >
+                {item.specs_provenance?.market_value_unit === "USER" ? "Value Locked" : "Lock Value"}
+              </button>
+              <button
+                type="button"
+                disabled={!isOnline || duplicateMut.isPending}
+                onClick={() => duplicateMut.mutate()}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-amber-500/40 text-slate-200 text-sm font-medium transition disabled:opacity-50"
+              >
+                <Copy className="h-4 w-4" />
+                {duplicateMut.isPending ? "Duplicating..." : "Duplicate Item"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteItem(true)}
+                className="p-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-rose-500/40 text-slate-400 hover:text-rose-400 transition"
+                aria-label="Delete item"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -612,7 +623,7 @@ export function ItemDetailPage() {
             ) : (
               <span className="text-sm text-slate-500">No photos attached</span>
             )}
-            {displayUrl && isOnline && (() => {
+            {canEdit && displayUrl && isOnline && (() => {
               const activePhoto = item.photos.find((p) => p.url === displayUrl) || item.photos[0];
               if (!activePhoto) return null;
               return (
@@ -663,59 +674,67 @@ export function ItemDetailPage() {
                     {PHOTO_LABEL_SHORT[p.label] || p.label}
                   </span>
                 </button>
-                <button
-                  type="button"
-                  title="Set as primary"
-                  onClick={async () => {
-                    try {
-                      await api.setPrimaryPhoto(item.id, p.id);
-                      toast.success("Primary photo updated.");
-                      qc.invalidateQueries({ queryKey: ["item", id] });
-                    } catch (err) {
-                      toast.error(err instanceof Error ? err.message : "Failed to set primary photo.");
-                    }
-                  }}
-                  className={`absolute -top-1 -right-1 p-1 rounded-full bg-slate-950 border border-slate-700 ${
-                    p.is_primary ? "text-amber-400" : "text-slate-500 opacity-0 group-hover:opacity-100"
-                  }`}
-                >
-                  <Star className="h-3 w-3 fill-current" />
-                </button>
-                <button
-                  type="button"
-                  title="Delete photo"
-                  aria-label={`Delete photo ${p.label}`}
-                  onClick={() => setPendingDeletePhoto(p)}
-                  className="absolute -top-1 -left-1 p-1 rounded-full bg-slate-950 border border-slate-700 text-slate-400 hover:text-rose-400 opacity-0 group-hover:opacity-100 focus:opacity-100 transition"
-                >
-                  <Trash2 className="h-3 w-3" />
-                </button>
+                {canEdit && (
+                  <>
+                    <button
+                      type="button"
+                      title="Set as primary"
+                      onClick={async () => {
+                        try {
+                          await api.setPrimaryPhoto(item.id, p.id);
+                          toast.success("Primary photo updated.");
+                          qc.invalidateQueries({ queryKey: ["item", id] });
+                        } catch (err) {
+                          toast.error(err instanceof Error ? err.message : "Failed to set primary photo.");
+                        }
+                      }}
+                      className={`absolute -top-1 -right-1 p-1 rounded-full bg-slate-950 border border-slate-700 ${
+                        p.is_primary ? "text-amber-400" : "text-slate-500 opacity-0 group-hover:opacity-100"
+                      }`}
+                    >
+                      <Star className="h-3 w-3 fill-current" />
+                    </button>
+                    <button
+                      type="button"
+                      title="Delete photo"
+                      aria-label={`Delete photo ${p.label}`}
+                      onClick={() => setPendingDeletePhoto(p)}
+                      className="absolute -top-1 -left-1 p-1 rounded-full bg-slate-950 border border-slate-700 text-slate-400 hover:text-rose-400 opacity-0 group-hover:opacity-100 focus:opacity-100 transition"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </>
+                )}
               </div>
             ))}
-            <label className="h-16 w-16 rounded-xl border border-dashed border-amber-500/60 hover:border-amber-400 bg-amber-500/10 flex flex-col items-center justify-center text-amber-300 cursor-pointer text-[10px]">
-              <Camera className="h-4 w-4 mb-0.5" />
-              Camera
-              <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleAddPhoto} />
-            </label>
-            <label className="h-16 w-16 rounded-xl border border-dashed border-slate-700 hover:border-amber-500/50 flex flex-col items-center justify-center text-slate-400 cursor-pointer text-[10px]">
-              <Upload className="h-4 w-4 mb-0.5" />
-              Upload
-              <input type="file" accept="image/*" className="hidden" onChange={handleAddPhoto} />
-            </label>
-            <select
-              aria-label="Upload photo label"
-              value={uploadLabel}
-              onChange={(e) => setUploadLabel(e.target.value)}
-              className="h-9 px-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-300"
-            >
-              <option value="AUTO">Label: Auto</option>
-              <option value="OBVERSE">Obverse (Front)</option>
-              <option value="REVERSE">Reverse (Back)</option>
-              <option value="SLAB_LABEL">Slab Label</option>
-              <option value="ASSAY">Assay / CoA</option>
-              <option value="RECEIPT">Receipt</option>
-              <option value="OTHER">Other</option>
-            </select>
+            {canEdit && (
+              <>
+                <label className="h-16 w-16 rounded-xl border border-dashed border-amber-500/60 hover:border-amber-400 bg-amber-500/10 flex flex-col items-center justify-center text-amber-300 cursor-pointer text-[10px]">
+                  <Camera className="h-4 w-4 mb-0.5" />
+                  Camera
+                  <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleAddPhoto} />
+                </label>
+                <label className="h-16 w-16 rounded-xl border border-dashed border-slate-700 hover:border-amber-500/50 flex flex-col items-center justify-center text-slate-400 cursor-pointer text-[10px]">
+                  <Upload className="h-4 w-4 mb-0.5" />
+                  Upload
+                  <input type="file" accept="image/*" className="hidden" onChange={handleAddPhoto} />
+                </label>
+                <select
+                  aria-label="Upload photo label"
+                  value={uploadLabel}
+                  onChange={(e) => setUploadLabel(e.target.value)}
+                  className="h-9 px-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-300"
+                >
+                  <option value="AUTO">Label: Auto</option>
+                  <option value="OBVERSE">Obverse (Front)</option>
+                  <option value="REVERSE">Reverse (Back)</option>
+                  <option value="SLAB_LABEL">Slab Label</option>
+                  <option value="ASSAY">Assay / CoA</option>
+                  <option value="RECEIPT">Receipt</option>
+                  <option value="OTHER">Other</option>
+                </select>
+              </>
+            )}
           </div>
         </div>
 
@@ -794,25 +813,29 @@ export function ItemDetailPage() {
             <div className="flex justify-between items-center">
               <span className="text-slate-400">Quantity</span>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  aria-label="Decrease quantity"
-                  disabled={item.quantity <= 1 || updateMut.isPending}
-                  onClick={() => updateMut.mutate({ quantity: Math.max(1, item.quantity - 1) })}
-                  className="h-6 w-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-xs flex items-center justify-center disabled:opacity-40"
-                >
-                  -
-                </button>
+                {canEdit && (
+                  <button
+                    type="button"
+                    aria-label="Decrease quantity"
+                    disabled={item.quantity <= 1 || updateMut.isPending}
+                    onClick={() => updateMut.mutate({ quantity: Math.max(1, item.quantity - 1) })}
+                    className="h-6 w-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-xs flex items-center justify-center disabled:opacity-40"
+                  >
+                    -
+                  </button>
+                )}
                 <span className="font-mono min-w-[1.5rem] text-center">{item.quantity}</span>
-                <button
-                  type="button"
-                  aria-label="Increase quantity"
-                  disabled={updateMut.isPending}
-                  onClick={() => updateMut.mutate({ quantity: item.quantity + 1 })}
-                  className="h-6 w-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-xs flex items-center justify-center disabled:opacity-40"
-                >
-                  +
-                </button>
+                {canEdit && (
+                  <button
+                    type="button"
+                    aria-label="Increase quantity"
+                    disabled={updateMut.isPending}
+                    onClick={() => updateMut.mutate({ quantity: item.quantity + 1 })}
+                    className="h-6 w-6 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-xs flex items-center justify-center disabled:opacity-40"
+                  >
+                    +
+                  </button>
+                )}
               </div>
             </div>
             <div className="flex justify-between">
@@ -855,14 +878,16 @@ export function ItemDetailPage() {
                         ? `${item.grading_service} ${item.grade}`.trim()
                         : "Slabbed"}
                     </span>
-                    <button
-                      type="button"
-                      disabled={updateMut.isPending}
-                      onClick={handleRemoveSlab}
-                      className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 hover:text-rose-200 border border-slate-700 text-[11px] font-medium text-slate-300 disabled:opacity-40"
-                    >
-                      Remove Slab
-                    </button>
+                    {canEdit && (
+                      <button
+                        type="button"
+                        disabled={updateMut.isPending}
+                        onClick={handleRemoveSlab}
+                        className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 hover:text-rose-200 border border-slate-700 text-[11px] font-medium text-slate-300 disabled:opacity-40"
+                      >
+                        Remove Slab
+                      </button>
+                    )}
                   </div>
                 </div>
                 {slabDesignation && (
@@ -1468,33 +1493,45 @@ export function ItemDetailPage() {
           <ValuationBreakdownCard
             item={item}
             latestHistory={effectiveValuations[0] || null}
-            onReappraise={() => appraiseMut.mutate()}
+            onReappraise={canEdit ? () => appraiseMut.mutate() : undefined}
             reappraising={appraiseMut.isPending || activeJob?.status === "PENDING" || activeJob?.status === "RUNNING"}
           />
           <CollectibilityThesisCard item={item} />
           <EstimatedGradeCard
             item={item}
             isSaving={updateMut.isPending}
-            onSaveGrade={async (estimated_grade) => {
-              await updateMut.mutateAsync({ estimated_grade });
-            }}
+            onSaveGrade={
+              canEdit
+                ? async (estimated_grade) => {
+                    await updateMut.mutateAsync({ estimated_grade });
+                  }
+                : undefined
+            }
           />
         </div>
         {isCardItem(item) ? (
           <CardSpecsCard
             item={item}
             isSaving={updateMut.isPending}
-            onSaveSpecs={async (patch) => {
-              await updateMut.mutateAsync(patch);
-            }}
+            onSaveSpecs={
+              canEdit
+                ? async (patch) => {
+                    await updateMut.mutateAsync(patch);
+                  }
+                : undefined
+            }
           />
         ) : (
           <NumismaticSpecsCard
             item={item}
             isSaving={updateMut.isPending}
-            onSaveSpecs={async (patch) => {
-              await updateMut.mutateAsync(patch);
-            }}
+            onSaveSpecs={
+              canEdit
+                ? async (patch) => {
+                    await updateMut.mutateAsync(patch);
+                  }
+                : undefined
+            }
           />
         )}
       </div>
