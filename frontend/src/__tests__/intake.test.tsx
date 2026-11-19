@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { GuidedCameraModal } from "../components/GuidedCameraModal";
 import { api } from "../lib/api";
 import { evaluateFrameMetrics } from "../lib/cameraMetrics";
-import { ScanAddPage } from "../pages/ScanAddPage";
+import { ScanAddPage, hasIdentifiedCandidateInfo } from "../pages/ScanAddPage";
 
 beforeAll(() => {
   if (!URL.createObjectURL) {
@@ -587,5 +587,150 @@ describe("ScanAddPage Unified Intake", () => {
       expect(identifySpy).toHaveBeenCalledTimes(2);
       expect(uploadSpy).toHaveBeenCalledTimes(4);
     });
+  });
+
+  it("starts with Item Details accordion collapsed and preserves values across manual toggle", async () => {
+    vi.spyOn(api, "getContainers").mockResolvedValue([]);
+
+    renderScanAdd();
+
+    const toggle = screen.getByRole("button", { name: /Item Details/i });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: /Save Item to Vault/i })).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const titleInput = screen.getByLabelText(/Title \*/i) as HTMLInputElement;
+    fireEvent.change(titleInput, { target: { value: "Manual Engelhard 10 oz" } });
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByLabelText(/Title \*/i)).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect((screen.getByLabelText(/Title \*/i) as HTMLInputElement).value).toBe(
+      "Manual Engelhard 10 oz"
+    );
+  });
+
+  it("auto-opens Item Details accordion after Identify with AI returns populated info", async () => {
+    vi.spyOn(api, "getContainers").mockResolvedValue([]);
+    vi.spyOn(api, "identifyImages").mockResolvedValue({
+      job_id: "job-open",
+      provider_used: "mock",
+      warning: null,
+      verification_status: "VERIFIED",
+      verification_warnings: [],
+      candidate: {
+        category: "COIN",
+        title: "2024 American Silver Eagle",
+        country: "United States",
+        year: "2024",
+        mint_or_refiner: "US Mint",
+        denomination: "$1",
+        series: "Eagle",
+        metal_type: "SILVER",
+        weight_value: 1,
+        weight_unit: "OZ_T",
+        purity: 0.999,
+        grading_service: "NONE",
+        cert_number: "",
+        grade: "",
+        estimated_grade: "MS-69",
+        serial_number: "",
+        estimated_value_usd: 36,
+        ai_confidence: 0.95,
+        notes: "",
+      },
+    });
+
+    const { container } = renderScanAdd();
+    const toggle = screen.getByRole("button", { name: /Item Details/i });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    const takePhotoInput = container.querySelector('input[capture="environment"]') as HTMLInputElement;
+    expect(takePhotoInput).toBeTruthy();
+    fireEvent.change(takePhotoInput, {
+      target: { files: [new File(["obverse"], "coin-front.jpg", { type: "image/jpeg" })] },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Identify with AI/i }));
+
+    await waitFor(() => {
+      expect(toggle).toHaveAttribute("aria-expanded", "true");
+    });
+    expect(screen.getByText(/Ready to review/i)).toBeInTheDocument();
+    expect((screen.getByLabelText(/Title \*/i) as HTMLInputElement).value).toBe(
+      "2024 American Silver Eagle"
+    );
+    expect(screen.getByRole("button", { name: /Save Item to Vault/i })).toBeInTheDocument();
+  });
+
+  it("keeps Item Details accordion collapsed when Identify with AI returns empty fallback or fails", async () => {
+    vi.spyOn(api, "getContainers").mockResolvedValue([]);
+    const identifySpy = vi.spyOn(api, "identifyImages").mockResolvedValueOnce({
+      job_id: "job-empty",
+      provider_used: "none",
+      warning: "AI could not read this photo. Please fill in details manually.",
+      verification_status: "VERIFIED",
+      verification_warnings: [],
+      candidate: {
+        category: "COIN",
+        title: "",
+        country: "",
+        year: "",
+        mint_or_refiner: "",
+        denomination: "",
+        series: "",
+        metal_type: "NONE",
+        weight_value: 0,
+        weight_unit: "OZ_T",
+        purity: 0.999,
+        grading_service: "NONE",
+        cert_number: "",
+        grade: "",
+        estimated_grade: "",
+        serial_number: "",
+        estimated_value_usd: 0,
+        ai_confidence: 0,
+        notes: "",
+      },
+    });
+
+    const { container } = renderScanAdd();
+    const toggle = screen.getByRole("button", { name: /Item Details/i });
+    const takePhotoInput = container.querySelector('input[capture="environment"]') as HTMLInputElement;
+    fireEvent.change(takePhotoInput, {
+      target: { files: [new File(["blurry"], "blurry.jpg", { type: "image/jpeg" })] },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Identify with AI/i }));
+    expect(
+      await screen.findByText(/AI could not read this photo\. Please fill in details manually\./i)
+    ).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    identifySpy.mockRejectedValueOnce(new Error("Vision service offline"));
+    fireEvent.click(screen.getByRole("button", { name: /Identify with AI/i }));
+    expect(await screen.findByText(/Vision service offline/i)).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("hasIdentifiedCandidateInfo distinguishes populated candidates from empty defaults", () => {
+    expect(
+      hasIdentifiedCandidateInfo({
+        title: "",
+        country: "  ",
+        metal_type: "NONE",
+        grading_service: "NONE",
+        weight_value: 0,
+        estimated_value_usd: 0,
+      })
+    ).toBe(false);
+    expect(hasIdentifiedCandidateInfo({ title: "Morgan Dollar" })).toBe(true);
+    expect(hasIdentifiedCandidateInfo({ metal_type: "GOLD" })).toBe(true);
+    expect(hasIdentifiedCandidateInfo({ grading_service: "PCGS" })).toBe(true);
+    expect(hasIdentifiedCandidateInfo({ estimated_value_usd: 42 })).toBe(true);
   });
 });

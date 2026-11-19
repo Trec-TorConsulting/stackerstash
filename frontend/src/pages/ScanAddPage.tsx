@@ -3,6 +3,8 @@ import {
   AlertTriangle,
   Camera,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Crop,
   Layers,
   Loader2,
@@ -15,7 +17,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PhotoCropRotateView } from "../components/PhotoCropRotateView";
-import { api, type ContainerNode } from "../lib/api";
+import { api, type ContainerNode, type VisionCandidate } from "../lib/api";
 import {
   autoCropImageFile,
   harmonizeCropPair,
@@ -27,6 +29,51 @@ import {
 import { evaluateImageFileGlare } from "../lib/cameraMetrics";
 import { CATEGORY_LABELS, GRADING_SERVICE_OPTIONS, METAL_LABELS } from "../lib/format";
 import { normalizeImageFileForUpload } from "../lib/imageUtils";
+
+const IDENTIFIED_TEXT_FIELDS: (keyof VisionCandidate)[] = [
+  "title",
+  "country",
+  "year",
+  "mint_or_refiner",
+  "denomination",
+  "series",
+  "cert_number",
+  "grade",
+  "slab_designation",
+  "estimated_grade",
+  "serial_number",
+  "notes",
+  "card_game",
+  "set_name",
+  "set_code",
+  "card_number",
+  "rarity",
+  "card_finish",
+  "card_edition",
+  "raw_condition",
+];
+
+/** Return true when an identified Vision AI candidate carries meaningful item metadata. */
+export function hasIdentifiedCandidateInfo(candidate: Partial<VisionCandidate>): boolean {
+  if (
+    IDENTIFIED_TEXT_FIELDS.some((key) => {
+      const value = candidate[key];
+      return typeof value === "string" && value.trim().length > 0;
+    })
+  ) {
+    return true;
+  }
+  if (candidate.metal_type && candidate.metal_type !== "NONE") {
+    return true;
+  }
+  if (candidate.grading_service && candidate.grading_service !== "NONE") {
+    return true;
+  }
+  if (Number(candidate.weight_value) > 0 || Number(candidate.estimated_value_usd) > 0) {
+    return true;
+  }
+  return false;
+}
 
 /** A photo staged for identification / upload on the scan page. */
 interface StagedPhoto {
@@ -191,6 +238,7 @@ export function ScanAddPage() {
   const [batchMode, setBatchMode] = useState(false);
   const [fastBulkMode, setFastBulkMode] = useState(true);
   const [batchProgress, setBatchProgress] = useState<string | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const [form, setForm] = useState({
     category: "COIN",
@@ -564,6 +612,9 @@ export function ScanAddPage() {
         language: String(c.language || f.language || ""),
         raw_condition: String(c.raw_condition || f.raw_condition || ""),
       }));
+      if (hasIdentifiedCandidateInfo(c)) {
+        setDetailsOpen(true);
+      }
       setQuotaDeferred(Boolean(res.quota_deferred));
       setAiNotice(
         res.warning ||
@@ -710,6 +761,23 @@ export function ScanAddPage() {
   }
 
   const flatContainers = flattenContainers(containers);
+  const hasDetailsInfo = Boolean(
+    form.title.trim() ||
+      form.country.trim() ||
+      form.year.trim() ||
+      form.denomination.trim() ||
+      form.series.trim() ||
+      form.mint_or_refiner.trim() ||
+      form.cert_number.trim() ||
+      form.serial_number.trim() ||
+      form.metal_type !== "NONE" ||
+      form.grading_service !== "NONE" ||
+      Number(form.weight_value) > 0 ||
+      Number(form.market_value_unit) > 0 ||
+      form.card_game.trim() ||
+      form.set_name.trim() ||
+      form.notes.trim()
+  );
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -1154,8 +1222,47 @@ export function ScanAddPage() {
         </div>
       )}
 
-      {/* Item Form */}
-      <form onSubmit={handleSave} className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
+      {/* Collapsible Item Details Accordion */}
+      <div className="rounded-2xl bg-slate-900 border border-slate-800 overflow-hidden">
+        <button
+          type="button"
+          aria-expanded={detailsOpen}
+          aria-controls="scan-item-details-panel"
+          onClick={() => setDetailsOpen((open) => !open)}
+          className="w-full flex items-center justify-between gap-3 px-5 py-4 text-left hover:bg-slate-800/40 transition"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            {detailsOpen ? (
+              <ChevronDown className="h-4 w-4 shrink-0 text-amber-400" />
+            ) : (
+              <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+            )}
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-semibold text-slate-100">Item Details</span>
+                {hasDetailsInfo && (
+                  <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-[11px] font-medium text-amber-300">
+                    Ready to review
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-400 truncate mt-0.5">
+                {form.title.trim()
+                  ? form.title.trim()
+                  : hasDetailsInfo
+                    ? "Review identified details and save to vault"
+                    : "Opens automatically after AI scan, or click to enter details manually"}
+              </p>
+            </div>
+          </div>
+          <span className="text-xs font-medium text-slate-400 shrink-0">
+            {detailsOpen ? "Hide" : "Show"}
+          </span>
+        </button>
+
+        {detailsOpen && (
+          <div id="scan-item-details-panel" className="border-t border-slate-800 p-5">
+            <form onSubmit={handleSave} className="space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="sm:col-span-2">
             <label htmlFor="scan-title" className="block text-xs text-slate-400 mb-1">Title *</label>
@@ -1522,7 +1629,10 @@ export function ScanAddPage() {
         >
           {saving ? "Saving to Vault..." : "Save Item to Vault"}
         </button>
-      </form>
+            </form>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
