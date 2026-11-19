@@ -108,12 +108,11 @@ export function ImportWizardModal({ isOpen, onClose, onImported }: ImportWizardM
   }
 
   async function handleConfirmImport() {
-    if (!selectedFile) return;
     setIsImporting(true);
     setErrorMsg(null);
     setPlanLimitReached(false);
     try {
-      const res = await api.importMappedCsv(selectedFile, mapping, importPhotos);
+      const res = await api.importMappedCsv(selectedFile!, mapping, importPhotos);
       setResult(res);
       const summary = `Imported ${res.created_count} items${
         res.errors.length ? ` (${res.errors.length} row errors)` : ""

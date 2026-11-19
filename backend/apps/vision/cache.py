@@ -67,8 +67,8 @@ def lookup_image_cache(
         cached = cache.get(redis_key)
         if isinstance(cached, dict) and cached.get("parsed_candidate"):
             return cached
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Redis image cache read skipped: %s", exc)
 
     exact = ImageIdentificationCache.objects.filter(
         workspace=workspace, sha256=sha256
@@ -81,8 +81,8 @@ def lookup_image_cache(
         }
         try:
             cache.set(redis_key, data, _CACHE_TTL_SECONDS)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Redis image cache write skipped: %s", exc)
         return data
 
     if primary_dhash:
@@ -126,8 +126,8 @@ def store_image_cache(
             {"provider_used": provider_used, "parsed_candidate": parsed_candidate},
             _CACHE_TTL_SECONDS,
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Redis image cache store skipped: %s", exc)
 
 
 def _cert_redis_key(svc: str, num: str) -> str:
@@ -145,8 +145,8 @@ def lookup_cert_cache(grading_service: str, cert_number: str) -> dict[str, Any] 
         cached = cache.get(redis_key)
         if isinstance(cached, dict) and cached:
             return cached
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Redis cert cache read skipped: %s", exc)
 
     try:
         row = CertLookupCache.objects.filter(grading_service=svc, cert_number=num).first()
@@ -155,8 +155,8 @@ def lookup_cert_cache(grading_service: str, cert_number: str) -> dict[str, Any] 
     if row and row.payload:
         try:
             cache.set(redis_key, row.payload, _CACHE_TTL_SECONDS)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Redis cert cache fill skipped: %s", exc)
         return row.payload
     return None
 
@@ -177,10 +177,10 @@ def store_cert_cache(
             cert_number=num,
             defaults={"payload": payload, "source": source},
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("DB cert cache write skipped: %s", exc)
     redis_key = _cert_redis_key(svc, num)
     try:
         cache.set(redis_key, payload, _CACHE_TTL_SECONDS)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Redis cert cache store skipped: %s", exc)

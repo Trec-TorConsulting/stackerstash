@@ -383,3 +383,258 @@ def test_filter_comp_listings_excludes_lots_replicas_and_empty_boxes():
     ]
     prices = _filter_comp_listings(listings, query="1921 Morgan Silver Dollar")
     assert prices == [Decimal("65.00"), Decimal("55.00")]
+
+
+def test_all_valuation_providers_comprehensive_branches():
+    from decimal import Decimal
+
+    import httpx
+    import respx
+    from django.core.cache import cache
+
+    from apps.valuation.providers import (
+        _filter_comp_listings,
+        _get_tcgplayer_token,
+        _hydrate_cached_specs,
+        _select_pokemon_tcg_price,
+        _trim_outliers,
+        build_cert_verification_url,
+        fetch_spot_prices_from_gold_api,
+        lookup_bullion_dealer_benchmark,
+        lookup_cert_metadata,
+        lookup_collectr_price,
+        lookup_ebay_sold_comps,
+        lookup_goldback_exchange_benchmark,
+        lookup_greysheet,
+        lookup_numismedia,
+        lookup_numista_specs,
+        lookup_pcgs_cert,
+        lookup_pokemon_tcg_card,
+        lookup_pricecharting_card,
+        lookup_psa_cert,
+        lookup_scryfall_card,
+        lookup_tcgplayer_price,
+    )
+
+    cache.clear()
+    assert _hydrate_cached_specs({"diameter_mm": "bad_dec"}) == {"diameter_mm": "bad_dec"}
+    assert lookup_pcgs_cert("", "tok") is None
+    assert build_cert_verification_url("NONE", "123") is None
+    assert lookup_cert_metadata("NONE", "123") is None
+    assert lookup_cert_metadata("OTHER", "123") is None
+    assert lookup_greysheet("Coin", "", "tok") is None
+    assert lookup_numismedia("Coin", api_key="") is None
+    assert lookup_numista_specs("Coin", api_key="") is None
+    assert lookup_ebay_sold_comps("", "id", "sec") is None
+    assert lookup_bullion_dealer_benchmark("ASE", "NONE", Decimal("30.00")) is None
+    assert lookup_bullion_dealer_benchmark("Private Token", "SILVER", Decimal("30.00")) is None
+    assert lookup_goldback_exchange_benchmark("ASE", "", "", Decimal("30.00")) is None
+    assert lookup_goldback_exchange_benchmark("Goldback", "", "1", Decimal("0.00")) is None
+    assert lookup_psa_cert("", "tok") is None
+    assert lookup_pokemon_tcg_card("", api_key="k") is None
+    assert lookup_scryfall_card("") is None
+    assert lookup_pricecharting_card("", api_key="k") is None
+    assert lookup_collectr_price("", api_key="k") is None
+
+    # Outlier / comp list edge cases
+    assert _filter_comp_listings([{"title": "Good", "price": {"value": "notnum"}}]) == []
+    assert _trim_outliers([Decimal("10")]) == [Decimal("10")]
+    assert _trim_outliers([Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0")]) == [
+        Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0")
+    ]
+    assert _select_pokemon_tcg_price({}) == (None, None, None)
+    assert _select_pokemon_tcg_price(
+        {"1stEditionHolofoil": {"market": "20.00"}}, card_finish="1st Edition"
+    ) == (Decimal("20.00"), None, None)
+    assert _select_pokemon_tcg_price(
+        {"reverseHolofoil": {"mid": "12.50"}, "broken": "str"}, card_finish="Reverse Holo"
+    ) == (Decimal("12.50"), None, None)
+    assert _select_pokemon_tcg_price({"onlyEmpty": {"market": "bad"}}) == (None, None, None)
+    assert _select_pokemon_tcg_price({"holofoil": {"low": "5.00"}}) == (None, None, None)
+
+    with respx.mock(assert_all_called=False) as router:
+        # gold-api error on copper + valid gold
+        router.get("https://api.gold-api.com/price/XAU").mock(return_value=httpx.Response(200, json={"price": 2650.0, "unit": "ozt"}))
+        router.get("https://api.gold-api.com/price/XAG").mock(return_value=httpx.Response(500))
+        router.get("https://api.gold-api.com/price/XPT").mock(return_value=httpx.Response(500))
+        router.get("https://api.gold-api.com/price/XPD").mock(return_value=httpx.Response(500))
+        router.get("https://api.gold-api.com/price/HG").mock(return_value=httpx.Response(500))
+        spots = fetch_spot_prices_from_gold_api()
+        assert spots["GOLD"] == Decimal("2650.0000")
+
+        # PCGS cert error & success + Diameter/Composition specs
+        router.get("https://api.pcgs.com/publicapi/coindetails/GetCoinFactsByCertNo/0000").mock(return_value=httpx.Response(404))
+        assert lookup_pcgs_cert("0000", "tok") is None
+        router.get("https://api.pcgs.com/publicapi/coindetails/GetCoinFactsByCertNo/9999").mock(side_effect=httpx.ConnectError("down"))
+        assert lookup_pcgs_cert("9999", "tok") is None
+
+        # Greysheet & NumisMedia success, 404, error
+        router.get("https://api.greysheet.com/v1/prices/search").mock(
+            return_value=httpx.Response(200, json={"items": [{"cpg_retail": "140.50"}]})
+        )
+        assert lookup_greysheet("Morgan", "k", "t")["market_value"] == Decimal("140.50")
+        router.get("https://api.greysheet.com/v1/prices/search").mock(return_value=httpx.Response(500))
+        assert lookup_greysheet("Morgan", "k", "t") is None
+
+        router.get("https://api.numismedia.com/v1/fmv").mock(
+            return_value=httpx.Response(200, json={"fmv": "95.00"})
+        )
+        assert lookup_numismedia("Morgan", api_key="nm")["market_value"] == Decimal("95.00")
+        router.get("https://api.numismedia.com/v1/fmv").mock(return_value=httpx.Response(404))
+        assert lookup_numismedia("Morgan", api_key="nm") is None
+        router.get("https://api.numismedia.com/v1/fmv").mock(side_effect=httpx.ConnectError("nm down"))
+        assert lookup_numismedia("Morgan", api_key="nm") is None
+
+        # Numista edge branches (non-200 search, empty types, missing id, non-200 detail, str edge, bad mintage)
+        router.get("https://api.numista.com/api/v3/types").mock(return_value=httpx.Response(500))
+        assert lookup_numista_specs("Test", api_key="nk") is None
+        router.get("https://api.numista.com/api/v3/types").mock(return_value=httpx.Response(200, json={"types": []}))
+        assert lookup_numista_specs("Test2", api_key="nk") is None
+        router.get("https://api.numista.com/api/v3/types").mock(return_value=httpx.Response(200, json={"types": [{}]}))
+        assert lookup_numista_specs("Test3", api_key="nk") is None
+        router.get("https://api.numista.com/api/v3/types").mock(return_value=httpx.Response(200, json={"types": [{"id": 77}]}))
+        router.get("https://api.numista.com/api/v3/types/77").mock(return_value=httpx.Response(500))
+        assert lookup_numista_specs("Test4", api_key="nk") is None
+        router.get("https://api.numista.com/api/v3/types/77").mock(
+            return_value=httpx.Response(200, json={"edge": "Reeded edge", "mintage": "unknown", "obverse": {"engravers": ["Morgan"]}})
+        )
+        n_res = lookup_numista_specs("Test5", api_key="nk")
+        assert n_res is not None and n_res["specs"]["edge_type"] == "Reeded edge"
+
+        # Cert metadata delegating to PCGS & PSA
+        router.get("https://api.pcgs.com/publicapi/coindetails/GetCoinFactsByCertNo/445566").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "PriceGuideValue": "180.00",
+                    "Diameter": "bad_diam",
+                    "Weight": "bad_wt",
+                    "Mintage": "bad_mintage",
+                    "MintMark": "S",
+                    "Designer": "Morgan",
+                    "PCGSNo": "7296",
+                },
+            )
+        )
+        assert lookup_cert_metadata("PCGS", "445566", pcgs_token="tok")["market_value"] == Decimal("180.00")
+        router.get("https://api.psacard.com/publicapi/cert/GetByCertNumber/887766").mock(
+            return_value=httpx.Response(200, json={"PSACert": {"CertNumber": "887766", "Subject": "Pikachu", "Brand": "Pokemon", "Year": "1999", "CardNumber": "58", "GradeDescription": "GEM MT 10"}})
+        )
+        psa_meta = lookup_cert_metadata("PSA", "887766", psa_token="ptok")
+        assert psa_meta is not None and psa_meta["source"] == "PSA"
+        assert lookup_psa_cert("887766", "ptok") is not None  # hits cache
+        router.get("https://api.psacard.com/publicapi/cert/GetByCertNumber/000111").mock(
+            return_value=httpx.Response(200, json={"PSACert": {}})
+        )
+        assert lookup_psa_cert("000111", "ptok") is None
+        router.get("https://api.psacard.com/publicapi/cert/GetByCertNumber/000222").mock(side_effect=httpx.ConnectError("psa down"))
+        assert lookup_psa_cert("000222", "ptok") is None
+
+        # eBay error / 401 -> browse active fallback / non-200 paths (418, 421, 428, 433, 475)
+        router.post("https://api.ebay.com/identity/v1/oauth2/token").mock(
+            side_effect=[httpx.Response(401), httpx.Response(500)]
+        )
+        assert lookup_ebay_sold_comps("ASE", "cid", "csec") is None
+        router.post("https://api.ebay.com/identity/v1/oauth2/token").mock(
+            side_effect=[httpx.Response(401), httpx.Response(200, json={})]
+        )
+        assert lookup_ebay_sold_comps("ASE", "cid", "csec") is None
+        router.post("https://api.ebay.com/identity/v1/oauth2/token").mock(
+            side_effect=[httpx.Response(401), httpx.Response(200, json={"access_token": "btok"})]
+        )
+        router.get("https://api.ebay.com/buy/browse/v1/item_summary/search").mock(return_value=httpx.Response(500))
+        assert lookup_ebay_sold_comps("ASE", "cid", "csec") is None
+        router.post("https://api.ebay.com/identity/v1/oauth2/token").mock(
+            side_effect=[httpx.Response(401), httpx.Response(200, json={"access_token": "btok"})]
+        )
+        router.get("https://api.ebay.com/buy/browse/v1/item_summary/search").mock(return_value=httpx.Response(200, json={"itemSummaries": []}))
+        assert lookup_ebay_sold_comps("ASE", "cid", "csec") is None
+
+        router.post("https://api.ebay.com/identity/v1/oauth2/token").mock(return_value=httpx.Response(500))
+        assert lookup_ebay_sold_comps("ASE", "cid", "csec") is None
+        router.post("https://api.ebay.com/identity/v1/oauth2/token").mock(return_value=httpx.Response(200, json={}))
+        assert lookup_ebay_sold_comps("ASE", "cid", "csec") is None
+        router.post("https://api.ebay.com/identity/v1/oauth2/token").mock(return_value=httpx.Response(200, json={"access_token": "etok"}))
+        router.get("https://api.ebay.com/buy/marketplace_insights/v1_beta/item_sales/search").mock(return_value=httpx.Response(500))
+        assert lookup_ebay_sold_comps("ASE", "cid", "csec") is None
+        router.get("https://api.ebay.com/buy/marketplace_insights/v1_beta/item_sales/search").mock(return_value=httpx.Response(200, json={"itemSales": []}))
+        assert lookup_ebay_sold_comps("ASE", "cid", "csec") is None
+        router.post("https://api.ebay.com/identity/v1/oauth2/token").mock(side_effect=httpx.ConnectError("ebay err"))
+        assert lookup_ebay_sold_comps("ASE", "cid", "csec") is None
+
+        # Pokemon TCG fallback & cache & exception
+        router.get("https://api.pokemontcg.io/v2/cards").mock(
+            side_effect=[httpx.Response(200, json={"data": []}), httpx.Response(200, json={"data": []})]
+        )
+        assert lookup_pokemon_tcg_card("Mew", set_name="Fossil", card_number="8/62", api_key="pk") is None
+        assert lookup_pokemon_tcg_card("Mew", set_name="Fossil", card_number="8/62", api_key="pk") is None  # cache False
+        router.get("https://api.pokemontcg.io/v2/cards").mock(side_effect=httpx.ConnectError("ptcg down"))
+        assert lookup_pokemon_tcg_card("Lugia") is None
+
+        # Scryfall etched, error obj, cache, bad price
+        router.get("https://api.scryfall.com/cards/named").mock(
+            return_value=httpx.Response(200, json={"object": "error"})
+        )
+        assert lookup_scryfall_card("Unknown Card") is None
+        assert lookup_scryfall_card("Unknown Card") is None  # cache hit
+        router.get("https://api.scryfall.com/cards/named").mock(
+            return_value=httpx.Response(200, json={"id": "sc1", "name": "Sol Ring", "prices": {"usd_etched": "bad", "usd": "2.00"}})
+        )
+        sc = lookup_scryfall_card("Sol Ring", set_code="CMR", card_finish="Etched")
+        assert sc is not None and sc["source"] == "SCRYFALL"
+        router.get("https://api.scryfall.com/cards/named").mock(
+            return_value=httpx.Response(200, json={"id": "sc2", "name": "Arcane Signet", "prices": {"usd_foil": "4.50"}})
+        )
+        assert lookup_scryfall_card("Arcane Signet", card_finish="Foil")["market_value"] == "4.50"
+        router.get("https://api.scryfall.com/cards/named").mock(side_effect=httpx.ConnectError("sc down"))
+        assert lookup_scryfall_card("Fail Card") is None
+
+        # PriceCharting grades PSA 9, BGS 10/9.5, CGC 10, SGC 10, TAG 10, OTHER, 0 price, empty, cache, error
+        router.get("https://www.pricecharting.com/api/products").mock(return_value=httpx.Response(200, json={"products": []}))
+        assert lookup_pricecharting_card("EmptyProd", api_key="pc") is None
+        assert lookup_pricecharting_card("EmptyProd", api_key="pc") is None  # cached
+        prod_row = {
+            "id": "p1",
+            "psa-9-price": 5000,
+            "bgs-10-price": 9000,
+            "cgc-10-price": 7500,
+            "sgc-10-price": 6500,
+            "tag-10-price": 7000,
+            "graded-price": 4000,
+            "loose-price": 1500,
+        }
+        router.get("https://www.pricecharting.com/api/products").mock(return_value=httpx.Response(200, json={"products": [prod_row]}))
+        for svc, gr, exp in [("PSA", "9", "50.00"), ("BGS", "10", "90.00"), ("CGC", "10", "75.00"), ("SGC", "10", "65.00"), ("TAG", "10", "70.00"), ("OTHER", "8", "40.00"), ("NONE", "", "15.00")]:
+            assert lookup_pricecharting_card("Card", grading_service=svc, grade=gr, api_key="pc")["market_value"] == exp
+        router.get("https://www.pricecharting.com/api/products").mock(return_value=httpx.Response(200, json={"products": [{"id": "zero"}]}))
+        assert lookup_pricecharting_card("ZeroCard", api_key="pc") is None
+        router.get("https://www.pricecharting.com/api/products").mock(side_effect=httpx.ConnectError("pc down"))
+        assert lookup_pricecharting_card("ErrCard", api_key="pc") is None
+
+        # TCGplayer token failure, cache, empty results, missing id, bad pricing, error
+        router.post("https://api.tcgplayer.com/token").mock(side_effect=httpx.ConnectError("tok down"))
+        assert _get_tcgplayer_token("badcid", "sec") is None
+        assert lookup_tcgplayer_price("Charizard", client_id="badcid", client_secret="sec") is None
+        router.post("https://api.tcgplayer.com/token").mock(return_value=httpx.Response(200, json={"access_token": "ttok", "expires_in": 3600}))
+        router.get("https://api.tcgplayer.com/catalog/products").mock(return_value=httpx.Response(200, json={"results": []}))
+        assert lookup_tcgplayer_price("NoneTcg", client_id="goodcid", client_secret="sec") is None
+        assert lookup_tcgplayer_price("NoneTcg", client_id="goodcid", client_secret="sec") is None  # cached
+        router.get("https://api.tcgplayer.com/catalog/products").mock(return_value=httpx.Response(200, json={"results": [{}]}))
+        assert lookup_tcgplayer_price("NoIdTcg", client_id="goodcid", client_secret="sec") is None
+        router.get("https://api.tcgplayer.com/catalog/products").mock(return_value=httpx.Response(200, json={"results": [{"productId": 10}]}))
+        router.get("https://api.tcgplayer.com/pricing/product/10").mock(return_value=httpx.Response(200, json={"results": []}))
+        assert lookup_tcgplayer_price("NoPriceTcg", client_id="goodcid", client_secret="sec") is None
+        router.get("https://api.tcgplayer.com/pricing/product/10").mock(return_value=httpx.Response(200, json={"results": [{"productId": 10}]}))
+        assert lookup_tcgplayer_price("NullMarketTcg", client_id="goodcid", client_secret="sec") is None
+        router.get("https://api.tcgplayer.com/catalog/products").mock(side_effect=httpx.ConnectError("tcg err"))
+        assert lookup_tcgplayer_price("ErrTcg", client_id="goodcid", client_secret="sec") is None
+
+        # Collectr empty, null price, cache, error
+        router.get("https://api.getcollectr.com/v1/cards/search").mock(return_value=httpx.Response(200, json={"results": []}))
+        assert lookup_collectr_price("MissingCol", api_key="ck") is None
+        assert lookup_collectr_price("MissingCol", api_key="ck") is None  # cached
+        router.get("https://api.getcollectr.com/v1/cards/search").mock(return_value=httpx.Response(200, json={"results": [{"id": "c1"}]}))
+        assert lookup_collectr_price("NullPriceCol", api_key="ck") is None
+        router.get("https://api.getcollectr.com/v1/cards/search").mock(side_effect=httpx.ConnectError("col err"))
+        assert lookup_collectr_price("ErrCol", api_key="ck") is None
+

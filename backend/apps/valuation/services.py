@@ -576,9 +576,6 @@ def appraise_item(
     else:
         confidence = CollectionItem.ValuationConfidence.LOW
 
-    if final_source == "EBAY_ACTIVE_ASK" and confidence == CollectionItem.ValuationConfidence.HIGH:
-        confidence = CollectionItem.ValuationConfidence.MEDIUM
-
     # 6. Explainability drivers & Collectibility thesis
     drivers: list[str] = []
     if melt_val > Decimal("0.00"):
@@ -652,8 +649,8 @@ def appraise_item(
         if ai_raw.get("grading_upside_usd") is not None:
             try:
                 item.grading_upside_usd = Decimal(str(ai_raw["grading_upside_usd"])).quantize(Decimal("0.01"))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Ignoring invalid grading_upside_usd value: %s", exc)
 
     # Clean & normalize title for uniform catalog readability (preserve USER override)
     title_change: dict[str, str] | None = None

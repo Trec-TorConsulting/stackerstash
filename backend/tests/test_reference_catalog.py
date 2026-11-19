@@ -32,3 +32,22 @@ def test_match_static_reference_silver_eagle():
 def test_match_static_reference_no_match():
     assert match_static_reference("RANDOM BLURRY TEXT", {}) is None
     assert match_static_reference("", {}) is None
+    # Contains "24K GOLD" without "GOLDBACK" (line 309)
+    assert match_static_reference("NEGOTIABLE INSTRUMENT 24K GOLD", {}) is None
+
+
+def test_match_static_reference_goldback_variants():
+    half = match_static_reference("UTAH 1/2 GOLDBACK 2024", {})
+    assert half is not None and "1/2" in half["candidate"]["title"]
+
+    five = match_static_reference("NEVADA 5 GOLDBACK", {"year": ""})
+    assert five is not None and "5 Goldback" in five["candidate"]["title"]
+
+    hint_denom = match_static_reference(
+        "WYOMING GOLDBACK NOTE 2022", {"denomination": "10 Goldback", "year": ""}
+    )
+    assert hint_denom is not None and "2022 Wyoming 10 Goldback" == hint_denom["candidate"]["title"]
+
+    no_denom = match_static_reference("FLORIDA GOLDBACK ISSUE", {})
+    assert no_denom is not None and "Goldback" in no_denom["candidate"]["title"]
+

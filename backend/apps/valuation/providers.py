@@ -73,8 +73,8 @@ def _hydrate_cached_specs(specs: dict[str, Any]) -> dict[str, Any]:
         if dec_key in out and out[dec_key] is not None and not isinstance(out[dec_key], Decimal):
             try:
                 out[dec_key] = Decimal(str(out[dec_key]))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Invalid cached decimal %s: %s", dec_key, exc)
     return out
 
 
@@ -124,13 +124,13 @@ def lookup_pcgs_cert(cert_number: str, pcgs_token: str, timeout: float = 10.0) -
             if data.get("Diameter"):
                 try:
                     specs["diameter_mm"] = Decimal(str(data["Diameter"])).quantize(Decimal("0.01"))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Invalid PCGS diameter %r: %s", data.get("Diameter"), exc)
             if data.get("Weight"):
                 try:
                     specs["gross_weight_grams"] = Decimal(str(data["Weight"])).quantize(Decimal("0.0001"))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Invalid PCGS weight %r: %s", data.get("Weight"), exc)
             if data.get("PCGSNo"):
                 specs["catalog_numbers"] = {"PCGS": str(data["PCGSNo"])}
             if price is not None and Decimal(str(price)) > 0:
@@ -194,8 +194,8 @@ def lookup_greysheet(
 def lookup_cert_metadata(
     grading_service: str,
     cert_number: str,
-    pcgs_token: str = "",
-    psa_token: str = "",
+    pcgs_token: str | None = None,
+    psa_token: str | None = None,
     timeout: float = 10.0,
 ) -> dict[str, Any] | None:
     """Resolve cert data (PCGS/PSA API when token exists) or official verification link."""
@@ -384,7 +384,8 @@ def _filter_comp_listings(
                 p = Decimal(str(val))
                 if p > 0:
                     prices.append(p)
-            except Exception:
+            except Exception as exc:
+                logger.debug("Invalid eBay listing price %r: %s", val, exc)
                 continue
     return prices
 
@@ -453,8 +454,8 @@ def _lookup_ebay_browse_active(
 
 def lookup_ebay_sold_comps(
     query: str,
-    client_id: str = "",
-    client_secret: str = "",
+    client_id: str | None = None,
+    client_secret: str | None = None,
     timeout: float = 10.0,
 ) -> dict[str, Any] | None:
     """Fetch realized sold listings from eBay Marketplace Insights, falling back to Browse Active Ask."""
@@ -819,8 +820,8 @@ def lookup_scryfall_card(
                 d = Decimal(str(raw_price)).quantize(Decimal("0.01"))
                 if d > 0:
                     market_str = str(d)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Invalid Scryfall price %r: %s", raw_price, exc)
 
         res = {
             "source": "SCRYFALL",
@@ -959,8 +960,8 @@ def lookup_tcgplayer_price(
     title: str,
     set_name: str = "",
     card_number: str = "",
-    client_id: str = "",
-    client_secret: str = "",
+    client_id: str | None = None,
+    client_secret: str | None = None,
     timeout: float = 8.0,
 ) -> dict[str, Any] | None:
     """Query TCGplayer API (BYOK OAuth2) for Market, Low, Mid, High, and Buylist pricing."""

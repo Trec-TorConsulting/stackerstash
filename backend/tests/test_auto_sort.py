@@ -367,3 +367,97 @@ def test_secondary_vault_inherits_owner_ollama_config_and_supports_override():
     url2, model2 = _get_workspace_ollama_config(secondary_ws.id)
     assert url2 == "http://ollama.local:11434"
     assert model2 == "llama3.2:latest"
+
+
+@pytest.mark.django_db
+def test_auto_sort_remaining_categories_fallbacks_tasks_and_dispatch():
+    from unittest.mock import MagicMock, patch
+
+    from apps.catalog.auto_sort import (
+        _classify_with_local_ollama,
+        _determine_sort_category,
+        _dispatch_background,
+        _get_workspace_ollama_config,
+        _normalize_country_or_era,
+        _normalize_mint_or_pourer,
+        classify_and_save_item,
+        classify_item_deterministic,
+        classify_item_task,
+        enqueue_item_auto_sort,
+        resort_workspace_task,
+    )
+
+    owner = User.objects.create_user(email="sort_edge@example.com", password="pw")
+    ws = Workspace.objects.create(name="Edge Vault", slug="edge-vault", owner=owner)
+
+    # _determine_sort_category OTHER item branching by keywords / grading
+    assert (
+        _determine_sort_category(CollectionItem(title="Pokemon Holo Foil Card", category="OTHER"))
+        == CollectionItem.SortCategory.CARD
+    )
+    assert (
+        _determine_sort_category(CollectionItem(title="Federal Reserve Banknote", category="OTHER"))
+        == CollectionItem.SortCategory.PAPER
+    )
+    assert (
+        _determine_sort_category(CollectionItem(title="10 oz Silver Bullion Bar", category="OTHER"))
+        == CollectionItem.SortCategory.BAR
+    )
+    assert (
+        _determine_sort_category(CollectionItem(title="1 oz Silver Round", category="OTHER"))
+        == CollectionItem.SortCategory.ROUND
+    )
+    assert (
+        _determine_sort_category(
+            CollectionItem(title="Collectible Piece", category="OTHER", grading_service="PCGS")
+        )
+        == CollectionItem.SortCategory.COIN
+    )
+    assert (
+        _determine_sort_category(CollectionItem(title="Display Box", category="OTHER"))
+        == CollectionItem.SortCategory.OTHER
+    )
+
+    # Country fallback non-alias mixed case (line 338), mint uncategorized (line 361), OTHER classify (lines 391-393)
+    assert _normalize_country_or_era(CollectionItem(title="Test", country="Fiji")) == "Fiji"
+    assert _normalize_mint_or_pourer(CollectionItem(title="Mystery Block", category="BAR")) == "Uncategorized"
+    other_res = classify_item_deterministic(CollectionItem(title="Mystery Token", category="OTHER"))
+    assert other_res.sort_category == CollectionItem.SortCategory.OTHER
+    assert other_res.sort_subcategory == "Uncategorized"
+
+    # Missing workspace Ollama config (line 400) & Ollama HTTP exception (lines 448-450)
+    assert _get_workspace_ollama_config("00000000-0000-0000-0000-000000000099") == (None, "llama3.2")
+    item = CollectionItem.objects.create(workspace=ws, title="Mystery Token", category="OTHER")
+    with patch("httpx.post", side_effect=RuntimeError("offline")):
+        assert _classify_with_local_ollama(item, "http://localhost:11434", "llama3.2", "OTHER") is None
+
+    # classify_item_task & resort_workspace_task
+    assert classify_item_task(str(item.id)) is True
+    assert resort_workspace_task(str(ws.id)) >= 1
+    assert classify_and_save_item("00000000-0000-0000-0000-000000000099") is False
+
+    # _dispatch_background celery delay branch vs thread branch & sort_override early return
+    mock_fn = MagicMock()
+    with patch("django.conf.settings.CELERY_BROKER_URL", "redis://localhost:6379/0"), patch(
+        "django.conf.settings.CELERY_TASK_ALWAYS_EAGER", False
+    ):
+        _dispatch_background(mock_fn, str(item.id))
+        mock_fn.delay.assert_called_once_with(str(item.id))
+
+    with patch("django.conf.settings.CELERY_BROKER_URL", ""), patch("threading.Thread.start") as mock_start:
+        _dispatch_background(mock_fn, str(item.id))
+        assert mock_start.called
+
+    # Exception in _dispatch_background celery block falls back to thread (lines 507-508)
+    mock_fn.delay.side_effect = RuntimeError("broker down")
+    with patch("django.conf.settings.CELERY_BROKER_URL", "redis://localhost:6379/0"), patch(
+        "django.conf.settings.CELERY_TASK_ALWAYS_EAGER", False
+    ), patch("threading.Thread.start") as mock_start2:
+        _dispatch_background(mock_fn, str(item.id))
+        assert mock_start2.called
+
+    pinned = CollectionItem.objects.create(
+        workspace=ws, title="Pinned Coin", category="COIN", sort_override=True
+    )
+    enqueue_item_auto_sort(pinned)
+

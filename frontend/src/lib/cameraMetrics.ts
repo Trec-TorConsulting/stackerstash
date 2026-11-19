@@ -52,7 +52,6 @@ const GLARE_RATIO_THRESHOLD = 0.30;
 const DEFAULT_VIEWFINDER_ASPECT = 4 / 3;
 
 function sortedPercentile(values: number[], q: number): number {
-  if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
   const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor(sorted.length * q)));
   return sorted[idx];

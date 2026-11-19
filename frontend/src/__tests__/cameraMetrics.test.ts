@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   computeSharpnessScore,
   detectSubjectBox,
   evaluateFrameMetrics,
   evaluateFramingState,
+  evaluateImageFileGlare,
+  evaluateRgbaGlare,
   smoothSubjectBox,
 } from "../lib/cameraMetrics";
 
@@ -198,5 +200,143 @@ describe("cameraMetrics", () => {
     expect(box!.shape).toBe("coin");
     expect(box!.centerX).toBeGreaterThan(0.35);
     expect(box!.centerX).toBeLessThan(0.65);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("handles small dimensions, 1px hairline degenerate span, and sharpness small buffer", () => {
+    expect(detectSubjectBox(new Float32Array(64), 8, 8)).toBeNull();
+    expect(computeSharpnessScore(new Float32Array(4), 2, 2)).toBe(0);
+
+    // 1-pixel vertical subtle line (lumaDiff=14 >= 12, edgeMag=14 < 16) in 40x30 -> minCol === maxCol -> null (line 241)
+    const w = 40;
+    const h = 30;
+    const hairline = new Float32Array(w * h).fill(80);
+    for (let r = 2; r < h - 2; r++) {
+      hairline[r * w + 20] = 94;
+    }
+    expect(detectSubjectBox(hairline, w, h)).toBeNull();
+  });
+
+  it("produces dark, bright, edge_clipped, off_center, and low-edge-detail frame warnings", () => {
+    const w = 80;
+    const h = 60;
+
+    // 1. Too dark (< 45)
+    const dark = new Float32Array(w * h).fill(20);
+    expect(evaluateFrameMetrics(dark, dark, w, h, 1.0).quality.label).toMatch(/Too dark/i);
+
+    // 2. Too bright (> 238, < GLARE_LUMA_THRESHOLD 246)
+    const bright = new Float32Array(w * h).fill(240);
+    expect(evaluateFrameMetrics(bright, bright, w, h, 1.0).quality.label).toMatch(/Too bright/i);
+
+    // 3. Edge clipped via evaluateFrameMetrics
+    const clipped = new Float32Array(w * h).fill(90);
+    for (let r = 1; r <= 24; r++) {
+      for (let c = 1; c <= 30; c++) {
+        clipped[r * w + c] = 210;
+      }
+    }
+    expect(evaluateFrameMetrics(clipped, clipped, w, h, 1.0).quality.label).toMatch(/inside frame/i);
+
+    // 4. Off center via evaluateFrameMetrics
+    const offCenter = new Float32Array(w * h).fill(90);
+    for (let r = 34; r <= 52; r++) {
+      for (let c = 52; c <= 72; c++) {
+        offCenter[r * w + c] = 210;
+      }
+    }
+    expect(evaluateFrameMetrics(offCenter, offCenter, w, h, 1.0).quality.label).toMatch(/Center item/i);
+
+    // 5. Soft locked box with low effectiveEdge (< 4.5)
+    const soft = new Float32Array(w * h).fill(110);
+    for (let r = 12; r <= 48; r++) {
+      for (let c = 16; c <= 64; c++) {
+        soft[r * w + c] = 140;
+      }
+    }
+    expect(evaluateFrameMetrics(soft, soft, w, h, 1.0).quality.label).toMatch(/sharper detail/i);
+  });
+
+  it("evaluates glare on RGBA buffers and image files including guards and errors", async () => {
+    expect(evaluateRgbaGlare(new Uint8ClampedArray(16), 4, 4)).toEqual({
+      hasGlare: false,
+      glareRatio: 0,
+    });
+
+    const w = 20;
+    const h = 20;
+    const whiteRgba = new Uint8ClampedArray(w * h * 4);
+    for (let i = 0; i < w * h * 4; i += 4) {
+      whiteRgba[i] = 250;
+      whiteRgba[i + 1] = 250;
+      whiteRgba[i + 2] = 250;
+      whiteRgba[i + 3] = 255;
+    }
+    const glareRes = evaluateRgbaGlare(whiteRgba, w, h);
+    expect(glareRes.hasGlare).toBe(true);
+    expect(glareRes.glareRatio).toBeGreaterThan(0.9);
+
+    // Non-image file
+    const txt = new File(["hi"], "notes.txt", { type: "text/plain" });
+    expect(await evaluateImageFileGlare(txt)).toEqual({ hasGlare: false, glareRatio: 0 });
+
+    // Image file happy path + !ctx fallback + onerror fallback
+    const imgFile = new File(["img"], "coin.jpg", { type: "image/jpeg" });
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:glare-check");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    vi.stubGlobal(
+      "Image",
+      vi.fn(function () {
+        const el: Record<string, unknown> = { naturalWidth: w, naturalHeight: h };
+        Object.defineProperty(el, "src", {
+          set: () => queueMicrotask(() => (el.onload as () => void)()),
+        });
+        return el;
+      }),
+    );
+
+    const origCreate = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation(((tag: string) => {
+      if (tag !== "canvas") return origCreate(tag);
+      return {
+        width: 0,
+        height: 0,
+        getContext: vi.fn(() => ({
+          drawImage: vi.fn(),
+          getImageData: vi.fn(() => ({ data: whiteRgba })),
+        })),
+      } as unknown as HTMLCanvasElement;
+    }) as typeof document.createElement);
+    const fileGlare = await evaluateImageFileGlare(imgFile);
+    expect(fileGlare.hasGlare).toBe(true);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:glare-check");
+
+    // Missing canvas context -> safe false
+    vi.spyOn(document, "createElement").mockImplementation(((tag: string) => {
+      if (tag !== "canvas") return origCreate(tag);
+      return {
+        width: 0,
+        height: 0,
+        getContext: vi.fn(() => null),
+      } as unknown as HTMLCanvasElement;
+    }) as typeof document.createElement);
+    expect(await evaluateImageFileGlare(imgFile)).toEqual({ hasGlare: false, glareRatio: 0 });
+
+    // Image decode failure -> safe false
+    vi.stubGlobal(
+      "Image",
+      vi.fn(function () {
+        const el: Record<string, unknown> = {};
+        Object.defineProperty(el, "src", {
+          set: () => queueMicrotask(() => (el.onerror as () => void)()),
+        });
+        return el;
+      }),
+    );
+    expect(await evaluateImageFileGlare(imgFile)).toEqual({ hasGlare: false, glareRatio: 0 });
   });
 });

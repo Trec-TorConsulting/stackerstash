@@ -1264,3 +1264,360 @@ def test_container_cycle_guard_rollup_duplicate_item_and_thumbnail_cleanup(api_c
     assert bulk_del.json()["deleted_count"] == 1
     assert not st.exists(p2_img)
     assert not st.exists(p2_thumb)
+
+
+@pytest.mark.django_db
+def test_catalog_models_goldback_filters_cards_photos_and_import_edges(api_client, user_a, monkeypatch):
+    from decimal import Decimal
+    from unittest.mock import patch
+
+    from apps.accounts.models import AccountSubscription, PlanTier
+    from apps.catalog.api import (
+        _apply_card_fields,
+        _csv_safe_cell,
+        _find_container_node,
+        _item_shape_hint,
+        _should_extract_coin_from_slab,
+    )
+    from apps.catalog.goldback import get_goldback_weight_ozt, parse_goldback_denomination
+    from apps.catalog.models import CollectionItem, Container, ItemPhoto, compute_fine_troy_oz
+
+    owner, ws, token = user_a
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    # Enable PLUS tier so we can create multiple items cleanly for filter/bulk tests
+    AccountSubscription.objects.update_or_create(
+        user=owner,
+        defaults={
+            "tier": PlanTier.PLUS,
+            "source": AccountSubscription.Source.ADMIN_OVERRIDE,
+            "status": AccountSubscription.Status.ACTIVE,
+        },
+    )
+
+    # Model helper lines 32, 41, 82, 396, 441
+    assert compute_fine_troy_oz(1, "OZ_AVDP", None, "GOLD") == Decimal("0.911458")
+    assert get_goldback_weight_ozt(None) is None
+    assert parse_goldback_denomination("", "Utah 5 Goldback Note", "") == "5"
+    assert parse_goldback_denomination("", "", "Contains 1/100 oz 24K Gold") == "10"
+    assert parse_goldback_denomination("", "Silver Round", "") is None
+    assert _csv_safe_cell(None) == ""
+    assert _find_container_node([], "00000000-0000-0000-0000-000000000001") is None
+
+    safe = Container.objects.create(workspace=ws, name="Home Safe", container_type=Container.ContainerType.SAFE)
+    assert "Home Safe" in str(safe)
+
+    # Presets endpoint + container 404 + container delete
+    assert api_client.get("/api/v1/catalog/items/presets", **headers).status_code == 200
+    assert (
+        api_client.post(
+            "/api/v1/catalog/items",
+            data=json.dumps({
+                "title": "Bad Container",
+                "category": "COIN",
+                "container_id": "00000000-0000-0000-0000-000000000099",
+            }),
+            content_type="application/json",
+            **headers,
+        ).status_code
+        == 404
+    )
+    temp_box = Container.objects.create(workspace=ws, name="Temp Box")
+    with patch("apps.catalog.api._build_container_tree", return_value=[]):
+        fallback_upd = api_client.patch(
+            f"/api/v1/catalog/containers/{temp_box.id}",
+            data=json.dumps({"name": "Temp Box Renamed"}),
+            content_type="application/json",
+            **headers,
+        )
+        assert fallback_upd.status_code == 200
+        assert fallback_upd.json()["name"] == "Temp Box Renamed"
+    assert api_client.delete(f"/api/v1/catalog/containers/{temp_box.id}", **headers).status_code == 204
+
+    # Card field sync & provenance (lines 406, 410-412, 416, 418, 420, 1065, 1071-1076, 1082)
+    card_resp = api_client.post(
+        "/api/v1/catalog/items",
+        data=json.dumps({
+            "title": "Charizard Base Set",
+            "category": "CARD",
+            "card_game": "Pokemon",
+            "set_name": "Base Set",
+            "card_number": "4/102",
+        }),
+        content_type="application/json",
+        **headers,
+    )
+    assert card_resp.status_code == 201
+    card_id = card_resp.json()["id"]
+    card_obj = CollectionItem.objects.get(id=card_id)
+    assert card_obj.series == "Base Set"
+    assert "Charizard Base Set" in str(card_obj)
+
+    patch_card = api_client.patch(
+        f"/api/v1/catalog/items/{card_id}",
+        data=json.dumps({
+            "container_id": str(safe.id),
+            "mint_mark": "W",
+            "card_edition": "Shadowless",
+            "card_number": "",
+            "market_value_unit": "350.00",
+        }),
+        content_type="application/json",
+        **headers,
+    )
+    assert patch_card.status_code == 200
+    assert patch_card.json()["mint_mark"] == "W"
+    patch_clear_mint = api_client.patch(
+        f"/api/v1/catalog/items/{card_id}",
+        data=json.dumps({"mint_mark": ""}),
+        content_type="application/json",
+        **headers,
+    )
+    assert patch_clear_mint.status_code == 200
+    # Exercise line 420: item.series set, set_name absent, is_card_item=True
+    card_obj.refresh_from_db()
+    card_obj.attributes.pop("set_name", None)
+    _apply_card_fields(card_obj, {"rarity": "Holo"})
+    assert card_obj.attributes["set_name"] == "Base Set"
+
+    # List filters: category, graded=False, metal_type, container_id, grading_service, status, is_estimate, tag, q
+    coin = CollectionItem.objects.create(
+        workspace=ws,
+        container=safe,
+        title="2024 Gold Buffalo",
+        category="COIN",
+        metal_type="GOLD",
+        grading_service="NGC",
+        status="IN_COLLECTION",
+        is_estimate=True,
+        tags=["bullion", "old"],
+    )
+    raw_coin = CollectionItem.objects.create(
+        workspace=ws,
+        title="1964 Kennedy Half",
+        category="COIN",
+        metal_type="SILVER",
+        grading_service="NONE",
+        status="IN_COLLECTION",
+        tags=["junk"],
+    )
+    f_resp = api_client.get(
+        f"/api/v1/catalog/items?category=COIN&metal_type=GOLD&container_id={safe.id}"
+        "&grading_service=NGC&status=IN_COLLECTION&is_estimate=true&tag=bullion&q=Buffalo",
+        **headers,
+    )
+    assert f_resp.status_code == 200
+    assert [i["id"] for i in f_resp.json()] == [str(coin.id)]
+    raw_resp = api_client.get("/api/v1/catalog/items?graded=false", **headers)
+    assert any(i["id"] == str(raw_coin.id) for i in raw_resp.json())
+
+    # Bulk delete & bulk update validation + updates
+    assert (
+        api_client.post(
+            "/api/v1/catalog/items/bulk-delete",
+            data=json.dumps({"item_ids": []}),
+            content_type="application/json",
+            **headers,
+        ).json()["deleted_count"]
+        == 0
+    )
+    assert (
+        api_client.post(
+            "/api/v1/catalog/items/bulk-update",
+            data=json.dumps({"item_ids": []}),
+            content_type="application/json",
+            **headers,
+        ).json()["updated_count"]
+        == 0
+    )
+    for bad_payload in (
+        {"item_ids": [str(coin.id)], "category": "BAD"},
+        {"item_ids": [str(coin.id)], "status": "BAD"},
+        {"item_ids": [str(coin.id)], "metal_type": "BAD"},
+        {"item_ids": [str(coin.id)], "grading_service": "BAD"},
+    ):
+        assert (
+            api_client.post(
+                "/api/v1/catalog/items/bulk-update",
+                data=json.dumps(bad_payload),
+                content_type="application/json",
+                **headers,
+            ).status_code
+            == 400
+        )
+    assert (
+        api_client.post(
+            "/api/v1/catalog/items/bulk-update",
+            data=json.dumps({"item_ids": ["00000000-0000-0000-0000-000000000099"]}),
+            content_type="application/json",
+            **headers,
+        ).json()["updated_count"]
+        == 0
+    )
+    bu_resp = api_client.post(
+        "/api/v1/catalog/items/bulk-update",
+        data=json.dumps({
+            "item_ids": [str(coin.id)],
+            "clear_container": True,
+            "metal_type": "SILVER",
+            "grading_service": "PCGS",
+            "remove_tags": ["old"],
+            "add_tags": ["updated"],
+        }),
+        content_type="application/json",
+        **headers,
+    )
+    assert bu_resp.status_code == 200 and bu_resp.json()["updated_count"] == 1
+    coin.refresh_from_db()
+    assert coin.container is None and coin.metal_type == "SILVER" and coin.tags == ["bullion", "updated"]
+
+    # Shape hint & slab extraction helpers (lines 1182-1193, 1208, 1217, 1233)
+    pmg_note = CollectionItem.objects.create(
+        workspace=ws, title="$5 Silver Certificate", category="PAPER", grading_service="PMG"
+    )
+    assay_item = CollectionItem.objects.create(
+        workspace=ws, title="PAMP Assay Certificate of Authenticity", category="OTHER"
+    )
+    other_item = CollectionItem.objects.create(workspace=ws, title="Display Case", category="OTHER")
+    assert _should_extract_coin_from_slab(coin, ItemPhoto.Label.RECEIPT) is False
+    assert _should_extract_coin_from_slab(card_obj, ItemPhoto.Label.OBVERSE) is False
+    assert _should_extract_coin_from_slab(pmg_note, ItemPhoto.Label.OBVERSE) is False
+    slab_pmg = CollectionItem.objects.create(workspace=ws, title="Note Slab", category="SLAB", grading_service="PMG")
+    assert _should_extract_coin_from_slab(slab_pmg, ItemPhoto.Label.OBVERSE) is False
+    assert _should_extract_coin_from_slab(coin, ItemPhoto.Label.OBVERSE) is True
+    assert _item_shape_hint(card_obj, ItemPhoto.Label.OBVERSE) == "rect"
+    assert _item_shape_hint(pmg_note, ItemPhoto.Label.OBVERSE) == "note"
+    assert _item_shape_hint(assay_item, ItemPhoto.Label.OBVERSE) == "rect"
+    assert _item_shape_hint(other_item, ItemPhoto.Label.OBVERSE) is None
+
+    # Photo upload errors, thumbnail failure fallbacks, rotate, set primary, delete item with photos
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 40), (190, 190, 190)).save(buf, format="PNG")
+    png_bytes = buf.getvalue()
+
+    assert (
+        api_client.post(
+            f"/api/v1/catalog/items/{coin.id}/photos",
+            data={"file": SimpleUploadedFile("bad.png", png_bytes, content_type="image/png"), "label": "INVALID"},
+            **headers,
+        ).status_code
+        == 400
+    )
+
+    from types import SimpleNamespace
+
+    from ninja.errors import HttpError
+
+    from apps.catalog.api import upload_item_photo
+
+    with monkeypatch.context() as mp:
+        mp.setattr("apps.catalog.api.MAX_UPLOAD_BYTES", 5)
+        fake_req = SimpleNamespace(workspace=ws, user=owner, workspace_role="OWNER")
+        fake_file = SimpleNamespace(
+            size=4,
+            seek=lambda *_a: None,
+            read=lambda *_a: b"1234567890",
+        )
+        with pytest.raises(HttpError) as exc_info:
+            upload_item_photo(fake_req, coin.id, file=fake_file, label="OBVERSE")
+        assert exc_info.value.status_code == 400
+
+    with patch("apps.catalog.api.generate_image_thumbnail", side_effect=RuntimeError("thumb err")):
+        p1 = api_client.post(
+            f"/api/v1/catalog/items/{coin.id}/photos",
+            data={"file": SimpleUploadedFile("p1.png", png_bytes, content_type="image/png"), "label": "OBVERSE"},
+            **headers,
+        ).json()
+        p2 = api_client.post(
+            f"/api/v1/catalog/items/{coin.id}/photos",
+            data={"file": SimpleUploadedFile("p2.png", png_bytes, content_type="image/png"), "label": "REVERSE"},
+            **headers,
+        ).json()
+        assert f"[{ItemPhoto.Label.OBVERSE}]" in str(ItemPhoto.objects.get(id=p1["id"]))
+        assert (
+            api_client.post(
+                f"/api/v1/catalog/items/{coin.id}/photos/{p1['id']}/rotate",
+                data=json.dumps({"degrees": 45}),
+                content_type="application/json",
+                **headers,
+            ).status_code
+            == 400
+        )
+        assert (
+            api_client.post(
+                f"/api/v1/catalog/items/{coin.id}/photos/{p1['id']}/rotate",
+                data=json.dumps({"degrees": 90}),
+                content_type="application/json",
+                **headers,
+            ).status_code
+            == 200
+        )
+
+    prim = api_client.patch(f"/api/v1/catalog/items/{coin.id}/photos/{p2['id']}/primary", **headers)
+    assert prim.status_code == 200 and prim.json()["is_primary"] is True
+    assert api_client.delete(f"/api/v1/catalog/items/{coin.id}", **headers).status_code == 204
+
+    # CSV mapped invalid JSON + bad Decimal row error + Free-tier CSV import limit (lines 1506-1513, 1565-1566, 1599-1602)
+    assert (
+        api_client.post(
+            "/api/v1/catalog/items/import/mapped",
+            data={
+                "file": SimpleUploadedFile("a.csv", b"Title\nTest\n", content_type="text/csv"),
+                "mapping": "[1, 2]",
+            },
+            **headers,
+        ).status_code
+        == 400
+    )
+    assert (
+        api_client.post(
+            "/api/v1/catalog/items/import/mapped",
+            data={
+                "file": SimpleUploadedFile("a.csv", b"Title\nTest\n", content_type="text/csv"),
+                "mapping": "{bad",
+            },
+            **headers,
+        ).status_code
+        == 400
+    )
+    bad_row_resp = api_client.post(
+        "/api/v1/catalog/items/import/csv",
+        data={
+            "file": SimpleUploadedFile(
+                "badrow.csv",
+                b"title,market_value_unit\nGood Coin,not_a_decimal\n",
+                content_type="text/csv",
+            )
+        },
+        **headers,
+    )
+    assert bad_row_resp.status_code == 200 and len(bad_row_resp.json()["errors"]) == 1
+
+    # Lower to FREE and exhaust 100 active slots -> POST /items/import/csv returns 402 for active row
+    AccountSubscription.objects.update_or_create(
+        user=owner,
+        defaults={
+            "tier": PlanTier.FREE,
+            "source": AccountSubscription.Source.ADMIN_OVERRIDE,
+            "status": AccountSubscription.Status.ACTIVE,
+        },
+    )
+    existing = CollectionItem.objects.filter(workspace=ws).count()
+    CollectionItem.objects.bulk_create([
+        CollectionItem(workspace=ws, title=f"Fill {i}", category="COIN")
+        for i in range(100 - existing)
+    ])
+    assert (
+        api_client.post(
+            "/api/v1/catalog/items/import/csv",
+            data={
+                "file": SimpleUploadedFile(
+                    "over.csv",
+                    b"title,status\nOverQuota,IN_COLLECTION\n",
+                    content_type="text/csv",
+                )
+            },
+            **headers,
+        ).status_code
+        == 402
+    )

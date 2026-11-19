@@ -65,16 +65,33 @@ npm run dev
 
 ## Testing & Verification
 
-```bash
-# Backend tests & linter
-cd backend
-.venv/bin/pytest
-.venv/bin/ruff check apps config tests
+Run the combined security, static analysis, and 100% test coverage gate from the repository root:
 
-# Frontend typecheck, build & Vitest
+```bash
+bash scripts/security_and_coverage.sh
+```
+
+Or run the individual checks per service:
+
+```bash
+# Backend lint, SAST, dependency audit, deploy security check & 100% coverage tests
+cd backend
+.venv/bin/ruff check .
+.venv/bin/bandit -r apps config -q
+.venv/bin/pip-audit
+DJANGO_DEBUG=false \
+  DJANGO_SECRET_KEY="$(.venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(50))')" \
+  DJANGO_ALLOWED_HOSTS=localhost \
+  FIELD_ENCRYPTION_KEY="$(.venv/bin/python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" \
+  .venv/bin/python manage.py check --deploy
+.venv/bin/pytest --cov=apps --cov=config --cov-report=term-missing --cov-fail-under=100
+
+# Frontend dependency audit, typecheck, 100% coverage Vitest & production build
 cd frontend
+npm audit --audit-level=high
+npx tsc --noEmit
+npm run test:coverage
 npm run build
-npm test
 
 # Helm chart validation (sketch only — do not install this chart on the cluster)
 helm lint deploy/chart

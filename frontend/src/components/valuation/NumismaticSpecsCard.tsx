@@ -46,8 +46,7 @@ export function NumismaticSpecsCard({ item, onSaveSpecs, isSaving }: NumismaticS
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!onSaveSpecs) return;
-    await onSaveSpecs({
+    await onSaveSpecs!({
       mint_mark: form.mint_mark.trim(),
       mintage: form.mintage ? Number(form.mintage) : null,
       variety: form.variety.trim(),

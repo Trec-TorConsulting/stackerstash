@@ -156,10 +156,6 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
 
   useEffect(() => {
     if (!cameraOpen) {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-      }
       setCameraReady(false);
       return;
     }
@@ -289,13 +285,7 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
     raw_condition: "",
   });
 
-  function canIdentifyFiles(
-    targetFiles: StagedPhoto[],
-    source: "CAMERA" | "UPLOAD" | "MANUAL",
-    forceSingleSide = false
-  ) {
-    if (!targetFiles.length) return false;
-    if (forceSingleSide && source !== "UPLOAD") return true;
+  function canIdentifyFiles(targetFiles: StagedPhoto[]) {
     const needsBothSides =
       form.category === "COIN" || form.category === "SLAB" || form.category === "PAPER";
     if (!needsBothSides) return true;
@@ -455,7 +445,7 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
       return;
     }
 
-    if (canIdentifyFiles(nextFiles, source)) {
+    if (canIdentifyFiles(nextFiles)) {
       void runIdentify(nextFiles, source);
     }
   }
@@ -496,16 +486,15 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
       return;
     }
 
-    if (canIdentifyFiles(nextFiles, source)) {
+    if (canIdentifyFiles(nextFiles)) {
       void runIdentify(nextFiles, source);
     }
   }
 
   function undoAutoCrop(idx: number) {
     const target = filesRef.current[idx];
-    if (!target?.originalFile) return;
     URL.revokeObjectURL(target.preview);
-    const original = target.originalFile;
+    const original = target.originalFile!;
     setFiles((prev) =>
       prev.map((item, i) =>
         i === idx
@@ -566,9 +555,7 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
   async function runIdentify(
     targetFiles: StagedPhoto[] = files,
     source: "CAMERA" | "UPLOAD" | "MANUAL" = intakeSource,
-    forceSingleSide = false
   ) {
-    if (!canIdentifyFiles(targetFiles, source, forceSingleSide)) return;
     setIdentifying(true);
     setAiNotice(null);
     setQuotaDeferred(false);
@@ -693,7 +680,6 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
   }
 
   async function handleBatchCatalogAll() {
-    if (files.length < 2) return;
     setSaving(true);
     setError(null);
     const pairs: StagedPhoto[][] = [];
@@ -1071,7 +1057,7 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
                         i === idx ? { ...item, label: e.target.value } : item
                       );
                       setFiles(nextFiles);
-                      if (canIdentifyFiles(nextFiles, intakeSource)) {
+                      if (canIdentifyFiles(nextFiles)) {
                         void runIdentify(nextFiles, intakeSource);
                       }
                     }}
@@ -1138,7 +1124,7 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
               />
               <button
                 type="button"
-                onClick={() => void runIdentify(files, intakeSource, true)}
+                onClick={() => void runIdentify(files, intakeSource)}
                 disabled={identifying || missingRequiredSides}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-semibold transition disabled:opacity-50"
               >

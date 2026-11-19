@@ -103,7 +103,8 @@ def extract_barcode_hint(images: list[tuple[bytes, str]]) -> str:
             if m:
                 return m.group(1)
             return data.strip()[:64]
-        except Exception:
+        except Exception as exc:
+            logger.debug("QR barcode rotation variant decode failed: %s", exc)
             continue
     return ""
 

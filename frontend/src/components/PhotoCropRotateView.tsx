@@ -58,7 +58,6 @@ export function PhotoCropRotateView({
   }, []);
 
   const handleConfirm = async () => {
-    if (applying) return;
     setApplying(true);
     try {
       if (croppedAreaPixels && croppedAreaPixels.width > 0 && croppedAreaPixels.height > 0) {

@@ -167,7 +167,11 @@ describe("GuidedCameraModal", () => {
 
     const takePhoto = vi.fn().mockResolvedValue(new Blob(["jpeg-bytes"], { type: "image/jpeg" }));
     const origImageCapture = (window as unknown as { ImageCapture?: unknown }).ImageCapture;
-    (window as unknown as { ImageCapture: unknown }).ImageCapture = vi.fn(() => ({ takePhoto }));
+    (window as unknown as { ImageCapture: unknown }).ImageCapture = vi.fn(
+      function () {
+        return { takePhoto };
+      }
+    );
 
     const origCreateImageBitmap = window.createImageBitmap;
     window.createImageBitmap = vi.fn().mockResolvedValue({
@@ -350,7 +354,11 @@ describe("GuidedCameraModal", () => {
 
     const takePhoto = vi.fn().mockResolvedValue(new Blob(["note-jpeg"], { type: "image/jpeg" }));
     const origImageCapture = (window as unknown as { ImageCapture?: unknown }).ImageCapture;
-    (window as unknown as { ImageCapture: unknown }).ImageCapture = vi.fn(() => ({ takePhoto }));
+    (window as unknown as { ImageCapture: unknown }).ImageCapture = vi.fn(
+      function () {
+        return { takePhoto };
+      }
+    );
 
     const origCreateImageBitmap = window.createImageBitmap;
     window.createImageBitmap = vi.fn().mockResolvedValue({

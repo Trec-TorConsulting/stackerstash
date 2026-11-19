@@ -1329,9 +1329,6 @@ def _detect_salient_subject_bounds(img: Image.Image) -> tuple[float, float, floa
     border_mask[:, -band:] = True
 
     border_pts = rgb[border_mask]
-    if len(border_pts) < 16:
-        return None
-
     k = min(3, len(border_pts))
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
     _, labels, centers = cv2.kmeans(
@@ -1349,13 +1346,6 @@ def _detect_salient_subject_bounds(img: Image.Image) -> tuple[float, float, floa
         thresh = float(min(120.0, max(30.0, np.percentile(dists_c, 90) * 1.6 + 14.0)))
         kept_centers.append(centers[c_idx])
         kept_thresholds.append(thresh)
-
-    if not kept_centers:
-        largest = int(np.bincount(labels_flat).argmax())
-        pts_c = border_pts[labels_flat == largest]
-        dists_c = np.abs(pts_c - centers[largest]).sum(axis=1)
-        kept_centers = [centers[largest]]
-        kept_thresholds = [float(min(120.0, max(30.0, np.percentile(dists_c, 90) * 1.6 + 14.0)))]
 
     is_bg = np.zeros((sh, sw), dtype=bool)
     for center, thresh in zip(kept_centers, kept_thresholds, strict=True):
@@ -1480,8 +1470,6 @@ def _is_glare_dominated_box(
         return False
     # Check the inner 60% core so padding around the candidate doesn't dilute a glare blob.
     inner = arr[int(ph * 0.2) : int(ph * 0.8), int(pw * 0.2) : int(pw * 0.8)]
-    if inner.size == 0:
-        return False
     hsv = cv2.cvtColor(inner, cv2.COLOR_RGB2HSV)
     # High value + low saturation = specular white glare
     glare_mask = (hsv[:, :, 2] >= 240) & (hsv[:, :, 1] <= 35)

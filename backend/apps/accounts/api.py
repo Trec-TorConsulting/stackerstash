@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -28,6 +29,7 @@ from .models import (
     get_user_entitlement_status,
 )
 
+logger = logging.getLogger(__name__)
 auth_router = Router(tags=["Auth"])
 settings_router = Router(tags=["Settings"], auth=WorkspaceAuth())
 
@@ -117,7 +119,7 @@ class UserOut(Schema):
 
 class AuthResponse(Schema):
     access_token: str
-    token_type: str = "bearer"
+    token_type: str = "bearer"  # noqa: S105  # nosec B105
     user: UserOut
 
 
@@ -393,8 +395,8 @@ def delete_me(request, payload: DeleteAccountIn):
     for storage, name in media_cleanup:
         try:
             storage.delete(name)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Media cleanup failed for %s: %s", name, exc)
 
     return Status(204, None)
 
@@ -570,8 +572,8 @@ def delete_workspace(request, workspace_id: UUID):
     for storage, name in media_cleanup:
         try:
             storage.delete(name)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Media cleanup failed for %s: %s", name, exc)
 
     return Status(204, None)
 

@@ -82,3 +82,88 @@ def test_preprocess_image_for_ocr_outputs_downscaled_jpeg():
         assert max(out.size) <= 1200
 
 
+def test_ocr_module_complete_branches():
+    import numpy as np
+
+    import apps.vision.ocr as ocr_mod
+    from apps.vision.ocr import (
+        _preprocess_image_for_ocr,
+        extract_barcode_hint,
+        extract_text_from_images,
+        parse_ocr_numismatic_hints,
+    )
+
+    # _get_ocr_engine cached failure & RapidOCR init paths
+    orig_engine, orig_failed = ocr_mod._OCR_ENGINE, ocr_mod._OCR_INIT_FAILED
+    try:
+        ocr_mod._OCR_ENGINE = None
+        ocr_mod._OCR_INIT_FAILED = True
+        assert ocr_mod._get_ocr_engine() is None
+        assert extract_text_from_images([(b"abc", "image/jpeg")]) == ""
+
+        ocr_mod._OCR_INIT_FAILED = False
+        with patch.dict("sys.modules", {"rapidocr_onnxruntime": None}):
+            assert ocr_mod._get_ocr_engine() is None
+            assert ocr_mod._OCR_INIT_FAILED is True
+    finally:
+        ocr_mod._OCR_ENGINE, ocr_mod._OCR_INIT_FAILED = orig_engine, orig_failed
+
+    # _preprocess_image_for_ocr corrupt bytes returns None
+    assert _preprocess_image_for_ocr(b"not-an-image") is None
+
+    # extract_text_from_images skips corrupt images, engine exception, empty result, invalid entry
+    def raising_engine(_b):
+        raise RuntimeError("ocr crash")
+
+    img = Image.new("RGB", (100, 100), (240, 240, 240))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    with patch("apps.vision.ocr._get_ocr_engine", return_value=raising_engine):
+        assert extract_text_from_images([(b"bad", "image/png"), (buf.getvalue(), "image/png")]) == ""
+    with patch("apps.vision.ocr._get_ocr_engine", return_value=lambda _b: ([["bad_entry"], ([0], "OK", 0.9)], None)):
+        assert extract_text_from_images([(buf.getvalue(), "image/png")]) == "OK"
+
+    # extract_barcode_hint QR decode hit (digits & non-digit string) + big image + cv2 exception + import fail
+    big = Image.new("RGB", (1500, 1500), (240, 240, 240))
+    bb = io.BytesIO()
+    big.save(bb, format="PNG")
+    with patch("cv2.QRCodeDetector.detectAndDecode", return_value=("https://pcgs.com/cert/12345678", np.array([]), None)):
+        assert extract_barcode_hint([(bb.getvalue(), "image/png")]) == "12345678"
+    with patch("cv2.QRCodeDetector.detectAndDecode", return_value=("RAW-BARCODE-ABC", np.array([]), None)):
+        assert extract_barcode_hint([(bb.getvalue(), "image/png")]) == "RAW-BARCODE-ABC"
+    with patch("cv2.QRCodeDetector.detectAndDecode", side_effect=RuntimeError("qr err")):
+        assert extract_barcode_hint([(bb.getvalue(), "image/png")]) == ""
+    with patch.dict("sys.modules", {"cv2": None}):
+        assert extract_barcode_hint([(bb.getvalue(), "image/png")]) == ""
+
+    # parse_ocr_numismatic_hints across all grading services, grades, certs, serials, denominations, card games
+    for snippet, exp_svc, exp_cat in [
+        ("PCGS BANKNOTE 66 EPQ CERT # 12345678", "PCGS_BANKNOTE", "SLAB"),
+        ("PMG 65 PPQ 99887766 A12345678B TWENTY DOLLARS SERIES 1934A SILVER CERTIFICATE", "PMG", "SLAB"),
+        ("NGC PF69 UCAM 1234567-001", "NGC", "SLAB"),
+        ("CACG MS64 7654321", "CACG", "SLAB"),
+        ("ANACS AU58 7654321", "ANACS", "SLAB"),
+        ("ICG MS62 7654321", "ICG", "SLAB"),
+        ("PSA GEM MT 10 CHARIZARD POKEMON 4/102", "PSA", "SLAB"),
+        ("BECKETT BGS-9.5 MAGIC: THE GATHERING", "BGS", "SLAB"),
+        ("CGC 9 YU-GI-OH", "CGC", "SLAB"),
+        ("SGC 8 TOPPS", "SGC", "SLAB"),
+        ("TAG 10 PANINI", "TAG", "SLAB"),
+    ]:
+        h = parse_ocr_numismatic_hints(snippet)
+        assert h["grading_service"] == exp_svc
+        assert h["category"] == exp_cat
+
+    bar_h = parse_ocr_numismatic_hints("500 GRAM PALLADIUM BAR 9995 MAPLE LEAF", barcode_hint=None)
+    assert bar_h["weight_unit"] == "G" and bar_h["metal_type"] == "PALLADIUM"
+    kg_h = parse_ocr_numismatic_hints("1 KILO COPPER ROUND LIBERTY")
+    assert kg_h["weight_unit"] == "KG" and kg_h["metal_type"] == "COPPER"
+    card_h = parse_ocr_numismatic_hints("LORCANA ONE PIECE COLLECTIBLE CARD")
+    assert card_h["category"] == "CARD"
+    # Platinum + compact alt serial without spaces/suffix (lines 218, 261)
+    plat_h = parse_ocr_numismatic_hints("PLATINUM 1 OZ BAR K9876543")
+    assert plat_h["metal_type"] == "PLATINUM"
+    assert plat_h["serial_number"] == "K9876543"
+
+
+

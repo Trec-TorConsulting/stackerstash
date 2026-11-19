@@ -552,3 +552,140 @@ def test_delete_account_with_subscription_and_dedicated_instance(api_client):
     )
     assert resp.status_code == 204
     assert not User.objects.filter(email="cleanup@example.com").exists()
+
+
+@pytest.mark.django_db
+def test_billing_edge_branches_and_webhook_fallbacks(api_client, settings, user_a):
+    from apps.accounts.billing_api import _serialize_dedicated_instance, _tier_for_price_id
+
+    user, _, token = user_a
+    headers = _headers(token)
+
+    settings.STRIPE_SECRET_KEY = "sk_test_dummy"
+    settings.STRIPE_WEBHOOK_SECRET = "whsec_dummy"
+    settings.STRIPE_PRICE_PLUS = "price_plus"
+    settings.STRIPE_PRICE_UNLIMITED = "price_unl"
+    settings.STRIPE_PRICE_DEDICATED = "price_ded"
+
+    assert _tier_for_price_id("") is None
+    assert _tier_for_price_id("price_unknown") is None
+    assert _serialize_dedicated_instance(None) is None
+
+    # Invalid tier checkout -> 400; portal without customer -> 400
+    assert (
+        api_client.post(
+            "/api/v1/billing/checkout",
+            data=json.dumps({"tier": "FREE"}),
+            content_type="application/json",
+            **headers,
+        ).status_code
+        == 400
+    )
+    assert api_client.post("/api/v1/billing/portal", **headers).status_code == 400
+
+    # Webhook when user cannot be resolved -> 200 received=True
+    with patch(
+        "apps.accounts.billing_api.stripe.Webhook.construct_event",
+        return_value={"type": "checkout.session.completed", "data": {"object": {"id": "sub_none"}}},
+    ):
+        resp = api_client.post(
+            "/api/v1/billing/webhook",
+            data=b"{}",
+            content_type="application/json",
+            HTTP_STRIPE_SIGNATURE="ok",
+        )
+        assert resp.status_code == 200 and resp.json() == {"received": True}
+
+    # Webhook ADMIN_OVERRIDE fills missing stripe_customer_id
+    sub, _ = AccountSubscription.objects.update_or_create(
+        user=user,
+        defaults={
+            "tier": PlanTier.PLUS,
+            "source": AccountSubscription.Source.ADMIN_OVERRIDE,
+            "stripe_subscription_id": "sub_admin_ovr",
+            "stripe_customer_id": "",
+        },
+    )
+    with patch(
+        "apps.accounts.billing_api.stripe.Webhook.construct_event",
+        return_value={
+            "type": "customer.subscription.updated",
+            "data": {"object": {"id": "sub_admin_ovr", "customer": "cus_backfill"}},
+        },
+    ):
+        assert (
+            api_client.post(
+                "/api/v1/billing/webhook",
+                data=b"{}",
+                content_type="application/json",
+                HTTP_STRIPE_SIGNATURE="ok",
+            ).status_code
+            == 200
+        )
+    sub.refresh_from_db()
+    assert sub.stripe_customer_id == "cus_backfill"
+
+    # Webhook checkout.session.completed for DEDICATED creates DedicatedServerInstance
+    sub.source = AccountSubscription.Source.STRIPE
+    sub.save()
+    with patch(
+        "apps.accounts.billing_api.stripe.Webhook.construct_event",
+        return_value={
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "customer": "cus_backfill",
+                    "subscription": "sub_ded_999",
+                    "metadata": {
+                        "user_id": str(user.id),
+                        "tier": "DEDICATED",
+                        "requested_subdomain": "gold-node",
+                    },
+                }
+            },
+        },
+    ):
+        assert (
+            api_client.post(
+                "/api/v1/billing/webhook",
+                data=b"{}",
+                content_type="application/json",
+                HTTP_STRIPE_SIGNATURE="ok",
+            ).status_code
+            == 200
+        )
+    assert DedicatedServerInstance.objects.filter(
+        user=user, requested_subdomain="gold-node"
+    ).exists()
+    ded_status = api_client.get("/api/v1/billing/status", **headers)
+    assert ded_status.status_code == 200
+    assert ded_status.json()["dedicated_instance"]["requested_subdomain"] == "gold-node"
+
+    # Webhook customer.subscription.updated with status='canceled' resets tier to FREE
+    with patch(
+        "apps.accounts.billing_api.stripe.Webhook.construct_event",
+        return_value={
+            "type": "customer.subscription.updated",
+            "data": {
+                "object": {
+                    "id": "sub_ded_999",
+                    "customer": "cus_backfill",
+                    "status": "canceled",
+                    "items": {"data": [{"price": {"id": "price_ded"}}]},
+                }
+            },
+        },
+    ):
+        assert (
+            api_client.post(
+                "/api/v1/billing/webhook",
+                data=b"{}",
+                content_type="application/json",
+                HTTP_STRIPE_SIGNATURE="ok",
+            ).status_code
+            == 200
+        )
+    sub.refresh_from_db()
+    assert sub.tier == PlanTier.FREE
+    assert sub.status == AccountSubscription.Status.CANCELED
+
