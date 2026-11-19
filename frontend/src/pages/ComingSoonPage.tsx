@@ -12,6 +12,7 @@ import {
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { BrandLogo } from "../components/BrandLogo";
+import { SeoHead } from "../components/SeoHead";
 import { SiteFooter } from "../components/SiteFooter";
 
 const TEASER_FEATURES = [
@@ -72,6 +73,7 @@ export function ComingSoonPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+      <SeoHead pathname="/coming-soon" />
       {/* Top Bar */}
       <header className="border-b border-slate-800/80 bg-slate-950/80 backdrop-blur sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 md:px-8 h-16 flex items-center justify-between">
@@ -95,7 +97,7 @@ export function ComingSoonPage() {
         </div>
       </header>
 
-      <main className="flex-1">
+      <main id="main-content" className="flex-1">
         {/* Hero */}
         <section className="relative overflow-hidden border-b border-slate-800/70">
           <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(245,158,11,0.14),transparent_60%)] pointer-events-none" />
