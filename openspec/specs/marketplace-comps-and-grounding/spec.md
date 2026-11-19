@@ -43,3 +43,25 @@ The Settings UI SHALL group BYOK credentials into logical categories (AI Vision,
 #### Scenario: Configuring eBay or Numista keys in Settings
 - **WHEN** a user opens the Settings & BYOK Vault page
 - **THEN** eBay Client ID/Secret, Numista, NumisMedia, PCGS, Greysheet, Gemini, and Ollama fields are clearly grouped and labeled with setup hints
+
+### Requirement: Expanded trading card comp links
+The system SHALL generate deep-link comparison URLs for trading cards covering `eBay Sold`, `TCGplayer`, `PriceCharting`, `130point`, `Beckett` (Price Guide / Marketplace), `Card Ladder`, and `Collectr`, plus grading-specific verification links for `PSA` (cert + pop/APR), `BGS`, `TAG` (DIG Report), `CGC`, and `SGC`.
+
+#### Scenario: Trading card item shows expanded comp links
+- **WHEN** a user views a trading card item detail page
+- **THEN** the comps section includes clickable links for eBay Sold, TCGplayer, PriceCharting, 130point, Beckett, Card Ladder, and Collectr constructed from the card's title, set, card number, grading service, and grade
+
+#### Scenario: TAG-graded card shows DIG Report link
+- **WHEN** a trading card has `grading_service = "TAG"` and a non-empty `cert_number`
+- **THEN** the verification link points to `https://my.taggrading.com/card/{cert}`
+
+### Requirement: Comp Relevance Filtering and Outlier Trimming
+Marketplace comp lookups (including eBay sold and active listings) SHALL filter out irrelevant listings (bulk lots, replicas/copies, empty boxes/slabs, and mismatched grades or card finishes) and apply IQR/median outlier trimming before computing `market_value_unit`, `market_value_low`, and `market_value_high`.
+
+#### Scenario: Lot and replica listings are excluded from comps
+- **WHEN** marketplace comps return listings containing keywords such as `lot of`, `bulk`, `replica`, `copy`, `reproduction`, or `empty box` for a single-item query
+- **THEN** those listings SHALL be excluded before median and range calculation.
+
+#### Scenario: Active listings are discounted when used as fallback
+- **WHEN** sold comps are unavailable and active listings are used as a fallback
+- **THEN** the engine SHALL apply a configurable ask-to-sold discount factor and mark `is_estimate = True` with reduced `valuation_confidence`.

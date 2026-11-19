@@ -73,3 +73,57 @@ The system SHALL integrate trading card pricing and cert lookup providers—incl
 #### Scenario: Skipping bullion melt floor for trading cards
 - **WHEN** an appraisal runs for any `CARD` item (`metal_type="NONE"`)
 - **THEN** the engine omits `SPOT_MELT` from candidate valuation sources and anchors the appraisal on card price guides, realized comps, and AI estimates
+
+### Requirement: PSA population and spec metadata extraction
+The system SHALL extract `SpecID`, `TotalPopulation`, `PopulationHigher`, and label/qualifier attributes from PSA Public API cert lookup responses when `PSA_API_TOKEN` is configured, and cache them alongside the cert record.
+
+#### Scenario: PSA cert lookup returns population data
+- **WHEN** a user appraises or looks up a PSA-graded card with a valid `PSA_API_TOKEN`
+- **THEN** the system stores and returns `psa_spec_id`, `total_population`, and `population_higher` in the valuation and cert metadata
+
+### Requirement: PriceCharting multi-grade and all-card-type pricing
+The system SHALL map PriceCharting API price fields across ungraded and graded tiers (including `PSA 7`, `PSA 8`, `PSA 9`, `PSA 10`, `BGS 9.5`, `BGS 10`, `CGC 10`, `SGC 10`, and `TAG 10`) for all trading card categories (TCG and Sports) when `PRICECHARTING_API_KEY` is configured.
+
+#### Scenario: Graded card matches PriceCharting tier
+- **WHEN** a card is graded `BGS 9.5` and PriceCharting returns a `bgs-9-5-price` (or equivalent graded field)
+- **THEN** the system uses that tier's price as the primary PriceCharting valuation rather than falling back to ungraded
+
+#### Scenario: Ungraded card uses loose price
+- **WHEN** a card has no grading service or grade
+- **THEN** the system uses PriceCharting's `loose-price` normalized to USD
+
+### Requirement: Optional BYOK TCGplayer pricing provider
+The system SHALL support optional BYOK `TCGPLAYER_CLIENT_ID` and `TCGPLAYER_CLIENT_SECRET` credentials using OAuth2 client-credentials flow (`/token`) to fetch Market, Low, Mid, High, and Buylist pricing from `api.tcgplayer.com`, and SHALL skip the API call without error when credentials are not configured.
+
+#### Scenario: TCGplayer credentials configured
+- **WHEN** both `TCGPLAYER_CLIENT_ID` and `TCGPLAYER_CLIENT_SECRET` are configured for the tenant
+- **THEN** the appraisal engine exchanges them for a bearer token, queries TCGplayer pricing, and includes Market/Low/Mid/High comps in the appraisal result
+
+#### Scenario: TCGplayer credentials not configured
+- **WHEN** TCGplayer credentials are absent
+- **THEN** the appraisal engine skips the TCGplayer API provider and relies on configured alternatives and deep-link comps
+
+### Requirement: Optional BYOK Collectr pricing provider
+The system SHALL support an optional BYOK `COLLECTR_API_KEY` credential for approved Collectr API partners to fetch card market valuations, and SHALL skip the provider gracefully when not configured.
+
+#### Scenario: Collectr API key not configured
+- **WHEN** `COLLECTR_API_KEY` is not set
+- **THEN** the appraisal engine skips Collectr API calls without raising an error
+
+### Requirement: Grade- and Condition-Aware Source Weighting
+The appraisal engine SHALL weight and prioritize pricing sources based on provenance, recency, and grade/condition match: cert-verified grading APIs (PCGS, NGC, PMG, PSA) > exact-grade sold marketplace comps > condition-adjusted price guides (Greysheet, Numista, TCGplayer, Scryfall, PriceCharting) > bullion dealer or Goldback exchange benchmarks > spot melt value.
+
+#### Scenario: Precious-metal item never valued below melt
+- **WHEN** a bullion, coin, or round item with `fine_troy_oz > 0` is appraised and external comps or guides return a value below `melt_value_unit`
+- **THEN** the engine SHALL clamp `market_value_unit` to at least `melt_value_unit` and record `melt_floor_applied` in valuation drivers.
+
+#### Scenario: Graded slab prioritizes cert-verified or exact-grade comps
+- **WHEN** an item has `grading_service != NONE` and a `cert_number` or `grade`
+- **THEN** the engine SHALL prefer cert-verified pricing or comps matching the exact grade over ungraded/raw comps.
+
+### Requirement: Scheduled Background Re-Appraisal
+The system SHALL support a periodic background task that identifies stale items (`valued_at` older than a configurable TTL, or precious-metal items whose spot price has drifted beyond a configurable percentage threshold) and re-appraises them in batches.
+
+#### Scenario: Manual user value override is preserved
+- **WHEN** an item has a user-locked or `USER`-provenance `market_value_unit`
+- **THEN** the scheduled re-appraisal task SHALL skip overwriting `market_value_unit` while still updating `melt_value_unit` and reference metadata.
