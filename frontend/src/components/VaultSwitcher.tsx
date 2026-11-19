@@ -1,9 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, Plus, Vault, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   api,
   getWorkspaceRole,
+  isPlanLimitError,
   type AuthUser,
   type UserWorkspace,
 } from "../lib/api";
@@ -26,6 +28,7 @@ export function VaultSwitcher({
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
+  const [planLimitMessage, setPlanLimitMessage] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const vaults: UserWorkspace[] =
@@ -48,12 +51,16 @@ export function VaultSwitcher({
     onSuccess: async (created) => {
       setNewName("");
       setCreating(false);
+      setPlanLimitMessage(null);
       setOpen(false);
       toast.success(`Created vault "${created.name}".`);
       qc.invalidateQueries({ queryKey: ["workspaces"] });
       await onSwitchWorkspace?.(created.id);
     },
     onError: (err: Error) => {
+      if (isPlanLimitError(err)) {
+        setPlanLimitMessage(err.message);
+      }
       toast.error(err.message || "Failed to create vault.");
     },
   });
@@ -178,10 +185,28 @@ export function VaultSwitcher({
                   autoFocus
                   required
                   value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
+                  onChange={(e) => {
+                    setNewName(e.target.value);
+                    setPlanLimitMessage(null);
+                  }}
                   placeholder="e.g. IRA Bullion"
                   className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-100"
                 />
+                {planLimitMessage && (
+                  <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200 space-y-1">
+                    <div>{planLimitMessage}</div>
+                    <Link
+                      to="/settings#billing"
+                      onClick={() => {
+                        setOpen(false);
+                        setCreating(false);
+                      }}
+                      className="inline-block font-semibold text-amber-300 underline hover:text-amber-200"
+                    >
+                      Upgrade Plan
+                    </Link>
+                  </div>
+                )}
                 <button
                   type="submit"
                   disabled={!newName.trim() || createMut.isPending}

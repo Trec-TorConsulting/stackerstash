@@ -247,6 +247,8 @@ def test_multiple_vaults_crud_isolation_headers_and_byok_inheritance(api_client,
     from PIL import Image
 
     from apps.accounts.models import (
+        AccountSubscription,
+        PlanTier,
         Workspace,
         resolve_workspace_credential,
         resolve_workspace_secret,
@@ -257,6 +259,14 @@ def test_multiple_vaults_crud_isolation_headers_and_byok_inheritance(api_client,
     from apps.vision.services import _get_secret
 
     user, default_ws, token_a = user_a
+    AccountSubscription.objects.update_or_create(
+        user=user,
+        defaults={
+            "tier": PlanTier.PLUS,
+            "source": AccountSubscription.Source.ADMIN_OVERRIDE,
+            "status": AccountSubscription.Status.ACTIVE,
+        },
+    )
     _, bob_ws, _ = user_b
     headers_a = {"HTTP_AUTHORIZATION": f"Bearer {token_a}"}
 

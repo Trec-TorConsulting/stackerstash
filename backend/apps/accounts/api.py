@@ -22,8 +22,10 @@ from .models import (
     Workspace,
     WorkspaceInvitation,
     WorkspaceMembership,
+    assert_can_create_vault,
     create_default_workspace_for_user,
     get_owner_default_workspace,
+    get_user_entitlement_status,
 )
 
 auth_router = Router(tags=["Auth"])
@@ -91,6 +93,17 @@ class WorkspaceSettingsPatchIn(Schema):
     auto_sort_enabled: bool | None = None
 
 
+class PlanSummaryOut(Schema):
+    tier: str
+    name: str
+    max_vaults: int | None = None
+    max_items: int | None = None
+    owned_vault_count: int = 0
+    active_item_count: int = 0
+    enforce_tiers: bool = True
+    dedicated_server: bool = False
+
+
 class UserOut(Schema):
     id: UUID
     email: str
@@ -99,6 +112,7 @@ class UserOut(Schema):
     is_superuser: bool
     workspace: WorkspaceOut
     workspaces: list[WorkspaceOut] = []
+    plan: PlanSummaryOut | None = None
 
 
 class AuthResponse(Schema):
@@ -277,6 +291,7 @@ def _serialize_user(user: User, workspace=None) -> UserOut:
         (w for w in all_workspaces if w.id == ws.id),
         _serialize_workspace(ws, user=user),
     )
+    ent = get_user_entitlement_status(user)
     return UserOut(
         id=user.id,
         email=user.email,
@@ -285,6 +300,16 @@ def _serialize_user(user: User, workspace=None) -> UserOut:
         is_superuser=user.is_superuser,
         workspace=active_out,
         workspaces=all_workspaces,
+        plan=PlanSummaryOut(
+            tier=ent["tier"],
+            name=ent["plan"]["name"],
+            max_vaults=ent["max_vaults"],
+            max_items=ent["max_items"],
+            owned_vault_count=ent["owned_vault_count"],
+            active_item_count=ent["active_item_count"],
+            enforce_tiers=ent["enforce_tiers"],
+            dedicated_server=bool(ent["plan"]["dedicated_server"]),
+        ),
     )
 
 
@@ -384,6 +409,7 @@ def list_workspaces(request):
 def create_workspace(request, payload: WorkspaceCreateIn):
     import uuid as _uuid
 
+    assert_can_create_vault(request.user)
     name = (payload.name or "").strip()[:120]
     if not name:
         raise HttpError(400, "Vault name is required.")

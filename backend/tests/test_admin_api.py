@@ -154,3 +154,84 @@ def test_admin_user_aggregates_metrics_across_multiple_vaults(client):
     assert row["item_count"] == 3
     assert row["container_count"] == 2
     assert row["total_market_value"] == "2970.00"
+    assert row["tier"] == "FREE"
+    assert row["owned_vault_count"] == 3
+    assert row["active_item_count"] == 3
+
+
+@pytest.mark.django_db
+def test_admin_subscription_overrides_and_dedicated_instances(client):
+    import json
+
+    from apps.accounts.models import DedicatedServerInstance, PlanTier
+
+    admin = User.objects.create_superuser(email="sub_admin@stackerstash.com", password="password123")
+    create_default_workspace_for_user(admin, name="Ops Vault")
+    collector = User.objects.create_user(email="vip@example.com", password="password123")
+    create_default_workspace_for_user(collector, name="VIP Vault")
+
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {issue_access_token(admin)}"}
+
+    # Override user to DEDICATED with subdomain
+    patch_sub = client.patch(
+        f"/api/v1/admin/users/{collector.id}/subscription",
+        data=json.dumps({
+            "tier": "DEDICATED",
+            "requested_subdomain": "vip-stash",
+            "admin_notes": "Enterprise onboarding",
+        }),
+        content_type="application/json",
+        **headers,
+    )
+    assert patch_sub.status_code == 200
+    sub_data = patch_sub.json()
+    assert sub_data["tier"] == PlanTier.DEDICATED
+    assert sub_data["subscription_source"] == "ADMIN_OVERRIDE"
+
+    # Dedicated server instance automatically created & listed
+    inst_resp = client.get("/api/v1/admin/dedicated-instances", **headers)
+    assert inst_resp.status_code == 200
+    instances = inst_resp.json()
+    assert len(instances) == 1
+    inst_id = instances[0]["id"]
+    assert instances[0]["status"] == DedicatedServerInstance.Status.REQUESTED
+    assert instances[0]["requested_subdomain"] == "vip-stash"
+
+    # Reject bad URL
+    assert (
+        client.patch(
+            f"/api/v1/admin/dedicated-instances/{inst_id}",
+            data=json.dumps({"dedicated_url": "javascript:alert(1)"}),
+            content_type="application/json",
+            **headers,
+        ).status_code
+        == 400
+    )
+
+    # Mark ACTIVE with dedicated HTTPS URL
+    act_resp = client.patch(
+        f"/api/v1/admin/dedicated-instances/{inst_id}",
+        data=json.dumps({
+            "status": "ACTIVE",
+            "dedicated_url": "https://vip.stackerstash.com",
+            "admin_notes": "Deployed on dedicated node",
+        }),
+        content_type="application/json",
+        **headers,
+    )
+    assert act_resp.status_code == 200
+    act = act_resp.json()
+    assert act["status"] == "ACTIVE"
+    assert act["dedicated_url"] == "https://vip.stackerstash.com"
+    assert act["provisioned_at"] is not None
+
+    # Clear override reverts back to FREE
+    clr_resp = client.patch(
+        f"/api/v1/admin/users/{collector.id}/subscription",
+        data=json.dumps({"clear_override": True}),
+        content_type="application/json",
+        **headers,
+    )
+    assert clr_resp.status_code == 200
+    assert clr_resp.json()["tier"] == "FREE"
+    assert clr_resp.json()["subscription_source"] == "DEFAULT"

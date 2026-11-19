@@ -4,6 +4,8 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
 from .models import (
+    AccountSubscription,
+    DedicatedServerInstance,
     ProviderCredential,
     User,
     Workspace,
@@ -62,4 +64,33 @@ class ProviderCredentialAdmin(admin.ModelAdmin):
     list_filter = ("provider",)
     readonly_fields = ("masked_hint", "updated_at")
     exclude = ("encrypted_value",)
+
+
+@admin.register(AccountSubscription)
+class AccountSubscriptionAdmin(admin.ModelAdmin):
+    list_display = (
+        "user",
+        "tier",
+        "source",
+        "status",
+        "cancel_at_period_end",
+        "current_period_end",
+        "updated_at",
+    )
+    list_filter = ("tier", "source", "status")
+    search_fields = ("user__email", "stripe_customer_id", "stripe_subscription_id")
+
+
+@admin.register(DedicatedServerInstance)
+class DedicatedServerInstanceAdmin(admin.ModelAdmin):
+    list_display = (
+        "user",
+        "status",
+        "requested_subdomain",
+        "dedicated_url",
+        "provisioned_at",
+        "updated_at",
+    )
+    list_filter = ("status",)
+    search_fields = ("user__email", "requested_subdomain", "dedicated_url")
 

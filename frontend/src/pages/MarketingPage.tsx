@@ -216,33 +216,38 @@ export function MarketingPage() {
 
         {/* Tiers */}
         <section id="tiers" className="border-t border-slate-800/80 bg-slate-900/40">
-          <div className="max-w-5xl mx-auto px-4 md:px-8 py-16">
+          <div className="max-w-6xl mx-auto px-4 md:px-8 py-16">
             <div className="text-center mb-10">
               <h2 className="text-2xl md:text-3xl font-bold text-slate-50">
                 Simple, Collector-First Access
               </h2>
+              <p className="mt-2 text-sm text-slate-400">
+                CSV import, encrypted BYOK AI, and Shared Vaults included on every plan.
+              </p>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6">
-                <div className="text-sm font-semibold text-amber-400">Collector Vault (Free)</div>
-                <div className="mt-2 text-3xl font-extrabold text-slate-50">$0</div>
-                <p className="mt-1 text-xs text-slate-400">
-                  Full collection tracking with Bring-Your-Own-Key AI &amp; pricing.
-                </p>
-                <ul className="mt-5 space-y-2.5 text-sm text-slate-300">
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-400" /> Unlimited items &amp; containers
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-400" /> Live Gold, Silver, Platinum, Palladium &amp; Copper
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-400" /> CoinSnap, Numista &amp; PCGS/NGC CSV Importer
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-400" /> Encrypted BYOK Gemini / Ollama / Greysheet
-                  </li>
-                </ul>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+              <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 flex flex-col justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-amber-400">Collector Vault (Free)</div>
+                  <div className="mt-2 text-3xl font-extrabold text-slate-50">$0</div>
+                  <p className="mt-1 text-xs text-slate-400">
+                    1 Vault / 100 active items with BYOK AI &amp; collaboration.
+                  </p>
+                  <ul className="mt-5 space-y-2.5 text-sm text-slate-300">
+                    <li className="flex items-center gap-2">
+                      <Check className="h-4 w-4 text-emerald-400 shrink-0" /> 1 Owned Vault
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="h-4 w-4 text-emerald-400 shrink-0" /> Up to 100 Active Items
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="h-4 w-4 text-emerald-400 shrink-0" /> Live Spot &amp; CSV Importer
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="h-4 w-4 text-emerald-400 shrink-0" /> Shared Vaults &amp; BYOK AI
+                    </li>
+                  </ul>
+                </div>
                 <Link
                   to="/register"
                   className="mt-6 block text-center py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-sm font-semibold transition"
@@ -251,34 +256,106 @@ export function MarketingPage() {
                 </Link>
               </div>
 
-              <div className="rounded-2xl bg-slate-900 border border-amber-500/40 p-6">
-                <div className="text-sm font-semibold text-amber-300">Self-Hosted / Family Cluster</div>
-                <div className="mt-2 text-3xl font-extrabold text-slate-50">Open Source</div>
-                <p className="mt-1 text-xs text-slate-400">
-                  Run your own isolated instance via Docker Compose or Kubernetes.
-                </p>
-                <ul className="mt-5 space-y-2.5 text-sm text-slate-300">
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-amber-400" /> Complete data ownership on Postgres + S3/PVC
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-amber-400" /> Local Ollama vision models with zero cloud calls
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-amber-400" /> Multi-user workspaces &amp; Global Admin Portal
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-amber-400" /> Installable desktop &amp; mobile PWA
-                  </li>
-                </ul>
+              <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 flex flex-col justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-sky-400">Plus</div>
+                  <div className="mt-2 text-3xl font-extrabold text-slate-50">
+                    $9.99<span className="text-sm font-normal text-slate-400">/mo</span>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-400">
+                    10 Vaults / Unlimited Items for growing stacks &amp; portfolios.
+                  </p>
+                  <ul className="mt-5 space-y-2.5 text-sm text-slate-300">
+                    <li className="flex items-center gap-2">
+                      <Check className="h-4 w-4 text-sky-400 shrink-0" /> Up to 10 Owned Vaults
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="h-4 w-4 text-sky-400 shrink-0" /> Unlimited Catalog Items
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="h-4 w-4 text-sky-400 shrink-0" /> Shared Collaborator Roles
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="h-4 w-4 text-sky-400 shrink-0" /> Encrypted BYOK Inheritance
+                    </li>
+                  </ul>
+                </div>
                 <Link
-                  to="/login"
+                  to="/register"
+                  className="mt-6 block text-center py-2.5 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-sky-200 text-sm font-semibold transition"
+                >
+                  Start Plus
+                </Link>
+              </div>
+
+              <div className="rounded-2xl bg-slate-900 border border-amber-500/40 p-6 flex flex-col justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-amber-300">Unlimited</div>
+                  <div className="mt-2 text-3xl font-extrabold text-slate-50">
+                    $19.99<span className="text-sm font-normal text-slate-400">/mo</span>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Unlimited Vaults / Unlimited Items for serious dealers &amp; estates.
+                  </p>
+                  <ul className="mt-5 space-y-2.5 text-sm text-slate-300">
+                    <li className="flex items-center gap-2">
+                      <Check className="h-4 w-4 text-amber-400 shrink-0" /> Unlimited Owned Vaults
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="h-4 w-4 text-amber-400 shrink-0" /> Unlimited Catalog Items
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="h-4 w-4 text-amber-400 shrink-0" /> Insurance &amp; Export Suites
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="h-4 w-4 text-amber-400 shrink-0" /> Priority Cloud Support
+                    </li>
+                  </ul>
+                </div>
+                <Link
+                  to="/register"
                   className="mt-6 block text-center py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-bold transition"
                 >
-                  Launch Your Vault
+                  Choose Unlimited
+                </Link>
+              </div>
+
+              <div className="rounded-2xl bg-slate-900 border border-emerald-500/40 p-6 flex flex-col justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-emerald-300">Dedicated Server</div>
+                  <div className="mt-2 text-3xl font-extrabold text-slate-50">
+                    $99.99<span className="text-sm font-normal text-slate-400">/mo</span>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Dedicated Servers with Dedicated Unlimited Vaults / Unlimited Items.
+                  </p>
+                  <ul className="mt-5 space-y-2.5 text-sm text-slate-300">
+                    <li className="flex items-center gap-2">
+                      <Check className="h-4 w-4 text-emerald-400 shrink-0" /> Isolated Dedicated Instance
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="h-4 w-4 text-emerald-400 shrink-0" /> Unlimited Vaults &amp; Items
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="h-4 w-4 text-emerald-400 shrink-0" /> Custom Subdomain Hosting
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="h-4 w-4 text-emerald-400 shrink-0" /> Dedicated DB &amp; Media Storage
+                    </li>
+                  </ul>
+                </div>
+                <Link
+                  to="/register"
+                  className="mt-6 block text-center py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-200 text-sm font-semibold transition"
+                >
+                  Request Dedicated
                 </Link>
               </div>
             </div>
+            <p className="mt-6 text-center text-xs text-slate-500">
+              Self-hosting on Docker Compose or Kubernetes? Set{" "}
+              <code className="text-slate-300">BILLING_ENFORCE_TIERS=false</code> for unmetered private access.
+            </p>
           </div>
         </section>
       </main>

@@ -180,6 +180,19 @@ READY_CHECK_REDIS = os.getenv("READY_CHECK_REDIS", "false" if DEBUG else "true")
 # JWT config
 JWT_ACCESS_TTL_SECONDS = int(os.getenv("JWT_ACCESS_TTL_SECONDS", "86400"))
 
+# Subscription Tiers & Stripe Billing
+APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:5173").rstrip("/")
+BILLING_ENFORCE_TIERS = os.getenv("BILLING_ENFORCE_TIERS", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
+STRIPE_PRICE_PLUS = os.getenv("STRIPE_PRICE_PLUS", "").strip()
+STRIPE_PRICE_UNLIMITED = os.getenv("STRIPE_PRICE_UNLIMITED", "").strip()
+STRIPE_PRICE_DEDICATED = os.getenv("STRIPE_PRICE_DEDICATED", "").strip()
+
 # Celery / Redis
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", REDIS_URL)

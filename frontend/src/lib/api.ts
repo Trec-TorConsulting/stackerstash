@@ -26,6 +26,102 @@ export function setActiveWorkspaceId(workspaceId: string | null): void {
 }
 
 export type WorkspaceRole = "OWNER" | "EDITOR" | "VIEWER";
+export type PlanTierCode = "FREE" | "PLUS" | "UNLIMITED" | "DEDICATED";
+
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  limit_type?: string;
+  current_usage?: number;
+  limit?: number | null;
+  current_tier?: string;
+
+  constructor(
+    message: string,
+    opts: {
+      status: number;
+      code?: string;
+      limit_type?: string;
+      current_usage?: number;
+      limit?: number | null;
+      current_tier?: string;
+    }
+  ) {
+    super(message);
+    this.name = "ApiError";
+    this.status = opts.status;
+    this.code = opts.code;
+    this.limit_type = opts.limit_type;
+    this.current_usage = opts.current_usage;
+    this.limit = opts.limit;
+    this.current_tier = opts.current_tier;
+  }
+}
+
+export function isPlanLimitError(err: unknown): err is ApiError {
+  return (
+    err instanceof ApiError &&
+    (err.status === 402 || err.code === "PLAN_LIMIT_REACHED")
+  );
+}
+
+export interface PlanSummary {
+  tier: PlanTierCode | string;
+  name: string;
+  max_vaults: number | null;
+  max_items: number | null;
+  owned_vault_count: number;
+  active_item_count: number;
+  enforce_tiers: boolean;
+  dedicated_server: boolean;
+}
+
+export interface PlanInfo {
+  tier: PlanTierCode | string;
+  name: string;
+  monthly_price_cents: number;
+  price_display: string;
+  max_vaults: number | null;
+  max_items: number | null;
+  dedicated_server: boolean;
+  summary: string;
+  checkout_enabled: boolean;
+}
+
+export interface DedicatedInstanceInfo {
+  id: string;
+  status: "REQUESTED" | "PROVISIONING" | "ACTIVE" | "SUSPENDED" | string;
+  requested_subdomain: string;
+  dedicated_url: string;
+  admin_notes: string;
+  provisioned_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BillingStatus {
+  tier: PlanTierCode | string;
+  plan_name: string;
+  price_display: string;
+  source: string;
+  status: string;
+  enforce_tiers: boolean;
+  max_vaults: number | null;
+  max_items: number | null;
+  owned_vault_count: number;
+  active_item_count: number;
+  cancel_at_period_end: boolean;
+  current_period_end: string | null;
+  has_stripe_customer: boolean;
+  checkout_configured: boolean;
+  dedicated_instance?: DedicatedInstanceInfo | null;
+}
+
+export interface AdminDedicatedInstanceRecord extends DedicatedInstanceInfo {
+  user_id: string;
+  user_email: string;
+  user_display_name: string;
+}
 
 export interface UserWorkspace {
   id: string;
@@ -125,6 +221,7 @@ export interface AuthUser {
   is_superuser: boolean;
   workspace: UserWorkspace;
   workspaces?: UserWorkspace[];
+  plan?: PlanSummary | null;
 }
 
 export interface AdminOverview {
@@ -161,6 +258,11 @@ export interface AdminUserRecord {
   item_count: number;
   container_count: number;
   total_market_value: string;
+  tier?: string;
+  subscription_source?: string;
+  subscription_status?: string;
+  owned_vault_count?: number;
+  active_item_count?: number;
 }
 
 export interface AdminWorkspaceRecord {
@@ -473,13 +575,30 @@ async function _authorizedFetch(
       setAuthToken(null);
     }
     let detail = `Request failed (${resp.status})`;
+    let code: string | undefined;
+    let limit_type: string | undefined;
+    let current_usage: number | undefined;
+    let limit: number | null | undefined;
+    let current_tier: string | undefined;
     try {
       const err = await resp.json();
       detail = err.detail || err.message || detail;
+      code = err.code;
+      limit_type = err.limit_type;
+      current_usage = err.current_usage;
+      limit = err.limit;
+      current_tier = err.current_tier;
     } catch {
       // ignore non-json
     }
-    throw new Error(detail);
+    throw new ApiError(detail, {
+      status: resp.status,
+      code,
+      limit_type,
+      current_usage,
+      limit,
+      current_tier,
+    });
   }
   return resp;
 }
@@ -806,5 +925,49 @@ export const api = {
     const suffix = q ? `?q=${encodeURIComponent(q)}` : "";
     return apiFetch<AdminWorkspaceRecord[]>(`/admin/workspaces${suffix}`);
   },
+  getPlans: () => apiFetch<PlanInfo[]>("/billing/plans"),
+  getBillingStatus: () => apiFetch<BillingStatus>("/billing/status"),
+  createCheckoutSession: (payload: {
+    tier: "PLUS" | "UNLIMITED" | "DEDICATED";
+    requested_subdomain?: string;
+  }) =>
+    apiFetch<{ url: string; session_id: string }>("/billing/checkout", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  createPortalSession: () =>
+    apiFetch<{ url: string }>("/billing/portal", {
+      method: "POST",
+    }),
+  adminUpdateUserSubscription: (
+    userId: string,
+    payload: {
+      tier?: string;
+      clear_override?: boolean;
+      admin_notes?: string;
+      requested_subdomain?: string;
+    }
+  ) =>
+    apiFetch<AdminUserRecord>(`/admin/users/${userId}/subscription`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  adminListDedicatedInstances: () =>
+    apiFetch<AdminDedicatedInstanceRecord[]>("/admin/dedicated-instances"),
+  adminUpdateDedicatedInstance: (
+    instanceId: string,
+    payload: {
+      status?: string;
+      dedicated_url?: string;
+      admin_notes?: string;
+    }
+  ) =>
+    apiFetch<AdminDedicatedInstanceRecord>(
+      `/admin/dedicated-instances/${instanceId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      }
+    ),
 };
 
