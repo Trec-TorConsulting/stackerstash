@@ -4,8 +4,9 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../components/ToastProvider";
-import { api, type ContainerNode } from "../lib/api";
+import { api, type ContainerNode, type UserWorkspace } from "../lib/api";
 import { formatUsd } from "../lib/format";
+import { useWorkspacePermissions } from "../lib/workspaceContext";
 
 function flattenContainers(
   nodes: ContainerNode[],
@@ -35,10 +36,12 @@ function collectSubtreeIds(node: ContainerNode): Set<string> {
 
 function ContainerTreeBranch({
   node,
+  canEdit,
   onEdit,
   onDelete,
 }: {
   node: ContainerNode;
+  canEdit: boolean;
   onEdit: (node: ContainerNode) => void;
   onDelete: (node: ContainerNode) => void;
 }) {
@@ -72,28 +75,38 @@ function ContainerTreeBranch({
           >
             View Items
           </Link>
-          <button
-            type="button"
-            onClick={() => onEdit(node)}
-            className="text-slate-400 hover:text-amber-300 transition"
-            aria-label={`Edit ${node.name}`}
-          >
-            <Pencil className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => onDelete(node)}
-            className="text-slate-500 hover:text-rose-400 transition"
-            aria-label={`Delete ${node.name}`}
-          >
-            <Trash2 className="h-4 w-4" />
-          </button>
+          {canEdit && (
+            <>
+              <button
+                type="button"
+                onClick={() => onEdit(node)}
+                className="text-slate-400 hover:text-amber-300 transition"
+                aria-label={`Edit ${node.name}`}
+              >
+                <Pencil className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onDelete(node)}
+                className="text-slate-500 hover:text-rose-400 transition"
+                aria-label={`Delete ${node.name}`}
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </>
+          )}
         </div>
       </div>
       {node.children.length > 0 && (
         <div className="pl-6 border-l border-slate-800 space-y-2">
           {node.children.map((ch) => (
-            <ContainerTreeBranch key={ch.id} node={ch} onEdit={onEdit} onDelete={onDelete} />
+            <ContainerTreeBranch
+              key={ch.id}
+              node={ch}
+              canEdit={canEdit}
+              onEdit={onEdit}
+              onDelete={onDelete}
+            />
           ))}
         </div>
       )}
@@ -101,7 +114,8 @@ function ContainerTreeBranch({
   );
 }
 
-export function ContainersPage() {
+export function ContainersPage({ activeWorkspace }: { activeWorkspace?: UserWorkspace } = {}) {
+  const { canEdit } = useWorkspacePermissions(activeWorkspace);
   const qc = useQueryClient();
   const toast = useToast();
   const [name, setName] = useState("");
@@ -200,13 +214,14 @@ export function ContainersPage() {
         </p>
       </div>
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (name.trim()) createMut.mutate();
-        }}
-        className="flex flex-wrap gap-2.5 p-4 rounded-2xl bg-slate-900 border border-slate-800"
-      >
+      {canEdit && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (name.trim()) createMut.mutate();
+          }}
+          className="flex flex-wrap gap-2.5 p-4 rounded-2xl bg-slate-900 border border-slate-800"
+        >
         <input
           required
           aria-label="New container name"
@@ -254,9 +269,10 @@ export function ContainersPage() {
         >
           <FolderPlus className="h-4 w-4" /> Add
         </button>
-      </form>
+        </form>
+      )}
 
-      {editingNode && (
+      {canEdit && editingNode && (
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -391,6 +407,7 @@ export function ContainersPage() {
               <ContainerTreeBranch
                 key={node.id}
                 node={node}
+                canEdit={canEdit}
                 onEdit={startEdit}
                 onDelete={(n) => setPendingDelete(n)}
               />

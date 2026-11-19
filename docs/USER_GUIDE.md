@@ -11,7 +11,7 @@ Welcome to **Stacker Stash** — your self-hosted or SaaS vault for tracking coi
 4. [Migrating from CoinSnap, Numista, PCGS/NGC, or Spreadsheets](#4-migrating-from-coinsnap-numista-pcgsngc-or-spreadsheets)
 5. [Organizing Storage Containers](#5-organizing-storage-containers)
 6. [Appraisals, Cert Verification & Insurance Reports](#6-appraisals-cert-verification--insurance-reports)
-7. [Configuring BYOK API Keys (Settings)](#7-configuring-byok-api-keys-settings)
+7. [Multi-Vault Management, Shared Vaults & BYOK API Keys (Settings)](#7-multi-vault-management-account-security--byok-api-keys-settings)
 8. [Django Operator Admin Portal](#8-django-operator-admin-portal)
 
 ---
@@ -90,6 +90,13 @@ Stacker Stash includes an **Import / Migrate** wizard on the **Collection** page
 
 ## 7. Multi-Vault Management, Account Security & BYOK API Keys (Settings)
 - **Managing Multiple Vaults**: Use the **Vault Switcher** in the sidebar/header (or **My Vaults** in **Settings**) to create isolated vaults (e.g., *Personal Stack*, *IRA Bullion*, *Trading Cards*), switch active vaults, edit vault names/descriptions/currencies, set a **Default** vault, or delete non-final vaults safely. Each vault keeps its own items, containers, dashboard totals, exports, and slab cert uniqueness.
+- **Shared Vaults & Role-Based Collaboration**:
+  - **Invite Collaborators**: As a vault **Owner**, open **Settings → Vault Sharing & Members** while your vault is active, enter the collaborator's email, pick a role, and click **Send Invite** (or copy/revoke pending invite links).
+  - **Roles**:
+    - **Owner**: Full control over items, containers, appraisals, vault settings, member invitations, and BYOK API keys.
+    - **Editor (`View & Catalog`)**: Can view the vault, export reports, manage items/containers/photos/CSV imports, and run Vision AI identification & appraisals using the vault owner's encrypted credentials — without seeing or modifying owner API keys or vault configuration.
+    - **Viewer (`Read-only`)**: Can browse Dashboard/Collection/Containers/Item Details, refresh spot prices, and export CSV/JSON/Insurance reports, with all write controls hidden in the UI and blocked (`403`) on the API.
+  - **Joining & Leaving**: Accept or decline pending invites from the **Pending Vault Invitations** banner at the top of the app or via a shared `/invite/<token>` link (with automatic prefill and post-login redirect). Collaborators can inspect their shared role in **Settings → Shared Vault Access** and click **Leave Shared Vault** at any time.
 - **Account Security**: Update your display name, change your password, or permanently delete your account under **Profile & Account Security**.
 - **BYOK Inheritance & Per-Vault Overrides**: Configure Bring-Your-Own-Key API credentials encrypted at rest in **Settings**:
   - Keys saved on your **Default** vault are automatically inherited across secondary vaults (Vision AI, appraisals, deferred AI enrichment, and Ollama auto-sort).

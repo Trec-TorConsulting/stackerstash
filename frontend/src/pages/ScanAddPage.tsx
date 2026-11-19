@@ -15,9 +15,10 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { PhotoCropRotateView } from "../components/PhotoCropRotateView";
-import { api, type ContainerNode, type VisionCandidate } from "../lib/api";
+import { api, type ContainerNode, type UserWorkspace, type VisionCandidate } from "../lib/api";
+import { useWorkspacePermissions } from "../lib/workspaceContext";
 import {
   autoCropImageFile,
   harmonizeCropPair,
@@ -107,7 +108,8 @@ function flattenContainers(nodes: ContainerNode[], depth = 0): Array<{ id: strin
   return out;
 }
 
-export function ScanAddPage() {
+export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspace } = {}) {
+  const { canEdit } = useWorkspacePermissions(activeWorkspace);
   const navigate = useNavigate();
   const qc = useQueryClient();
 
@@ -778,6 +780,24 @@ export function ScanAddPage() {
       form.set_name.trim() ||
       form.notes.trim()
   );
+
+  if (!canEdit) {
+    return (
+      <div className="max-w-xl mx-auto p-6 rounded-2xl bg-slate-900 border border-slate-800 text-center space-y-4">
+        <h1 className="text-xl font-bold text-slate-100">Read-Only Vault Access</h1>
+        <p className="text-sm text-slate-400">
+          You have Viewer (read-only) permissions in this shared vault. Ask the vault
+          owner to upgrade your role to Editor to scan, upload, or catalog items.
+        </p>
+        <Link
+          to="/collection"
+          className="inline-flex px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-sm"
+        >
+          Back to Collection Vault
+        </Link>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import secrets
 import uuid
+from datetime import timedelta
 
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
+from django.utils import timezone
 from django.utils.text import slugify
 
 from .crypto import decrypt_secret, encrypt_secret, mask_secret
@@ -99,6 +102,72 @@ class WorkspaceMembership(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user.email} -> {self.workspace.slug} ({self.role})"
+
+
+def _default_invitation_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _default_invitation_expiry():
+    return timezone.now() + timedelta(days=14)
+
+
+class WorkspaceInvitation(models.Model):
+    """Email-targeted invitation granting Editor or Viewer access to a shared vault."""
+
+    class Role(models.TextChoices):
+        EDITOR = "EDITOR", "Editor"
+        VIEWER = "VIEWER", "Viewer"
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        ACCEPTED = "ACCEPTED", "Accepted"
+        DECLINED = "DECLINED", "Declined"
+        REVOKED = "REVOKED", "Revoked"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(
+        Workspace, on_delete=models.CASCADE, related_name="invitations"
+    )
+    invited_by = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="sent_workspace_invitations"
+    )
+    email = models.EmailField()
+    role = models.CharField(max_length=16, choices=Role.choices, default=Role.VIEWER)
+    token = models.CharField(
+        max_length=128, unique=True, default=_default_invitation_token
+    )
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.PENDING
+    )
+    expires_at = models.DateTimeField(default=_default_invitation_expiry)
+    accepted_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="accepted_workspace_invitations",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    responded_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("email", "status")),
+            models.Index(fields=("workspace", "status")),
+        ]
+        ordering = ("-created_at",)
+
+    @property
+    def is_expired(self) -> bool:
+        return timezone.now() >= self.expires_at
+
+    def save(self, *args, **kwargs) -> None:
+        self.email = (self.email or "").strip().lower()
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.email} -> {self.workspace.slug} ({self.role}, {self.status})"
 
 
 class ProviderCredential(models.Model):

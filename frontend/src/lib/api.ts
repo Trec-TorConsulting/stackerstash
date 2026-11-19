@@ -25,6 +25,8 @@ export function setActiveWorkspaceId(workspaceId: string | null): void {
   }
 }
 
+export type WorkspaceRole = "OWNER" | "EDITOR" | "VIEWER";
+
 export interface UserWorkspace {
   id: string;
   name: string;
@@ -35,6 +37,9 @@ export interface UserWorkspace {
   is_default?: boolean;
   item_count?: number;
   total_market_value?: string;
+  role?: WorkspaceRole;
+  is_shared?: boolean;
+  owner_email?: string;
 }
 
 export interface WorkspaceSettings {
@@ -45,6 +50,71 @@ export interface WorkspaceSettings {
   auto_sort_enabled: boolean;
   description?: string;
   is_default?: boolean;
+  role?: WorkspaceRole;
+  is_shared?: boolean;
+  owner_email?: string;
+}
+
+export function getWorkspaceRole(
+  ws?: { role?: WorkspaceRole; is_shared?: boolean } | null
+): WorkspaceRole {
+  if (ws?.role === "OWNER" || ws?.role === "EDITOR" || ws?.role === "VIEWER") {
+    return ws.role;
+  }
+  return ws?.is_shared ? "VIEWER" : "OWNER";
+}
+
+export function canEditWorkspace(
+  ws?: { role?: WorkspaceRole; is_shared?: boolean } | null
+): boolean {
+  const role = getWorkspaceRole(ws);
+  return role === "OWNER" || role === "EDITOR";
+}
+
+export function isWorkspaceOwner(
+  ws?: { role?: WorkspaceRole; is_shared?: boolean } | null
+): boolean {
+  return getWorkspaceRole(ws) === "OWNER";
+}
+
+export interface WorkspaceInvitation {
+  id: string;
+  workspace_id: string;
+  workspace_name: string;
+  email: string;
+  role: "EDITOR" | "VIEWER";
+  status: "PENDING" | "ACCEPTED" | "DECLINED" | "REVOKED";
+  token: string;
+  invite_path: string;
+  invited_by_email: string;
+  accepted_by_email?: string | null;
+  expires_at: string;
+  is_expired: boolean;
+  created_at: string;
+  responded_at?: string | null;
+}
+
+export interface InvitePreview {
+  id: string;
+  workspace_id: string;
+  workspace_name: string;
+  owner_email: string;
+  invited_by_email: string;
+  email: string;
+  role: "EDITOR" | "VIEWER";
+  status: "PENDING" | "ACCEPTED" | "DECLINED" | "REVOKED";
+  expires_at: string;
+  is_expired: boolean;
+}
+
+export interface WorkspaceMember {
+  id: string;
+  user_id: string;
+  email: string;
+  display_name: string;
+  role: WorkspaceRole;
+  is_owner: boolean;
+  created_at: string;
 }
 
 export interface AuthUser {
@@ -469,6 +539,54 @@ export const api = {
     }),
   deleteWorkspace: (workspaceId: string) =>
     apiFetch<void>(`/auth/workspaces/${workspaceId}`, { method: "DELETE" }),
+  listWorkspaceInvites: (workspaceId: string) =>
+    apiFetch<WorkspaceInvitation[]>(`/auth/workspaces/${workspaceId}/invites`),
+  createWorkspaceInvite: (
+    workspaceId: string,
+    payload: { email: string; role: "EDITOR" | "VIEWER" }
+  ) =>
+    apiFetch<WorkspaceInvitation>(`/auth/workspaces/${workspaceId}/invites`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  revokeWorkspaceInvite: (workspaceId: string, inviteId: string) =>
+    apiFetch<void>(`/auth/workspaces/${workspaceId}/invites/${inviteId}`, {
+      method: "DELETE",
+    }),
+  listWorkspaceMembers: (workspaceId: string) =>
+    apiFetch<WorkspaceMember[]>(`/auth/workspaces/${workspaceId}/members`),
+  updateWorkspaceMember: (
+    workspaceId: string,
+    membershipId: string,
+    role: "EDITOR" | "VIEWER"
+  ) =>
+    apiFetch<WorkspaceMember>(
+      `/auth/workspaces/${workspaceId}/members/${membershipId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ role }),
+      }
+    ),
+  removeWorkspaceMember: (workspaceId: string, membershipId: string) =>
+    apiFetch<void>(`/auth/workspaces/${workspaceId}/members/${membershipId}`, {
+      method: "DELETE",
+    }),
+  leaveWorkspace: (workspaceId: string) =>
+    apiFetch<void>(`/auth/workspaces/${workspaceId}/leave`, {
+      method: "POST",
+    }),
+  listPendingInvites: () =>
+    apiFetch<WorkspaceInvitation[]>("/auth/invites/pending"),
+  previewInvite: (token: string) =>
+    apiFetch<InvitePreview>(`/auth/invites/${encodeURIComponent(token)}`),
+  acceptInvite: (token: string) =>
+    apiFetch<UserWorkspace>(`/auth/invites/${encodeURIComponent(token)}/accept`, {
+      method: "POST",
+    }),
+  declineInvite: (token: string) =>
+    apiFetch<void>(`/auth/invites/${encodeURIComponent(token)}/decline`, {
+      method: "POST",
+    }),
   updateProfile: (payload: { display_name: string }) =>
     apiFetch<AuthUser>("/auth/me", {
       method: "PATCH",

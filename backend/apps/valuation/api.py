@@ -6,7 +6,7 @@ from uuid import UUID
 from django.shortcuts import get_object_or_404
 from ninja import Router, Schema
 
-from apps.accounts.auth import WorkspaceAuth
+from apps.accounts.auth import WorkspaceAuth, require_editor
 from apps.catalog.api import ItemOut, _item_to_out
 from apps.catalog.models import CollectionItem
 
@@ -58,6 +58,7 @@ class ValuationHistoryOut(Schema):
 
 @valuation_router.post("/items/{item_id}/appraise", response=AppraisalJobOut)
 def appraise_collection_item(request, item_id: UUID, sync: bool = False):
+    require_editor(request)
     item = get_object_or_404(
         CollectionItem.objects.select_related("container").prefetch_related("photos"),
         id=item_id,

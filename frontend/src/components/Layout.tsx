@@ -1,16 +1,27 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Camera,
+  Check,
   Coins,
   FolderTree,
   LayoutDashboard,
   LogOut,
   Settings,
   ShieldCheck,
+  Users,
+  X,
 } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
-import type { AuthUser } from "../lib/api";
+import {
+  api,
+  canEditWorkspace,
+  getWorkspaceRole,
+  type AuthUser,
+} from "../lib/api";
+import { WorkspaceProvider } from "../lib/workspaceContext";
 import { BrandLogo } from "./BrandLogo";
 import { SiteFooter } from "./SiteFooter";
+import { useToast } from "./ToastProvider";
 import { VaultSwitcher } from "./VaultSwitcher";
 
 interface LayoutProps {
@@ -19,19 +30,60 @@ interface LayoutProps {
   onSwitchWorkspace?: (workspaceId: string) => Promise<void> | void;
 }
 
-const NAV_ITEMS = [
+const BASE_NAV_ITEMS = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/collection", label: "Vault", icon: Coins },
-  { to: "/scan", label: "Scan / Add", icon: Camera },
+  { to: "/scan", label: "Scan / Add", icon: Camera, requiresEdit: true },
   { to: "/containers", label: "Containers", icon: FolderTree },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function Layout({ user, onLogout, onSwitchWorkspace }: LayoutProps) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const canEdit = canEditWorkspace(user.workspace);
+  const activeRole = getWorkspaceRole(user.workspace);
   const isGlobalAdmin = user.is_staff || user.is_superuser;
+  const visibleBase = BASE_NAV_ITEMS.filter(
+    (item) => !item.requiresEdit || canEdit
+  );
   const navItems = isGlobalAdmin
-    ? [...NAV_ITEMS, { to: "/admin", label: "Admin", icon: ShieldCheck }]
-    : NAV_ITEMS;
+    ? [...visibleBase, { to: "/admin", label: "Admin", icon: ShieldCheck }]
+    : visibleBase;
+
+  const pendingInvitesQuery = useQuery({
+    queryKey: ["pendingInvites", user.id],
+    queryFn: () =>
+      typeof api.listPendingInvites === "function"
+        ? api.listPendingInvites()
+        : Promise.resolve([]),
+  });
+
+  const acceptInviteMut = useMutation({
+    mutationFn: (token: string) => api.acceptInvite(token),
+    onSuccess: async (ws) => {
+      toast.success(`Joined shared vault "${ws.name}".`);
+      qc.invalidateQueries({ queryKey: ["pendingInvites"] });
+      qc.invalidateQueries({ queryKey: ["workspaces"] });
+      await onSwitchWorkspace?.(ws.id);
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to accept invitation.");
+    },
+  });
+
+  const declineInviteMut = useMutation({
+    mutationFn: (token: string) => api.declineInvite(token),
+    onSuccess: () => {
+      toast.info("Vault invitation declined.");
+      qc.invalidateQueries({ queryKey: ["pendingInvites"] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to decline invitation.");
+    },
+  });
+
+  const pendingInvites = pendingInvitesQuery.data ?? [];
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col md:flex-row">
@@ -41,8 +93,20 @@ export function Layout({ user, onLogout, onSwitchWorkspace }: LayoutProps) {
           <div className="px-2 py-3 mb-3">
             <BrandLogo size="md" subtitle={user.workspace.name} />
           </div>
-          <div className="mb-5">
+          <div className="mb-5 space-y-1.5">
             <VaultSwitcher user={user} onSwitchWorkspace={onSwitchWorkspace} />
+            {user.workspace.is_shared && (
+              <div className="px-2 text-[11px] text-sky-300 flex items-center justify-between gap-1">
+                <span>
+                  Shared ({activeRole === "EDITOR" ? "Editor" : "Viewer"})
+                </span>
+                {user.workspace.owner_email && (
+                  <span className="text-slate-500 truncate max-w-[115px]">
+                    {user.workspace.owner_email}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <nav className="space-y-1">
             {navItems.map(({ to, label, icon: Icon }) => (
@@ -96,7 +160,63 @@ export function Layout({ user, onLogout, onSwitchWorkspace }: LayoutProps) {
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
         <main className="flex-1 pb-10 md:pb-8 px-4 py-5 md:px-8 md:py-7 max-w-7xl w-full mx-auto">
-          <Outlet />
+          {pendingInvites.length > 0 && (
+            <section
+              aria-label="Pending Vault Invitations"
+              className="no-print mb-5 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 space-y-2.5"
+            >
+              <div className="flex items-center gap-2 text-sm font-semibold text-amber-300">
+                <Users className="h-4 w-4 shrink-0" />
+                Pending Vault Invitations ({pendingInvites.length})
+              </div>
+              <div className="space-y-2">
+                {pendingInvites.map((inv) => (
+                  <div
+                    key={inv.id}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-900/90 border border-slate-800 px-3 py-2 text-xs"
+                  >
+                    <div className="min-w-0">
+                      <span className="font-semibold text-slate-100">
+                        {inv.workspace_name}
+                      </span>
+                      <span className="text-slate-400">
+                        {" "}
+                        • invited by {inv.invited_by_email} as{" "}
+                      </span>
+                      <span className="font-medium text-amber-300">
+                        {inv.role === "EDITOR" ? "Editor" : "Viewer"}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={
+                          acceptInviteMut.isPending || declineInviteMut.isPending
+                        }
+                        onClick={() => acceptInviteMut.mutate(inv.token)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold disabled:opacity-50"
+                      >
+                        <Check className="h-3.5 w-3.5" /> Accept
+                      </button>
+                      <button
+                        type="button"
+                        disabled={
+                          acceptInviteMut.isPending || declineInviteMut.isPending
+                        }
+                        onClick={() => declineInviteMut.mutate(inv.token)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 disabled:opacity-50"
+                      >
+                        <X className="h-3.5 w-3.5" /> Decline
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+          <WorkspaceProvider value={user.workspace}>
+            <Outlet />
+          </WorkspaceProvider>
         </main>
         <div className="pb-16 md:pb-0">
           <SiteFooter compact />

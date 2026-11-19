@@ -18,6 +18,7 @@ import { CollectionPage } from "./pages/CollectionPage";
 import { ComingSoonPage } from "./pages/ComingSoonPage";
 import { ContainersPage } from "./pages/ContainersPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { InviteAcceptPage } from "./pages/InviteAcceptPage";
 import { ItemDetailPage } from "./pages/ItemDetailPage";
 import { MarketingPage } from "./pages/MarketingPage";
 import { ScanAddPage } from "./pages/ScanAddPage";
@@ -108,6 +109,10 @@ export function AppRoutes() {
           path="/register"
           element={<AuthPage onAuth={handleAuthenticated} initialMode="register" />}
         />
+        <Route
+          path="/invite/:token"
+          element={<InviteAcceptPage currentUser={null} />}
+        />
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     );
@@ -144,6 +149,16 @@ export function AppRoutes() {
           }
         />
         <Route path="/admin" element={<AdminPortalPage currentUser={user} />} />
+        <Route
+          path="/invite/:token"
+          element={
+            <InviteAcceptPage
+              currentUser={user}
+              onAccepted={(wsId) => refreshUserSession(wsId)}
+              onSwitchAccount={handleLogout}
+            />
+          }
+        />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

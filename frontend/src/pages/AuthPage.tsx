@@ -1,6 +1,6 @@
 import { Eye, EyeOff } from "lucide-react";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { BrandLogo } from "../components/BrandLogo";
 import { SiteFooter } from "../components/SiteFooter";
 import { api, setAuthToken, type AuthUser } from "../lib/api";
@@ -10,9 +10,21 @@ interface AuthPageProps {
   initialMode?: "login" | "register";
 }
 
+function getSafeNextPath(rawNext: string | null): string | null {
+  if (!rawNext || !rawNext.startsWith("/") || rawNext.startsWith("//")) {
+    return null;
+  }
+  return rawNext;
+}
+
 export function AuthPage({ onAuth, initialMode = "login" }: AuthPageProps) {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const prefilledEmail = searchParams.get("email") || "";
+  const safeNext = getSafeNextPath(searchParams.get("next"));
+
   const [mode, setMode] = useState<"login" | "register">(initialMode);
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(prefilledEmail);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -35,6 +47,9 @@ export function AuthPage({ onAuth, initialMode = "login" }: AuthPageProps) {
           : await api.login({ email, password });
       setAuthToken(res.access_token);
       onAuth(res.user);
+      if (safeNext) {
+        navigate(safeNext, { replace: true });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed");
     } finally {

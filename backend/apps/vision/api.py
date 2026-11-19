@@ -1,7 +1,7 @@
 from ninja import File, Form, Router, UploadedFile
 from ninja.errors import HttpError
 
-from apps.accounts.auth import WorkspaceAuth
+from apps.accounts.auth import WorkspaceAuth, require_editor
 
 from .services import identify_images
 
@@ -16,6 +16,7 @@ def identify_item_from_photos(
     intake_mode: str = Form("camera"),
     identify_mode: str = Form("full"),
 ):
+    require_editor(request)
     if not files:
         raise HttpError(400, "At least one image file is required.")
     image_tuples: list[tuple[bytes, str]] = []

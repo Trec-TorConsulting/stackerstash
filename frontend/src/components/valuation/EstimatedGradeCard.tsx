@@ -5,7 +5,7 @@ import { formatUsd } from "../../lib/format";
 
 interface EstimatedGradeCardProps {
   item: CollectionItem;
-  onSaveGrade: (grade: string) => Promise<void>;
+  onSaveGrade?: (grade: string) => Promise<void>;
   isSaving?: boolean;
 }
 
@@ -28,6 +28,7 @@ export function EstimatedGradeCard({ item, onSaveGrade, isSaving }: EstimatedGra
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
+    if (!onSaveGrade) return;
     await onSaveGrade(draft.trim());
     setEditing(false);
   }
@@ -46,26 +47,27 @@ export function EstimatedGradeCard({ item, onSaveGrade, isSaving }: EstimatedGra
             <ShieldAlert className="h-3 w-3" />
             {isUserLocked ? "User Estimate (Uncertified)" : "AI Estimate (Uncertified)"}
           </span>
-          {!editing ? (
-            <button
-              type="button"
-              onClick={() => {
-                setDraft(item.estimated_grade || "");
-                setEditing(true);
-              }}
-              className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-amber-300 transition"
-            >
-              <Edit3 className="h-3.5 w-3.5" /> Override
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setEditing(false)}
-              className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition"
-            >
-              <X className="h-3.5 w-3.5" /> Cancel
-            </button>
-          )}
+          {onSaveGrade &&
+            (!editing ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setDraft(item.estimated_grade || "");
+                  setEditing(true);
+                }}
+                className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-amber-300 transition"
+              >
+                <Edit3 className="h-3.5 w-3.5" /> Override
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setEditing(false)}
+                className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition"
+              >
+                <X className="h-3.5 w-3.5" /> Cancel
+              </button>
+            ))}
         </div>
       </div>
 

@@ -5,7 +5,7 @@ import { RAW_CARD_CONDITIONS } from "../../lib/format";
 
 interface CardSpecsCardProps {
   item: CollectionItem;
-  onSaveSpecs: (patch: Partial<CollectionItem>) => Promise<void>;
+  onSaveSpecs?: (patch: Partial<CollectionItem>) => Promise<void>;
   isSaving?: boolean;
 }
 
@@ -57,6 +57,7 @@ export function CardSpecsCard({ item, onSaveSpecs, isSaving }: CardSpecsCardProp
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!onSaveSpecs) return;
     await onSaveSpecs({
       card_game: form.card_game.trim(),
       set_name: form.set_name.trim(),
@@ -142,23 +143,24 @@ export function CardSpecsCard({ item, onSaveSpecs, isSaving }: CardSpecsCardProp
             Card Specifications
           </h2>
         </div>
-        {!editing ? (
-          <button
-            type="button"
-            onClick={startEdit}
-            className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-amber-300 transition"
-          >
-            <Edit3 className="h-3.5 w-3.5" /> Edit Specs
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setEditing(false)}
-            className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition"
-          >
-            <X className="h-3.5 w-3.5" /> Cancel
-          </button>
-        )}
+        {onSaveSpecs &&
+          (!editing ? (
+            <button
+              type="button"
+              onClick={startEdit}
+              className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-amber-300 transition"
+            >
+              <Edit3 className="h-3.5 w-3.5" /> Edit Specs
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setEditing(false)}
+              className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition"
+            >
+              <X className="h-3.5 w-3.5" /> Cancel
+            </button>
+          ))}
       </div>
 
       {editing ? (
