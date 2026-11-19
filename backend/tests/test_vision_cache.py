@@ -48,11 +48,28 @@ def test_image_identification_cache_exact_and_perceptual_dhash(user_a):
 
 
 @pytest.mark.django_db
-def test_cert_lookup_cache_hit_and_miss():
+def test_cert_lookup_cache_hit_and_miss(user_a, user_b):
+    _, ws_a, _ = user_a
+    _, ws_b, _ = user_b
+
     assert lookup_cert_cache("PCGS", "99999999") is None
     store_cert_cache("PCGS", "99999999", {"grade": "MS65", "title": "2025-P Quarter"})
     hit = lookup_cert_cache("pcgs", "99999999")
     assert hit == {"grade": "MS65", "title": "2025-P Quarter"}
+
+    # Workspace-scoped BYOK / free-text cache entries are isolated between Vault A and Vault B
+    store_cert_cache(
+        "NUMISTA",
+        "a" * 64,
+        {"specs": {"composition": "Vault A Private Silver"}},
+        source="NUMISTA",
+        workspace=ws_a,
+    )
+    assert lookup_cert_cache("NUMISTA", "a" * 64, workspace=ws_a) == {
+        "specs": {"composition": "Vault A Private Silver"}
+    }
+    assert lookup_cert_cache("NUMISTA", "a" * 64, workspace=ws_b) is None
+    assert lookup_cert_cache("NUMISTA", "a" * 64, workspace=None) is None
 
 
 @pytest.mark.django_db

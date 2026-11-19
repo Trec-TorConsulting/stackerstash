@@ -20,7 +20,12 @@ def serve_media(request, path: str):
         rel_path = verify_signed_media_path(path)
     except MediaSignatureError as exc:
         return HttpResponseForbidden(str(exc))
-    return serve(request, rel_path, document_root=settings.MEDIA_ROOT)
+    response = serve(request, rel_path, document_root=settings.MEDIA_ROOT)
+    response["Cache-Control"] = "private, max-age=3600, no-transform"
+    response["X-Content-Type-Options"] = "nosniff"
+    response["Content-Security-Policy"] = "default-src 'none'; img-src 'self'"
+    response["Referrer-Policy"] = "same-origin"
+    return response
 
 
 media_prefix = re.escape(settings.MEDIA_URL.lstrip("/"))

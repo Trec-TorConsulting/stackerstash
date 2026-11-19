@@ -12,28 +12,52 @@ from urllib.parse import unquote
 from django.conf import settings
 from django.http import Http404
 
-_BUCKET_SECONDS = 7 * 24 * 60 * 60
+_BUCKET_SECONDS = 60 * 60
 _SIGNED_PATH_RE = re.compile(r"^s/(?P<exp>\d+)/(?P<sig>[0-9a-f]{32})/(?P<rel_path>.+)$")
+_WORKSPACE_PATH_RE = re.compile(r"^workspaces/(?P<ws_id>[0-9a-fA-F-]{36})/")
+_MEDIA_KEY_CONTEXT = b"stackerstash.media.v2"
 
 
 class MediaSignatureError(Exception):
     """Raised when a media request lacks a valid, unexpired HMAC signature."""
 
 
-def _compute_signature(exp: int, rel_path: str) -> str:
-    msg = f"{exp}:{rel_path}".encode()
-    key = settings.SECRET_KEY.encode("utf-8")
-    return hmac.new(key, msg, hashlib.sha256).hexdigest()[:32]
+def _derive_media_key() -> bytes:
+    return hmac.new(
+        settings.SECRET_KEY.encode("utf-8"),
+        _MEDIA_KEY_CONTEXT,
+        hashlib.sha256,
+    ).digest()
+
+
+def _resolve_path_media_version(rel_path: str) -> int:
+    match = _WORKSPACE_PATH_RE.match(rel_path)
+    if not match:
+        return 1
+    from apps.accounts.models import Workspace
+
+    version = (
+        Workspace.objects.filter(id=match.group("ws_id"))
+        .values_list("media_key_version", flat=True)
+        .first()
+    )
+    return int(version) if version is not None else 0
+
+
+def _compute_signature(exp: int, rel_path: str, *, version: int = 1) -> str:
+    msg = f"{exp}:v{version}:{rel_path}".encode()
+    return hmac.new(_derive_media_key(), msg, hashlib.sha256).hexdigest()[:32]
 
 
 def build_signed_media_url(relative_path: str, *, now: int | None = None) -> str:
-    """Return a rolling 7-day-bucket HMAC-signed media URL under MEDIA_URL."""
+    """Return a rolling 1-hour-bucket domain-separated HMAC-signed media URL under MEDIA_URL."""
     rel = (relative_path or "").lstrip("/")
     if not rel:
         return ""
     ts = int(now if now is not None else time.time())
     exp = ((ts // _BUCKET_SECONDS) + 2) * _BUCKET_SECONDS
-    sig = _compute_signature(exp, rel)
+    version = _resolve_path_media_version(rel)
+    sig = _compute_signature(exp, rel, version=version)
     prefix = "/" + settings.MEDIA_URL.strip("/")
     return f"{prefix}/s/{exp}/{sig}/{rel}"
 
@@ -65,7 +89,11 @@ def verify_signed_media_path(raw_path: str, *, now: int | None = None) -> str:
     if exp < ts:
         raise MediaSignatureError("Signed media URL has expired.")
 
-    expected = _compute_signature(exp, rel_path)
+    expected = _compute_signature(
+        exp,
+        rel_path,
+        version=_resolve_path_media_version(rel_path),
+    )
     if not hmac.compare_digest(sig, expected):
         raise MediaSignatureError("Invalid media signature.")
 

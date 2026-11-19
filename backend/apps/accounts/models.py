@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ipaddress
 import secrets
 import uuid
 from datetime import timedelta
 from typing import Any
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser, BaseUserManager
@@ -72,6 +74,7 @@ class Workspace(models.Model):
     default_currency = models.CharField(max_length=3, default="USD")
     auto_sort_enabled = models.BooleanField(default=True)
     is_default = models.BooleanField(default=False)
+    media_key_version = models.PositiveIntegerField(default=1)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -260,6 +263,65 @@ def resolve_workspace_secret(workspace: Workspace, provider: str) -> str:
     """Decrypt a provider credential using vault-override -> owner-default inheritance."""
     cred, _ = resolve_workspace_credential(workspace, provider)
     return cred.get_secret() if cred is not None else ""
+
+
+_BLOCKED_OLLAMA_HOST_SUFFIXES = (
+    ".svc",
+    ".cluster.local",
+    ".internal",
+    ".amazonaws.com",
+    ".metadata",
+)
+_BLOCKED_OLLAMA_EXACT_HOSTS = {
+    "169.254.169.254",
+    "100.100.100.200",
+    "metadata.google.internal",
+    "metadata",
+    "kubernetes",
+    "kubernetes.default",
+    "postgres",
+    "postgresql",
+    "redis",
+    "stackerstash-backend",
+    "stackerstash-frontend",
+    "stackerstash-redis",
+}
+
+
+def validate_ollama_url(raw_url: str) -> str:
+    """Validate an OLLAMA_URL credential against SSRF, cloud metadata, and internal cluster services."""
+    cleaned = (raw_url or "").strip().rstrip("/")
+    parsed = urlparse(cleaned)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("OLLAMA_URL must be a valid http:// or https:// URL.")
+    if parsed.username or parsed.password:
+        raise ValueError("OLLAMA_URL must not contain embedded credentials.")
+
+    hostname = parsed.hostname.strip().lower()
+    if hostname in _BLOCKED_OLLAMA_EXACT_HOSTS or hostname.endswith(_BLOCKED_OLLAMA_HOST_SUFFIXES):
+        raise ValueError(f"Blocked internal or metadata host for OLLAMA_URL: {hostname}")
+
+    allowed_hosts = {
+        h.strip().lower()
+        for h in getattr(settings, "OLLAMA_ALLOWED_HOSTS", ["ollama.local", "localhost", "127.0.0.1"])
+        if h.strip()
+    }
+    try:
+        ip = ipaddress.ip_address(hostname.split("%", 1)[0])
+    except ValueError:
+        ip = None
+
+    if ip is not None:
+        if ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved:
+            raise ValueError(f"Blocked non-routable IP address for OLLAMA_URL: {hostname}")
+        if (ip.is_private or ip.is_loopback) and hostname not in allowed_hosts:
+            raise ValueError(f"Private or loopback IP for OLLAMA_URL is not allowlisted: {hostname}")
+    elif hostname in {"localhost", "localhost.localdomain"} or hostname.endswith((".localhost", ".local")):
+        if hostname not in allowed_hosts:
+            raise ValueError(f"Local hostname for OLLAMA_URL is not allowlisted: {hostname}")
+
+    return cleaned
 
 
 def create_default_workspace_for_user(

@@ -144,6 +144,8 @@ describe("App and AppRoutes", () => {
   it("authenticates, switches workspaces across /items/:id and /settings, accepts invites, and logs out", async () => {
     vi.spyOn(apiModule.api, "me").mockResolvedValue(MOCK_USER);
     vi.spyOn(apiModule.api, "listPendingInvites").mockResolvedValue([]);
+    const cacheDeleteMock = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal("caches", { delete: cacheDeleteMock });
 
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -163,6 +165,8 @@ describe("App and AppRoutes", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Switch WS" }));
     await waitFor(() => expect(apiModule.api.me).toHaveBeenCalled());
+    expect(cacheDeleteMock).toHaveBeenCalledWith("api-items-valuation-cache");
+    expect(cacheDeleteMock).toHaveBeenCalledWith("item-media-cache");
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh WS" }));
     await waitFor(() => expect(apiModule.api.me).toHaveBeenCalledTimes(2));

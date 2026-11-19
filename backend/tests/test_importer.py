@@ -493,4 +493,24 @@ def test_importer_helpers_photo_limits_redirects_and_appraisals(user_a, monkeypa
             auto_appraise=False,
         )
 
+    # Duplicate cert_number in import_mapped_csv recorded as row error instead of IntegrityError
+    AccountSubscription.objects.update_or_create(
+        user=owner,
+        defaults={
+            "tier": PlanTier.UNLIMITED,
+            "source": AccountSubscription.Source.ADMIN_OVERRIDE,
+            "status": AccountSubscription.Status.ACTIVE,
+        },
+    )
+    dup_mapped = import_mapped_csv(
+        b"Title,Cert #\nSlab One,DUP-777\nSlab Two,DUP-777\n",
+        workspace=ws,
+        mapping={"Title": "title", "Cert #": "cert_number"},
+        import_photos=False,
+        auto_appraise=False,
+    )
+    assert dup_mapped.created_count == 1
+    assert len(dup_mapped.errors) == 1
+    assert "duplicate cert_number" in dup_mapped.errors[0]["error"].lower()
+
 

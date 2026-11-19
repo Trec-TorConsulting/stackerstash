@@ -4,6 +4,8 @@ from typing import Any
 from uuid import UUID
 
 from django.contrib.auth import authenticate
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Case, Count, F, IntegerField, Sum, Value, When
 from django.utils import timezone
@@ -13,6 +15,7 @@ from ninja.errors import HttpError
 
 from .auth import (
     WorkspaceAuth,
+    enforce_rate_limit,
     issue_access_token,
     require_owner,
     resolve_user_workspace,
@@ -27,6 +30,7 @@ from .models import (
     create_default_workspace_for_user,
     get_owner_default_workspace,
     get_user_entitlement_status,
+    validate_ollama_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -318,11 +322,17 @@ def _serialize_user(user: User, workspace=None) -> UserOut:
 @auth_router.post("/register", response={201: AuthResponse})
 @transaction.atomic
 def register(request, payload: RegisterIn):
+    enforce_rate_limit(request, "auth_register")
     email = payload.email.strip().lower()
     if not email or "@" not in email:
         raise HttpError(400, "Valid email is required.")
-    if len(payload.password) < 8:
-        raise HttpError(400, "Password must be at least 8 characters.")
+    try:
+        validate_password(
+            payload.password,
+            user=User(email=email, username=email, display_name=payload.display_name.strip()),
+        )
+    except ValidationError as exc:
+        raise HttpError(400, " ".join(exc.messages)) from exc
     if User.objects.filter(email=email).exists():
         raise HttpError(409, "An account with this email already exists.")
 
@@ -339,6 +349,7 @@ def register(request, payload: RegisterIn):
 @auth_router.post("/login", response=AuthResponse)
 def login(request, payload: LoginIn):
     email = payload.email.strip().lower()
+    enforce_rate_limit(request, "auth_login", identifier=email)
     user = authenticate(request, username=email, password=payload.password)
     if not user or not user.is_active:
         raise HttpError(401, "Invalid email or password.")
@@ -362,13 +373,16 @@ def update_me(request, payload: MePatchIn):
 @auth_router.post("/change-password", auth=WorkspaceAuth())
 def change_password(request, payload: ChangePasswordIn):
     user = request.user
+    enforce_rate_limit(request, "auth_change_password", identifier=str(user.id))
     if not user.check_password(payload.current_password):
         raise HttpError(400, "Current password is incorrect.")
-    if len(payload.new_password) < 8:
-        raise HttpError(400, "New password must be at least 8 characters.")
+    try:
+        validate_password(payload.new_password, user=user)
+    except ValidationError as exc:
+        raise HttpError(400, " ".join(exc.messages)) from exc
     user.set_password(payload.new_password)
     user.save(update_fields=["password"])
-    return {"detail": "Password updated."}
+    return {"detail": "Password updated.", "access_token": issue_access_token(user)}
 
 
 @auth_router.delete("/me", response={204: None}, auth=WorkspaceAuth())
@@ -377,6 +391,7 @@ def delete_me(request, payload: DeleteAccountIn):
     from apps.catalog.models import ItemPhoto
 
     user = request.user
+    enforce_rate_limit(request, "auth_delete_me", identifier=str(user.id))
     if not user.check_password(payload.password):
         raise HttpError(403, "Password verification failed.")
 
@@ -454,7 +469,15 @@ def _get_member_workspace(user: User, workspace_id: UUID) -> Workspace:
     return ws
 
 
+def _mask_email(email: str) -> str:
+    local, _, domain = email.partition("@")
+    return f"{local[0]}***@{domain}"
+
+
 def _serialize_invite(inv: WorkspaceInvitation) -> WorkspaceInviteOut:
+    is_active_pending = (
+        inv.status == WorkspaceInvitation.Status.PENDING and not inv.is_expired
+    )
     return WorkspaceInviteOut(
         id=inv.id,
         workspace_id=inv.workspace_id,
@@ -462,8 +485,8 @@ def _serialize_invite(inv: WorkspaceInvitation) -> WorkspaceInviteOut:
         email=inv.email,
         role=inv.role,
         status=inv.status,
-        token=inv.token,
-        invite_path=f"/invite/{inv.token}",
+        token=inv.token if is_active_pending else "",
+        invite_path=f"/invite/{inv.token}" if is_active_pending else "",
         invited_by_email=inv.invited_by.email,
         accepted_by_email=inv.accepted_by.email if inv.accepted_by_id else None,
         expires_at=inv.expires_at,
@@ -720,6 +743,7 @@ def remove_workspace_member(request, workspace_id: UUID, membership_id: UUID):
     if membership.user_id == ws.owner_id:
         raise HttpError(400, "Cannot remove the vault owner.")
     membership.delete()
+    Workspace.objects.filter(id=ws.id).update(media_key_version=F("media_key_version") + 1)
     return Status(204, None)
 
 
@@ -740,6 +764,7 @@ def leave_workspace(request, workspace_id: UUID):
     if membership is None:
         raise HttpError(404, "You are not a member of this vault.")
     membership.delete()
+    Workspace.objects.filter(id=ws.id).update(media_key_version=F("media_key_version") + 1)
     return Status(204, None)
 
 
@@ -765,6 +790,7 @@ def list_pending_invites(request):
 
 @auth_router.get("/invites/{token}", response=InvitePreviewOut)
 def preview_invite(request, token: str):
+    enforce_rate_limit(request, "invite_preview")
     inv = (
         WorkspaceInvitation.objects.select_related(
             "workspace", "workspace__owner", "invited_by"
@@ -774,23 +800,35 @@ def preview_invite(request, token: str):
     )
     if inv is None:
         raise HttpError(404, "Invitation not found.")
+    if inv.status != WorkspaceInvitation.Status.PENDING or inv.is_expired:
+        raise HttpError(410, "This invitation is no longer active or has expired.")
+    auth_header = (request.headers.get("Authorization") or "").strip()
+    unmask = False
+    if auth_header.lower().startswith("bearer "):
+        caller = WorkspaceAuth().authenticate(request, auth_header[7:].strip())
+        if caller and caller.email.lower() in {
+            inv.email.lower(),
+            inv.workspace.owner.email.lower(),
+        }:
+            unmask = True
     return InvitePreviewOut(
         id=inv.id,
         workspace_id=inv.workspace_id,
         workspace_name=inv.workspace.name,
-        owner_email=inv.workspace.owner.email,
-        invited_by_email=inv.invited_by.email,
-        email=inv.email,
+        owner_email=inv.workspace.owner.email if unmask else _mask_email(inv.workspace.owner.email),
+        invited_by_email=inv.invited_by.email if unmask else _mask_email(inv.invited_by.email),
+        email=inv.email if unmask else _mask_email(inv.email),
         role=inv.role,
         status=inv.status,
         expires_at=inv.expires_at,
-        is_expired=inv.is_expired,
+        is_expired=False,
     )
 
 
 @auth_router.post("/invites/{token}/accept", response=WorkspaceOut, auth=WorkspaceAuth())
 @transaction.atomic
 def accept_invite(request, token: str):
+    enforce_rate_limit(request, "invite_accept", identifier=str(request.user.id))
     inv = (
         WorkspaceInvitation.objects.select_related(
             "workspace", "workspace__owner", "invited_by"
@@ -810,15 +848,16 @@ def accept_invite(request, token: str):
         raise HttpError(410, "This invitation has expired.")
     if inv.workspace.owner_id == request.user.id:
         raise HttpError(400, "You already own this vault.")
+    if WorkspaceMembership.objects.filter(
+        workspace=inv.workspace, user=request.user
+    ).exists():
+        raise HttpError(409, "You are already a member of this vault.")
 
-    membership, created = WorkspaceMembership.objects.get_or_create(
+    membership = WorkspaceMembership.objects.create(
         workspace=inv.workspace,
         user=request.user,
-        defaults={"role": inv.role},
+        role=inv.role,
     )
-    if not created and membership.role != inv.role:
-        membership.role = inv.role
-        membership.save(update_fields=["role"])
 
     inv.status = WorkspaceInvitation.Status.ACCEPTED
     inv.accepted_by = request.user
@@ -971,6 +1010,11 @@ def upsert_credential(request, provider: str, payload: CredentialIn):
     secret_value = payload.value.strip()
     if not secret_value:
         raise HttpError(400, "Credential value cannot be empty.")
+    if provider == ProviderCredential.Provider.OLLAMA_URL:
+        try:
+            secret_value = validate_ollama_url(secret_value)
+        except ValueError as exc:
+            raise HttpError(400, str(exc)) from exc
 
     cred, _ = ProviderCredential.objects.get_or_create(
         workspace=request.workspace,

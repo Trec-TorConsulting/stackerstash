@@ -180,6 +180,31 @@ def test_self_service_account_crud_and_deletion_cleanup(api_client, user_a):
     )
     assert short_pw.status_code == 400
 
+    numeric_pw = api_client.post(
+        "/api/v1/auth/change-password",
+        data=json.dumps({"current_password": "StrongPassword123!", "new_password": "12345678"}),
+        content_type="application/json",
+        **headers,
+    )
+    assert numeric_pw.status_code == 400
+    assert "numeric" in numeric_pw.json()["detail"].lower() or "common" in numeric_pw.json()["detail"].lower()
+
+    common_reg = api_client.post(
+        "/api/v1/auth/register",
+        data=json.dumps({"email": "commonpw@example.com", "password": "password123"}),
+        content_type="application/json",
+    )
+    assert common_reg.status_code == 400
+    assert "common" in common_reg.json()["detail"].lower()
+
+    numeric_reg = api_client.post(
+        "/api/v1/auth/register",
+        data=json.dumps({"email": "numpw@example.com", "password": "123456789"}),
+        content_type="application/json",
+    )
+    assert numeric_reg.status_code == 400
+    assert "numeric" in numeric_reg.json()["detail"].lower() or "common" in numeric_reg.json()["detail"].lower()
+
     good_pw = api_client.post(
         "/api/v1/auth/change-password",
         data=json.dumps({"current_password": "StrongPassword123!", "new_password": "NewPassword123!"}),
@@ -187,6 +212,8 @@ def test_self_service_account_crud_and_deletion_cleanup(api_client, user_a):
         **headers,
     )
     assert good_pw.status_code == 200
+    assert api_client.get("/api/v1/auth/me", **headers).status_code == 401
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {good_pw.json()['access_token']}"}
 
     login_new = api_client.post(
         "/api/v1/auth/login",
@@ -695,17 +722,20 @@ def test_accounts_error_and_edge_branches(api_client):
     assert api_client.post("/api/v1/auth/invites/nonexistent-tok/decline", **other_headers).status_code == 404
     assert api_client.post(f"/api/v1/auth/invites/{inv_token}/decline", **headers).status_code == 403
 
-    # Pre-create membership with VIEWER then accept EDITOR invite -> updates existing membership role (lines 820-821)
+    # Pre-create membership with VIEWER then attempt to accept EDITOR invite -> rejected with 409 without elevating role
     existing_mem = WorkspaceMembership.objects.create(
         workspace=Workspace.objects.get(id=ws_id), user=other, role=WorkspaceMembership.Role.VIEWER
     )
     inv_obj = WorkspaceInvitation.objects.get(id=inv_id)
     inv_obj.role = WorkspaceInvitation.Role.EDITOR
     inv_obj.save()
-    assert api_client.post(f"/api/v1/auth/invites/{inv_token}/accept", **other_headers).status_code == 200
+    assert api_client.post(f"/api/v1/auth/invites/{inv_token}/accept", **other_headers).status_code == 409
     existing_mem.refresh_from_db()
-    assert existing_mem.role == WorkspaceMembership.Role.EDITOR
-    # Already accepted -> revoke 400, accept 400, decline 400
+    assert existing_mem.role == WorkspaceMembership.Role.VIEWER
+    existing_mem.delete()
+    assert api_client.post(f"/api/v1/auth/invites/{inv_token}/accept", **other_headers).status_code == 200
+    # Already accepted -> revoke 400, accept 400, decline 400, preview 410
+    assert api_client.get(f"/api/v1/auth/invites/{inv_token}").status_code == 410
     assert api_client.delete(f"/api/v1/auth/workspaces/{ws_id}/invites/{inv_id}", **headers).status_code == 400
     assert api_client.post(f"/api/v1/auth/invites/{inv_token}/accept", **other_headers).status_code == 400
     assert api_client.post(f"/api/v1/auth/invites/{inv_token}/decline", **other_headers).status_code == 400

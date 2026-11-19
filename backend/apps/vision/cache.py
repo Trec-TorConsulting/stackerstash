@@ -130,17 +130,23 @@ def store_image_cache(
         logger.debug("Redis image cache store skipped: %s", exc)
 
 
-def _cert_redis_key(svc: str, num: str) -> str:
-    digest = hashlib.sha256(f"{svc}:{num}".encode()).hexdigest()[:24]
-    return f"vision:certcache:{svc}:{digest}"
+def _cert_redis_key(svc: str, num: str, workspace_id: Any = None) -> str:
+    ws_part = str(workspace_id) if workspace_id else "global"
+    digest = hashlib.sha256(f"{ws_part}:{svc}:{num}".encode()).hexdigest()[:32]
+    return f"vision:certcache:{ws_part}:{svc}:{digest}"
 
 
-def lookup_cert_cache(grading_service: str, cert_number: str) -> dict[str, Any] | None:
+def lookup_cert_cache(
+    grading_service: str,
+    cert_number: str,
+    workspace: Workspace | None = None,
+) -> dict[str, Any] | None:
     svc = (grading_service or "").strip().upper()
     num = (cert_number or "").strip()
     if not svc or svc == "NONE" or not num:
         return None
-    redis_key = _cert_redis_key(svc, num)
+    ws_id = workspace.id if workspace is not None else None
+    redis_key = _cert_redis_key(svc, num, ws_id)
     try:
         cached = cache.get(redis_key)
         if isinstance(cached, dict) and cached:
@@ -149,7 +155,9 @@ def lookup_cert_cache(grading_service: str, cert_number: str) -> dict[str, Any] 
         logger.debug("Redis cert cache read skipped: %s", exc)
 
     try:
-        row = CertLookupCache.objects.filter(grading_service=svc, cert_number=num).first()
+        row = CertLookupCache.objects.filter(
+            workspace=workspace, grading_service=svc, cert_number=num
+        ).first()
     except Exception:
         row = None
     if row and row.payload:
@@ -166,20 +174,23 @@ def store_cert_cache(
     cert_number: str,
     payload: dict[str, Any],
     source: str = "CERT_LOOKUP",
+    workspace: Workspace | None = None,
 ) -> None:
     svc = (grading_service or "").strip().upper()
     num = (cert_number or "").strip()
     if not svc or svc == "NONE" or not num or not payload:
         return
+    ws_id = workspace.id if workspace is not None else None
     try:
         CertLookupCache.objects.update_or_create(
+            workspace=workspace,
             grading_service=svc,
             cert_number=num,
             defaults={"payload": payload, "source": source},
         )
     except Exception as exc:
         logger.debug("DB cert cache write skipped: %s", exc)
-    redis_key = _cert_redis_key(svc, num)
+    redis_key = _cert_redis_key(svc, num, ws_id)
     try:
         cache.set(redis_key, payload, _CACHE_TTL_SECONDS)
     except Exception as exc:

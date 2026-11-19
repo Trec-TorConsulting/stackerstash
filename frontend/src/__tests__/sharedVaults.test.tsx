@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AppRoutes } from "../App";
 import { Layout } from "../components/Layout";
 import { ToastProvider } from "../components/ToastProvider";
 import {
@@ -14,6 +15,7 @@ import {
   type WorkspaceInvitation,
   type WorkspaceMember,
 } from "../lib/api";
+import * as offlineCache from "../lib/offlineCache";
 import { AuthPage } from "../pages/AuthPage";
 import { CollectionPage } from "../pages/CollectionPage";
 import { ContainersPage } from "../pages/ContainersPage";
@@ -527,5 +529,40 @@ describe("Shared Vaults & RBAC UI", () => {
     expect(await screen.findByRole("button", { name: /Edit Details/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Appraise Now/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Duplicate Item/i })).toBeInTheDocument();
+  });
+
+  it("purges IndexedDB offlineCache and both Workbox caches when switching to a shared vault", async () => {
+    setAuthToken("jwt-bob");
+    vi.spyOn(api, "me").mockResolvedValue(BOB_VIEWER);
+    vi.spyOn(api, "listPendingInvites").mockResolvedValue([]);
+    vi.spyOn(api, "getSummary").mockResolvedValue({
+      total_items: 0,
+      unique_entries: 0,
+      total_melt_value: "0.00",
+      total_market_value: "0.00",
+      total_cost_basis: "0.00",
+      unrealized_pnl: "0.00",
+      realized_pnl: "0.00",
+      gold_silver_ratio: "80.0",
+      spot_prices: {},
+      metal_breakdown: [],
+      category_breakdown: [],
+      top_valuable_items: [],
+    });
+    const clearSpy = vi.spyOn(offlineCache, "clearOfflineCache").mockResolvedValue(undefined);
+    const cacheDelete = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal("caches", { delete: cacheDelete });
+
+    renderWithProviders(<AppRoutes />);
+
+    const switcherBtn = await screen.findByRole("button", { name: "Switch active vault" });
+    fireEvent.click(switcherBtn);
+    fireEvent.click(screen.getByRole("option", { name: /Personal Vault/i }));
+
+    await waitFor(() => {
+      expect(clearSpy).toHaveBeenCalled();
+      expect(cacheDelete).toHaveBeenCalledWith("api-items-valuation-cache");
+      expect(cacheDelete).toHaveBeenCalledWith("item-media-cache");
+    });
   });
 });

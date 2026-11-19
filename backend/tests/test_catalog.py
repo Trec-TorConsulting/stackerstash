@@ -1698,3 +1698,55 @@ def test_migration_0012_deduplicate_workspace_cert_numbers() -> None:
     assert older.cert_number == ""
     assert "Auto-cleared duplicate cert #8866470-119" in older.notes
 
+
+@pytest.mark.django_db
+def test_vision_and_csv_import_bounds_and_duplicate_cert_row_error(api_client, user_a):
+    from unittest.mock import patch
+
+    _, ws, token = user_a
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_WORKSPACE_ID": str(ws.id)}
+
+    # 1. Vision /identify file count (> 4) and empty/oversized file rejected with 400
+    five_files = [
+        SimpleUploadedFile(f"f{i}.jpg", b"img", content_type="image/jpeg")
+        for i in range(5)
+    ]
+    assert api_client.post("/api/v1/vision/identify", data={"files": five_files}, **headers).status_code == 400
+    empty_file = [SimpleUploadedFile("empty.jpg", b"", content_type="image/jpeg")]
+    assert api_client.post("/api/v1/vision/identify", data={"files": empty_file}, **headers).status_code == 400
+    with patch("apps.vision.api.MAX_VISION_FILE_BYTES", 4):
+        big_file = [SimpleUploadedFile("big.jpg", b"12345678", content_type="image/jpeg")]
+        assert api_client.post("/api/v1/vision/identify", data={"files": big_file}, **headers).status_code == 400
+
+    # 2. CSV import empty / oversized file rejected with 400
+    assert (
+        api_client.post(
+            "/api/v1/catalog/items/import/csv",
+            data={"file": SimpleUploadedFile("empty.csv", b"", content_type="text/csv")},
+            **headers,
+        ).status_code
+        == 400
+    )
+    with patch("apps.catalog.api.MAX_UPLOAD_BYTES", 8):
+        assert (
+            api_client.post(
+                "/api/v1/catalog/items/import/preview",
+                data={"file": SimpleUploadedFile("big.csv", b"title\nLongTitleRow\n", content_type="text/csv")},
+                **headers,
+            ).status_code
+            == 400
+        )
+
+    # 3. Duplicate cert_number in CSV import recorded as row error instead of 500
+    dup_csv = b"title,cert_number\nFirst Slab,CERT-999\nSecond Slab,CERT-999\n"
+    dup_resp = api_client.post(
+        "/api/v1/catalog/items/import/csv",
+        data={"file": SimpleUploadedFile("dup.csv", dup_csv, content_type="text/csv")},
+        **headers,
+    )
+    assert dup_resp.status_code == 200
+    assert dup_resp.json()["created_count"] == 1
+    assert len(dup_resp.json()["errors"]) == 1
+    assert "duplicate cert_number" in dup_resp.json()["errors"][0]["error"].lower()
+
+

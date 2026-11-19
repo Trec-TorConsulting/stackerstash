@@ -9,6 +9,9 @@ from apps.accounts.models import User, create_default_workspace_for_user
 
 @pytest.fixture(autouse=True)
 def _media_root(settings, tmp_path):
+    from django.core.cache import cache
+
+    cache.clear()
     settings.MEDIA_ROOT = tmp_path / "media"
 
 

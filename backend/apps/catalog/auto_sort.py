@@ -12,7 +12,12 @@ from celery import shared_task
 from django.db import transaction
 from django.utils import timezone
 
-from apps.accounts.models import ProviderCredential, Workspace, resolve_workspace_secret
+from apps.accounts.models import (
+    ProviderCredential,
+    Workspace,
+    resolve_workspace_secret,
+    validate_ollama_url,
+)
 from apps.catalog.models import CollectionItem
 
 logger = logging.getLogger(__name__)
@@ -427,9 +432,10 @@ def _classify_with_local_ollama(
         f"Denomination: {item.denomination}"
     )
     try:
+        safe_base = validate_ollama_url(base_url)
         with httpx.Client(timeout=5.0) as client:
             resp = client.post(
-                f"{base_url}/api/generate",
+                f"{safe_base}/api/generate",
                 json={
                     "model": model,
                     "prompt": prompt,

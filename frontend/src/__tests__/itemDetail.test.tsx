@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { api, type CollectionItem } from "../lib/api";
+import { api, ApiError, type CollectionItem } from "../lib/api";
+import { cacheItemSnapshot } from "../lib/offlineCache";
 import { ItemDetailPage } from "../pages/ItemDetailPage";
 
 function makeItem(overrides: Partial<CollectionItem> = {}): CollectionItem {
@@ -189,5 +190,30 @@ describe("ItemDetailPage slab removal & quantity updates", () => {
     const payload = updateSpy.mock.calls[0][1] as Record<string, unknown>;
     expect(payload.category).toBe("CARD");
     expect(payload.grading_service).toBe("NONE");
+  });
+
+  it("rethrows 401/403/404 ApiErrors immediately without rendering cached offline snapshots", async () => {
+    const cachedItem = makeItem({ title: "Secret Vault Item" });
+    await cacheItemSnapshot(cachedItem, []);
+
+    vi.spyOn(api, "getItem").mockRejectedValue(
+      new ApiError("Not found in this vault", { status: 404 })
+    );
+    vi.spyOn(api, "getContainers").mockResolvedValue([]);
+    vi.spyOn(api, "getItemValuations").mockResolvedValue([]);
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={[`/items/${cachedItem.id}`]}>
+          <Routes>
+            <Route path="/items/:id" element={<ItemDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+
+    expect(await screen.findByText(/Not found in this vault/i)).toBeInTheDocument();
+    expect(screen.queryByText("Secret Vault Item")).not.toBeInTheDocument();
   });
 });

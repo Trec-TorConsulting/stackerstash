@@ -13,7 +13,7 @@ import * as apiModule from "../lib/api";
 import { buildCompLinks } from "../lib/compLinks";
 import { formatOz, formatUsd, isCardItem } from "../lib/format";
 import * as imageUtils from "../lib/imageUtils";
-import { cacheItemSnapshot, getCachedItemSnapshot } from "../lib/offlineCache";
+import { cacheItemSnapshot, clearOfflineCache, getCachedItemSnapshot } from "../lib/offlineCache";
 import {
   useActiveWorkspace,
   useWorkspacePermissions,
@@ -134,6 +134,8 @@ describe("core utilities, offlineCache, format, compLinks, workspaceContext", ()
     await cacheItemSnapshot(sampleItem, []);
     const memSnap = await getCachedItemSnapshot("item-off-1");
     expect(memSnap?.item.title).toBe("Silver Eagle");
+    await clearOfflineCache();
+    expect(await getCachedItemSnapshot("item-off-1")).toBeNull();
 
     // 2. Mocked indexedDB success + upgrade + error handling
     const storeMap = new Map<string, unknown>();
@@ -153,6 +155,9 @@ describe("core utilities, offlineCache, format, compLinks, workspaceContext", ()
                 queueMicrotask(() => (gReq.onsuccess as (() => void) | undefined)?.());
                 return gReq;
               },
+              clear: () => {
+                storeMap.clear();
+              },
             }),
             set oncomplete(fn: () => void) {
               queueMicrotask(fn);
@@ -171,8 +176,11 @@ describe("core utilities, offlineCache, format, compLinks, workspaceContext", ()
     await cacheItemSnapshot(sampleItem, []);
     const dbSnap = await getCachedItemSnapshot("item-off-1");
     expect(dbSnap?.item.id).toBe("item-off-1");
+    await clearOfflineCache();
+    expect(await getCachedItemSnapshot("item-off-1")).toBeNull();
+    await cacheItemSnapshot(sampleItem, []);
 
-    // 3. Error & exception paths in openDb, cacheItemSnapshot, and getCachedItemSnapshot
+    // 3. Error & exception paths in openDb, cacheItemSnapshot, getCachedItemSnapshot, and clearOfflineCache
     vi.stubGlobal("indexedDB", {
       open: vi.fn(() => {
         const req: Record<string, unknown> = {};
@@ -198,6 +206,7 @@ describe("core utilities, offlineCache, format, compLinks, workspaceContext", ()
             transaction: () => ({
               objectStore: () => ({
                 put: () => {},
+                clear: () => {},
                 get: () => {
                   const gReq: Record<string, unknown> = {};
                   queueMicrotask(() => (gReq.onerror as (() => void) | undefined)?.());
@@ -216,6 +225,7 @@ describe("core utilities, offlineCache, format, compLinks, workspaceContext", ()
     });
     await cacheItemSnapshot(sampleItem, []);
     expect((await getCachedItemSnapshot("item-off-1"))?.item.id).toBe("item-off-1");
+    await clearOfflineCache();
 
     vi.stubGlobal("indexedDB", {
       open: vi.fn(() => {
@@ -233,6 +243,7 @@ describe("core utilities, offlineCache, format, compLinks, workspaceContext", ()
     });
     await cacheItemSnapshot(sampleItem, []);
     expect((await getCachedItemSnapshot("item-off-1"))?.item.id).toBe("item-off-1");
+    await clearOfflineCache();
   });
 });
 

@@ -11,7 +11,9 @@ import {
   setActiveWorkspaceId,
   setAuthToken,
   type AuthUser,
+  type CollectionItem,
 } from "../lib/api";
+import { cacheItemSnapshot, clearOfflineCache, getCachedItemSnapshot } from "../lib/offlineCache";
 import { SettingsPage } from "../pages/SettingsPage";
 
 afterEach(() => {
@@ -179,5 +181,19 @@ describe("Multiple Vaults", () => {
     expect(screen.getByRole("dialog")).toHaveTextContent(/Delete Vault\?/i);
     fireEvent.click(screen.getByRole("button", { name: "Delete Vault" }));
     await waitFor(() => expect(delVaultSpy).toHaveBeenCalledWith("ws-ira"));
+  });
+
+  it("partitions offlineCache snapshots by active workspaceId and clears all on clearOfflineCache", async () => {
+    const sampleItem = { id: "shared-item-id", title: "Vault A Gold Bar" } as unknown as CollectionItem;
+    setActiveWorkspaceId("ws-vault-a");
+    await cacheItemSnapshot(sampleItem, []);
+    expect((await getCachedItemSnapshot("shared-item-id"))?.item.title).toBe("Vault A Gold Bar");
+
+    setActiveWorkspaceId("ws-vault-b");
+    expect(await getCachedItemSnapshot("shared-item-id")).toBeNull();
+
+    setActiveWorkspaceId("ws-vault-a");
+    await clearOfflineCache();
+    expect(await getCachedItemSnapshot("shared-item-id")).toBeNull();
   });
 });

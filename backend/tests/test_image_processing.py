@@ -563,3 +563,20 @@ def test_image_processing_floodfill_grabcut_coin_slab_rect_and_forensics():
     assert m_res["metrics"]["moire_ratio"] > 0.14
     assert any("moir" in w.lower() for w in m_res["warnings"])
 
+    # EXIF GPS & artist/device metadata stripped from processed photos and thumbnails at rest
+    exif_img = Image.new("RGB", (320, 320), (180, 150, 90))
+    exif = exif_img.getexif()
+    exif[0x013B] = "Collector Secret Home Vault"  # Artist
+    exif[0x8825] = {1: "N", 2: (40.0, 42.0, 46.0)}  # GPSInfo
+    exif_buf = io.BytesIO()
+    exif_img.save(exif_buf, format="JPEG", exif=exif.tobytes())
+    proc_bytes, _, _, _ = process_item_image(exif_buf.getvalue(), enhance=False, auto_crop=False)
+    thumb_bytes, _, _, _ = generate_image_thumbnail(exif_buf.getvalue())
+    with Image.open(io.BytesIO(proc_bytes)) as proc_opened:
+        assert len(proc_opened.getexif()) == 0
+        assert "exif" not in proc_opened.info
+    with Image.open(io.BytesIO(thumb_bytes)) as thumb_opened:
+        assert len(thumb_opened.getexif()) == 0
+        assert "exif" not in thumb_opened.info
+
+

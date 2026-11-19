@@ -13,7 +13,12 @@ import httpx
 from django.core.cache import cache
 from PIL import Image, ImageOps
 
-from apps.accounts.models import ProviderCredential, Workspace, resolve_workspace_secret
+from apps.accounts.models import (
+    ProviderCredential,
+    Workspace,
+    resolve_workspace_secret,
+    validate_ollama_url,
+)
 from apps.catalog.models import CollectionItem
 
 from .models import IdentificationJob
@@ -154,8 +159,10 @@ def _normalize_candidate(raw: dict[str, Any], barcode_hint: str | None = None) -
 
 def _sanitize_error_message(message: str) -> str:
     """Redact API keys and bearer tokens before logging or returning error diagnostics."""
-    cleaned = re.sub(r"([?&]key=)[^&\s]+", r"\1***", str(message))
-    return re.sub(r"(Bearer\s+)[^\s\"']+", r"\1***", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"([?&](?:key|api_key|token)=)[^&\s\"']+", r"\1***", str(message), flags=re.IGNORECASE)
+    cleaned = re.sub(r"(Bearer\s+)[^\s\"']+", r"\1***", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(AIza[0-9A-Za-z_-]{10,}|gsk_[0-9A-Za-z_-]{10,}|sk-or-v1-[0-9A-Za-z_-]{10,})\b", "***", cleaned)
+    return cleaned
 
 
 def _is_retryable_quota_error(exc: Exception) -> bool:
@@ -421,7 +428,7 @@ def _parse_ollama_response(raw_body: str) -> tuple[str, Any]:
             raise ValueError("Ollama returned empty completion text")
         return joined, {"chunks": chunks}
 
-    raise ValueError(f"Ollama returned non-JSON response: {stripped[:200]}")
+    raise ValueError("Ollama returned non-JSON response")
 
 
 def _post_ollama_chat(
@@ -431,7 +438,8 @@ def _post_ollama_chat(
     timeout: float = 45.0,
 ) -> tuple[dict[str, Any], Any]:
     """Call Ollama /api/chat with thinking disabled and JSON output enforced."""
-    endpoint = f"{ollama_url.rstrip('/')}/api/chat"
+    safe_base = validate_ollama_url(ollama_url)
+    endpoint = f"{safe_base}/api/chat"
     payload: dict[str, Any] = {
         "model": model_name,
         "stream": False,
@@ -448,7 +456,7 @@ def _post_ollama_chat(
         try:
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise RuntimeError(f"HTTP {exc.response.status_code}: {exc.response.text[:300]}") from exc
+            raise RuntimeError(f"HTTP {exc.response.status_code}: Ollama request failed") from exc
         raw_body = resp.text
     text, data = _parse_ollama_response(raw_body)
     return _extract_json_block(text), data
@@ -512,7 +520,7 @@ def _enrich_candidate_from_catalog(
 
     pcgs_token = _get_secret(workspace, ProviderCredential.Provider.PCGS)
     if candidate.get("grading_service") == "PCGS" and candidate.get("cert_number") and pcgs_token:
-        pcgs_res = lookup_pcgs_cert(candidate["cert_number"], pcgs_token)
+        pcgs_res = lookup_pcgs_cert(candidate["cert_number"], pcgs_token, workspace=workspace)
         if pcgs_res and pcgs_res.get("market_value") and not candidate.get("estimated_value_usd"):
             candidate["estimated_value_usd"] = float(pcgs_res["market_value"])
 
@@ -524,6 +532,7 @@ def _enrich_candidate_from_catalog(
             country=str(candidate.get("country") or ""),
             denomination=str(candidate.get("denomination") or ""),
             api_key=numista_key,
+            workspace=workspace,
         )
         if numista_res:
             specs = numista_res.get("specs") or {}

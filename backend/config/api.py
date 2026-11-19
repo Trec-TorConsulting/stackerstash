@@ -1,3 +1,5 @@
+from django.conf import settings
+from django.http import HttpResponseNotFound
 from ninja import NinjaAPI
 
 from apps.accounts.admin_api import admin_router
@@ -8,11 +10,32 @@ from apps.catalog.api import catalog_router
 from apps.valuation.api import analytics_router, valuation_router
 from apps.vision.api import vision_router
 
+
+def api_security_headers_middleware(get_response):
+    """Apply no-store API cache headers, defensive headers, and production OpenAPI doc gating."""
+
+    def middleware(request):
+        if not settings.DEBUG and request.path.rstrip("/") in {
+            "/api/v1/docs",
+            "/api/v1/openapi.json",
+        }:
+            return HttpResponseNotFound("Not Found")
+        response = get_response(request)
+        response.setdefault("X-Content-Type-Options", "nosniff")
+        response.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        if request.path.startswith("/api/"):
+            response["Cache-Control"] = "no-store"
+        return response
+
+    return middleware
+
+
 api = NinjaAPI(
     title="Stacker Stash API",
     version="1.0.0",
     description="Enterprise-grade multi-tenant API for coins, paper currency, and bullion collection tracking.",
-    docs_url="/docs",
+    docs_url="/docs" if settings.DEBUG else None,
+    openapi_url="/openapi.json" if settings.DEBUG else None,
 )
 
 

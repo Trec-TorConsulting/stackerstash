@@ -750,6 +750,11 @@ def import_mapped_csv(
                 continue
             if kwargs.get("title"):
                 kwargs["title"] = _clean_item_title(kwargs["title"])
+            cert_num = str(kwargs.get("cert_number") or "").strip()
+            if cert_num and CollectionItem.objects.filter(
+                workspace=workspace, cert_number__iexact=cert_num
+            ).exists():
+                raise ValueError(f"Duplicate cert_number '{cert_num}' in workspace.")
             container = _resolve_container_by_name(
                 workspace, extracted.get("container"), container_cache
             )
