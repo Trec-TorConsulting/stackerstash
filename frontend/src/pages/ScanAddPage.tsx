@@ -1355,13 +1355,27 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
           </div>
 
           <div>
-            <label htmlFor="scan-year" className="block text-xs text-slate-400 mb-1">Year / Series Date</label>
+            <label htmlFor="scan-year" className="block text-xs text-slate-400 mb-1">
+              {form.category === "CARD"
+                ? "Release Year"
+                : form.category === "PAPER"
+                  ? "Series / Year Date"
+                  : form.category === "BAR"
+                    ? "Production Year / Vintage"
+                    : "Year / Series Date"}
+            </label>
             <input
               id="scan-year"
               name="year"
               value={form.year}
               onChange={(e) => setForm({ ...form, year: e.target.value })}
-              placeholder="e.g. 2017A, 1921"
+              placeholder={
+                form.category === "CARD"
+                  ? "e.g. 1999, 2023"
+                  : form.category === "PAPER"
+                    ? "e.g. 1934, 2017A"
+                    : "e.g. 2017A, 1921"
+              }
               className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm font-mono"
             />
           </div>
@@ -1378,38 +1392,60 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
             />
           </div>
 
-          <div>
-            <label htmlFor="scan-denomination" className="block text-xs text-slate-400 mb-1">Denomination</label>
-            <input
-              id="scan-denomination"
-              name="denomination"
-              value={form.denomination}
-              onChange={(e) => setForm({ ...form, denomination: e.target.value })}
-              placeholder="e.g. $100, $1"
-              className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
-            />
-          </div>
+          {form.category !== "CARD" &&
+            form.category !== "BAR" &&
+            form.category !== "ROUND" && (
+              <div>
+                <label htmlFor="scan-denomination" className="block text-xs text-slate-400 mb-1">Denomination</label>
+                <input
+                  id="scan-denomination"
+                  name="denomination"
+                  value={form.denomination}
+                  onChange={(e) => setForm({ ...form, denomination: e.target.value })}
+                  placeholder="e.g. $100, $1"
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                />
+              </div>
+            )}
+
+          {form.category !== "BAR" && form.category !== "ROUND" && (
+            <div>
+              <label htmlFor="scan-series" className="block text-xs text-slate-400 mb-1">Series</label>
+              <input
+                id="scan-series"
+                name="series"
+                value={form.series}
+                onChange={(e) => setForm({ ...form, series: e.target.value })}
+                placeholder={
+                  form.category === "CARD"
+                    ? "e.g. Base Set, Sun & Moon"
+                    : "e.g. Federal Reserve Note, Morgan Dollar"
+                }
+                className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+              />
+            </div>
+          )}
 
           <div>
-            <label htmlFor="scan-series" className="block text-xs text-slate-400 mb-1">Series</label>
-            <input
-              id="scan-series"
-              name="series"
-              value={form.series}
-              onChange={(e) => setForm({ ...form, series: e.target.value })}
-              placeholder="e.g. Federal Reserve Note, Morgan Dollar"
-              className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
-            />
-          </div>
-
-          <div>
-            <label htmlFor="scan-mint" className="block text-xs text-slate-400 mb-1">Mint / Refiner</label>
+            <label htmlFor="scan-mint" className="block text-xs text-slate-400 mb-1">
+              {form.category === "CARD"
+                ? "Manufacturer / Publisher"
+                : form.category === "PAPER"
+                  ? "Issuing Bank / Printer"
+                  : "Mint / Refiner"}
+            </label>
             <input
               id="scan-mint"
               name="mint_or_refiner"
               value={form.mint_or_refiner}
               onChange={(e) => setForm({ ...form, mint_or_refiner: e.target.value })}
-              placeholder="e.g. U.S. Mint, BEP, Geiger"
+              placeholder={
+                form.category === "CARD"
+                  ? "e.g. Nintendo, Wizards of the Coast, Topps"
+                  : form.category === "PAPER"
+                    ? "e.g. BEP, New York Fed, Thomas de la Rue"
+                    : "e.g. U.S. Mint, BEP, Geiger"
+              }
               className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
             />
           </div>
@@ -1439,63 +1475,186 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
             />
           </div>
 
-          <div>
-            <label htmlFor="scan-metal-type" className="block text-xs text-slate-400 mb-1">Metal Type</label>
-            <select
-              id="scan-metal-type"
-              name="metal_type"
-              value={form.metal_type}
-              onChange={(e) => setForm({ ...form, metal_type: e.target.value })}
-              className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
-            >
-              {Object.entries(METAL_LABELS).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
-                </option>
-              ))}
-            </select>
-          </div>
+          {form.category !== "CARD" &&
+            (form.category !== "PAPER" || form.metal_type !== "NONE") && (
+              <>
+                <div>
+                  <label htmlFor="scan-metal-type" className="block text-xs text-slate-400 mb-1">Metal Type</label>
+                  <select
+                    id="scan-metal-type"
+                    name="metal_type"
+                    value={form.metal_type}
+                    onChange={(e) => setForm({ ...form, metal_type: e.target.value })}
+                    className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  >
+                    {Object.entries(METAL_LABELS).map(([k, v]) => (
+                      <option key={k} value={k}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-          <div>
-            <label htmlFor="scan-weight-value" className="block text-xs text-slate-400 mb-1">Weight (per unit)</label>
-            <div className="flex gap-2">
-              <input
-                id="scan-weight-value"
-                name="weight_value"
-                type="number"
-                step="0.0001"
-                value={form.weight_value}
-                onChange={(e) => setForm({ ...form, weight_value: e.target.value })}
-                className="flex-1 px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
-              />
-              <select
-                id="scan-weight-unit"
-                name="weight_unit"
-                aria-label="Weight unit"
-                value={form.weight_unit}
-                onChange={(e) => setForm({ ...form, weight_unit: e.target.value })}
-                className="px-2.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                <div>
+                  <label htmlFor="scan-weight-value" className="block text-xs text-slate-400 mb-1">Weight (per unit)</label>
+                  <div className="flex gap-2">
+                    <input
+                      id="scan-weight-value"
+                      name="weight_value"
+                      type="number"
+                      step="0.0001"
+                      value={form.weight_value}
+                      onChange={(e) => setForm({ ...form, weight_value: e.target.value })}
+                      className="flex-1 px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                    />
+                    <select
+                      id="scan-weight-unit"
+                      name="weight_unit"
+                      aria-label="Weight unit"
+                      value={form.weight_unit}
+                      onChange={(e) => setForm({ ...form, weight_unit: e.target.value })}
+                      className="px-2.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                    >
+                      <option value="OZ_T">ozt</option>
+                      <option value="G">g</option>
+                      <option value="KG">kg</option>
+                      <option value="OZ_AVDP">oz</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="scan-purity" className="block text-xs text-slate-400 mb-1">Purity (e.g. 0.999)</label>
+                  <input
+                    id="scan-purity"
+                    name="purity"
+                    type="number"
+                    step="0.000001"
+                    value={form.purity}
+                    onChange={(e) => setForm({ ...form, purity: e.target.value })}
+                    className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+              </>
+            )}
+
+          {form.category === "PAPER" && form.metal_type === "NONE" && (
+            <div className="sm:col-span-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setForm({
+                    ...form,
+                    metal_type: "GOLD",
+                    weight_value: "0.001",
+                    weight_unit: "OZ_T",
+                    purity: "0.999000",
+                  })
+                }
+                className="text-xs text-amber-400 hover:text-amber-300 transition"
               >
-                <option value="OZ_T">ozt</option>
-                <option value="G">g</option>
-                <option value="KG">kg</option>
-                <option value="OZ_AVDP">oz</option>
-              </select>
+                + Add Precious Metal Content (e.g. Goldback)
+              </button>
             </div>
-          </div>
+          )}
 
-          <div>
-            <label htmlFor="scan-purity" className="block text-xs text-slate-400 mb-1">Purity (e.g. 0.999)</label>
-            <input
-              id="scan-purity"
-              name="purity"
-              type="number"
-              step="0.000001"
-              value={form.purity}
-              onChange={(e) => setForm({ ...form, purity: e.target.value })}
-              className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm"
-            />
-          </div>
+          {form.category === "CARD" && (
+            <div className="sm:col-span-2 p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-3">
+              <div className="text-xs font-semibold uppercase tracking-wider text-amber-300">
+                Trading Card Attributes
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label htmlFor="scan-card-game" className="block text-xs text-slate-400 mb-1">Card Game</label>
+                  <input
+                    id="scan-card-game"
+                    name="card_game"
+                    value={form.card_game}
+                    onChange={(e) => setForm({ ...form, card_game: e.target.value })}
+                    placeholder="e.g. Pokémon, MTG, YGO"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="scan-set-name" className="block text-xs text-slate-400 mb-1">Set Name</label>
+                  <input
+                    id="scan-set-name"
+                    name="set_name"
+                    value={form.set_name}
+                    onChange={(e) => setForm({ ...form, set_name: e.target.value })}
+                    placeholder="e.g. Base Set, 151"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="scan-set-code" className="block text-xs text-slate-400 mb-1">Set Code</label>
+                  <input
+                    id="scan-set-code"
+                    name="set_code"
+                    value={form.set_code}
+                    onChange={(e) => setForm({ ...form, set_code: e.target.value })}
+                    placeholder="e.g. BS, MEW"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="scan-card-number" className="block text-xs text-slate-400 mb-1">Card #</label>
+                  <input
+                    id="scan-card-number"
+                    name="card_number"
+                    value={form.card_number}
+                    onChange={(e) => setForm({ ...form, card_number: e.target.value })}
+                    placeholder="e.g. 4/102"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="scan-rarity" className="block text-xs text-slate-400 mb-1">Rarity</label>
+                  <input
+                    id="scan-rarity"
+                    name="rarity"
+                    value={form.rarity}
+                    onChange={(e) => setForm({ ...form, rarity: e.target.value })}
+                    placeholder="e.g. Holo Rare, SIR"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="scan-card-finish" className="block text-xs text-slate-400 mb-1">Finish</label>
+                  <input
+                    id="scan-card-finish"
+                    name="card_finish"
+                    value={form.card_finish}
+                    onChange={(e) => setForm({ ...form, card_finish: e.target.value })}
+                    placeholder="e.g. Holo, Foil"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="scan-card-edition" className="block text-xs text-slate-400 mb-1">Edition</label>
+                  <input
+                    id="scan-card-edition"
+                    name="card_edition"
+                    value={form.card_edition}
+                    onChange={(e) => setForm({ ...form, card_edition: e.target.value })}
+                    placeholder="e.g. 1st Edition, Unlimited"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="scan-raw-condition" className="block text-xs text-slate-400 mb-1">Raw Condition</label>
+                  <input
+                    id="scan-raw-condition"
+                    name="raw_condition"
+                    value={form.raw_condition}
+                    onChange={(e) => setForm({ ...form, raw_condition: e.target.value })}
+                    placeholder="e.g. NM, LP, MP"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Slabbed, Grading & Serial Info */}
           <div className="sm:col-span-2 p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-3">
