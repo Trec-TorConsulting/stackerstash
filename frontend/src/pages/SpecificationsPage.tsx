@@ -12,11 +12,17 @@ import {
   Layers,
   ArrowRight,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Wrench,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { PublicHeader } from "../components/PublicHeader";
 import { SeoHead } from "../components/SeoHead";
 import { SiteFooter } from "../components/SiteFooter";
+import { MeltCalculatorCard } from "../components/specifications/MeltCalculatorCard";
+import { GradingRoiCard } from "../components/specifications/GradingRoiCard";
+import { SpecificationsFaqCard } from "../components/specifications/SpecificationsFaqCard";
 import {
   CARD_GRADES_CATALOG,
   GOLDBACK_AURUM_DENOMINATIONS,
@@ -28,22 +34,33 @@ import {
   VISION_PIPELINE_SPECS,
 } from "../data/specificationsCatalog";
 
-type SpecTab =
-  | "all"
+export type SpecTab =
   | "services"
   | "numismatics"
   | "banknotes"
   | "bullion"
   | "cards"
-  | "architecture";
+  | "architecture"
+  | "tools"
+  | "all";
 
 export function SpecificationsPage() {
-  const [activeTab, setActiveTab] = useState<SpecTab>("all");
+  const [activeTab, setActiveTab] = useState<SpecTab>("services");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedService, setSelectedService] = useState(GRADING_SERVICES_CATALOG[0].id);
   const [certInput, setCertInput] = useState("");
+  const [showAllStrikes, setShowAllStrikes] = useState(false);
+  const [expandedTiers, setExpandedTiers] = useState<Record<string, boolean>>({
+    "Mint State": true,
+    "About Uncirculated": false,
+    Circulated: false,
+  });
 
   const q = searchQuery.toLowerCase().trim();
+
+  const toggleTier = (tier: string) => {
+    setExpandedTiers((prev) => ({ ...prev, [tier]: !prev[tier] }));
+  };
 
   const filteredServices = GRADING_SERVICES_CATALOG.filter(
     (s) =>
@@ -87,6 +104,15 @@ export function SpecificationsPage() {
     ? activeServiceSpec.urlTemplate.replace("{cert}", encodeURIComponent(certInput.trim()))
     : null;
 
+  // Group Sheldon by tiers
+  const sheldonTiers: { title: string; category: "Mint State" | "About Uncirculated" | "Circulated"; badgeClass: string }[] = [
+    { title: "Mint State & Proof (MS-60 to MS-70)", category: "Mint State", badgeClass: "bg-emerald-500/15 border-emerald-500/30 text-emerald-300" },
+    { title: "About Uncirculated (AU-50 to AU-58)", category: "About Uncirculated", badgeClass: "bg-amber-500/15 border-amber-500/30 text-amber-300" },
+    { title: "Circulated Grades (Poor-1 to XF-45)", category: "Circulated", badgeClass: "bg-slate-800 border-slate-700 text-slate-300" },
+  ];
+
+  const visibleStrikes = showAllStrikes || q ? filteredStrikes : filteredStrikes.slice(0, 6);
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       <SeoHead pathname="/specifications" />
@@ -94,11 +120,11 @@ export function SpecificationsPage() {
 
       <main id="main-content" className="flex-1">
         {/* Hero Section */}
-        <section className="relative overflow-hidden border-b border-slate-800/80 py-16 md:py-20 bg-gradient-to-b from-slate-900/60 to-slate-950">
+        <section className="relative overflow-hidden border-b border-slate-800/80 py-12 md:py-16 bg-gradient-to-b from-slate-900/60 to-slate-950">
           <div className="max-w-7xl mx-auto px-4 md:px-8">
-            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-semibold mb-4">
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-semibold mb-3">
               <Sparkles className="h-3.5 w-3.5" />
-              Exhaustive Technical Reference &amp; Data Models
+              Exhaustive Technical Reference &amp; Interactive Tools
             </div>
             <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight text-slate-50 leading-tight">
               Stacker Stash{" "}
@@ -106,12 +132,12 @@ export function SpecificationsPage() {
                 Technical Specifications
               </span>
             </h1>
-            <p className="mt-4 text-slate-400 max-w-3xl text-sm md:text-base leading-relaxed">
-              Every formula, scale, and protocol powering our multi-asset vault: Sheldon 1–70 numismatics, 13 certified slab verification schemas, 5-metal spot conversions, Goldback aurum layers, card centering rubrics, and consensus valuation pipelines.
+            <p className="mt-3 text-slate-400 max-w-3xl text-sm md:text-base leading-relaxed">
+              Every formula, scale, and protocol powering our multi-asset vault: Sheldon 1–70 numismatics, 13 certified slab verification schemas, 5-metal spot conversions, Goldback aurum layers, card centering rubrics, and real-time scrap calculators.
             </p>
 
             {/* Interactive Search Bar */}
-            <div className="mt-8 max-w-xl relative">
+            <div className="mt-6 max-w-xl relative">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
               <input
                 type="text"
@@ -135,13 +161,14 @@ export function SpecificationsPage() {
             {/* Category Tabs */}
             <div className="mt-6 flex flex-wrap gap-2">
               {[
-                { id: "all", label: "All Specifications", icon: Layers },
                 { id: "services", label: "13 Grading Services & Slabs", icon: ShieldCheck },
                 { id: "numismatics", label: "Numismatics & Strikes", icon: Coins },
                 { id: "banknotes", label: "Banknotes & Goldbacks", icon: Banknote },
                 { id: "bullion", label: "Bullion & Spot Math", icon: Flame },
                 { id: "cards", label: "Trading Cards (1–10)", icon: CreditCard },
                 { id: "architecture", label: "Valuation & AI Pipeline", icon: Cpu },
+                { id: "tools", label: "Interactive Calculators & FAQ", icon: Wrench },
+                { id: "all", label: "All Specifications", icon: Layers },
               ].map(({ id, label, icon: Icon }) => (
                 <button
                   key={id}
@@ -161,9 +188,9 @@ export function SpecificationsPage() {
           </div>
         </section>
 
-        <div className="max-w-7xl mx-auto px-4 md:px-8 py-12 space-y-16">
+        <div className="max-w-7xl mx-auto px-4 md:px-8 py-10 space-y-14">
           {/* Interactive Slab Cert Verification Deep-Link Generator */}
-          {(activeTab === "all" || activeTab === "services") && (
+          {(activeTab === "services" || activeTab === "tools" || activeTab === "all") && (
             <section className="rounded-2xl border border-amber-500/30 bg-slate-900/50 p-6 space-y-6">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
@@ -246,7 +273,7 @@ export function SpecificationsPage() {
           )}
 
           {/* 13 Grading Services Table */}
-          {(activeTab === "all" || activeTab === "services") && (
+          {(activeTab === "services" || activeTab === "all") && (
             <section className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -302,7 +329,7 @@ export function SpecificationsPage() {
           )}
 
           {/* Numismatic Sheldon 1–70 Scale & Strike Designations */}
-          {(activeTab === "all" || activeTab === "numismatics") && (
+          {(activeTab === "numismatics" || activeTab === "all") && (
             <section className="space-y-8">
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
@@ -312,7 +339,7 @@ export function SpecificationsPage() {
                       Sheldon 1–70 Numismatic &amp; Paper Grading Scale
                     </h2>
                     <p className="text-xs text-slate-400 mt-1">
-                      The standardized 70-point numerical grading system developed by Dr. William Herbert Sheldon, adopted by PCGS, NGC, ANACS, and PMG.
+                      Standardized 70-point numerical system grouped into collapsible tiers for fast lookup.
                     </p>
                   </div>
                   <span className="text-xs text-slate-500 font-mono">
@@ -320,62 +347,99 @@ export function SpecificationsPage() {
                   </span>
                 </div>
 
-                <div className="overflow-x-auto rounded-2xl border border-slate-800 bg-slate-900/50">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-950/70 border-b border-slate-800 text-slate-400">
-                      <tr>
-                        <th className="py-3 px-4 font-semibold w-16">Grade</th>
-                        <th className="py-3 px-4 font-semibold w-24">Code</th>
-                        <th className="py-3 px-4 font-semibold w-48">Classification</th>
-                        <th className="py-3 px-4 font-semibold w-36">Tier</th>
-                        <th className="py-3 px-4 font-semibold">Technical Surface Criteria</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800/60 text-slate-300">
-                      {filteredSheldon.map((grade) => (
-                        <tr key={grade.grade} className="hover:bg-slate-800/30 transition">
-                          <td className="py-2.5 px-4 font-mono font-bold text-amber-400 text-sm">
-                            {grade.grade}
-                          </td>
-                          <td className="py-2.5 px-4 font-mono font-semibold text-slate-100">
-                            {grade.code}
-                          </td>
-                          <td className="py-2.5 px-4 font-medium text-slate-200">{grade.name}</td>
-                          <td className="py-2.5 px-4">
-                            <span
-                              className={`px-2 py-0.5 rounded text-[11px] font-medium border ${
-                                grade.category === "Mint State"
-                                  ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
-                                  : grade.category === "About Uncirculated"
-                                  ? "bg-amber-500/15 border-amber-500/30 text-amber-300"
-                                  : "bg-slate-800 border-slate-700 text-slate-300"
-                              }`}
-                            >
-                              {grade.category}
+                {/* Collapsible Sheldon Scale Tiers */}
+                <div className="space-y-3">
+                  {sheldonTiers.map((tier) => {
+                    const tierGrades = filteredSheldon.filter((g) => g.category === tier.category);
+                    if (tierGrades.length === 0) return null;
+                    const isExpanded = q ? true : !!expandedTiers[tier.category];
+
+                    return (
+                      <div
+                        key={tier.category}
+                        className="rounded-2xl border border-slate-800 bg-slate-900/50 overflow-hidden"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => toggleTier(tier.category)}
+                          aria-expanded={isExpanded}
+                          className="w-full px-5 py-3.5 flex items-center justify-between bg-slate-950/70 hover:bg-slate-900/90 transition text-left"
+                        >
+                          <div className="flex items-center gap-3">
+                            {isExpanded ? (
+                              <ChevronDown className="h-4 w-4 text-amber-400 shrink-0" />
+                            ) : (
+                              <ChevronRight className="h-4 w-4 text-slate-500 shrink-0" />
+                            )}
+                            <span className="font-semibold text-sm text-slate-200">{tier.title}</span>
+                            <span className={`px-2 py-0.5 rounded text-[11px] font-medium border ${tier.badgeClass}`}>
+                              {tierGrades.length} Grades
                             </span>
-                          </td>
-                          <td className="py-2.5 px-4 text-slate-400">{grade.description}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                          </div>
+                          <span className="text-xs text-slate-500 font-medium">
+                            {isExpanded ? "Collapse" : "Expand"}
+                          </span>
+                        </button>
+
+                        {isExpanded && (
+                          <div className="overflow-x-auto border-t border-slate-800/80">
+                            <table className="w-full text-left text-xs">
+                              <thead className="bg-slate-950/40 border-b border-slate-800/60 text-slate-400">
+                                <tr>
+                                  <th className="py-2.5 px-4 font-semibold w-16">Grade</th>
+                                  <th className="py-2.5 px-4 font-semibold w-24">Code</th>
+                                  <th className="py-2.5 px-4 font-semibold w-48">Classification</th>
+                                  <th className="py-2.5 px-4 font-semibold">Technical Surface Criteria</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                                {tierGrades.map((grade) => (
+                                  <tr key={grade.grade} className="hover:bg-slate-800/30 transition">
+                                    <td className="py-2.5 px-4 font-mono font-bold text-amber-400 text-sm">
+                                      {grade.grade}
+                                    </td>
+                                    <td className="py-2.5 px-4 font-mono font-semibold text-slate-100">
+                                      {grade.code}
+                                    </td>
+                                    <td className="py-2.5 px-4 font-medium text-slate-200">{grade.name}</td>
+                                    <td className="py-2.5 px-4 text-slate-400">{grade.description}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
-              {/* Strike Designations */}
+              {/* Strike Designations with Show All Toggle */}
               <div className="space-y-4">
-                <div>
-                  <h3 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-amber-400" />
-                    Strike, Proof &amp; Surface Quality Designations
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Special strike characteristics, mirror depths, and device frosting recognized across PCGS, NGC, and PMG catalogs.
-                  </p>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-bold text-slate-100 flex items-center gap-2">
+                      <Sparkles className="h-4 w-4 text-amber-400" />
+                      Strike, Proof &amp; Surface Quality Designations
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Special strike characteristics, mirror depths, and device frosting recognized across PCGS, NGC, and PMG catalogs.
+                    </p>
+                  </div>
+                  {!q && filteredStrikes.length > 6 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllStrikes(!showAllStrikes)}
+                      className="text-xs font-semibold text-amber-400 hover:text-amber-300 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/25 transition"
+                    >
+                      {showAllStrikes ? "Show Top 6" : `Show All ${filteredStrikes.length}`}
+                    </button>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {filteredStrikes.map((s) => (
+                  {visibleStrikes.map((s) => (
                     <div
                       key={s.code}
                       className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 space-y-2 hover:border-slate-700 transition"
@@ -392,11 +456,16 @@ export function SpecificationsPage() {
                   ))}
                 </div>
               </div>
+
+              {/* Embedded ROI Simulator under Numismatics */}
+              <div className="pt-4">
+                <GradingRoiCard />
+              </div>
             </section>
           )}
 
           {/* Banknotes & Goldbacks */}
-          {(activeTab === "all" || activeTab === "banknotes") && (
+          {(activeTab === "banknotes" || activeTab === "all") && (
             <section className="space-y-6">
               <div>
                 <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
@@ -479,7 +548,7 @@ export function SpecificationsPage() {
           )}
 
           {/* Bullion & 5-Metal Spot Conversion Math */}
-          {(activeTab === "all" || activeTab === "bullion") && (
+          {(activeTab === "bullion" || activeTab === "all") && (
             <section className="space-y-6">
               <div>
                 <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
@@ -490,6 +559,9 @@ export function SpecificationsPage() {
                   High-precision metric and avoirdupois mass conversions powering live spot melt valuations across 5 metals.
                 </p>
               </div>
+
+              {/* Embedded Live Melt Calculator */}
+              <MeltCalculatorCard />
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {METALS_CATALOG.map((metal) => (
@@ -552,7 +624,7 @@ export function SpecificationsPage() {
           )}
 
           {/* Trading Cards (1–10) & Centering Rubrics */}
-          {(activeTab === "all" || activeTab === "cards") && (
+          {(activeTab === "cards" || activeTab === "all") && (
             <section className="space-y-6">
               <div className="flex items-center justify-between">
                 <div>
@@ -599,7 +671,7 @@ export function SpecificationsPage() {
           )}
 
           {/* Valuation & Vision Pipeline Architecture */}
-          {(activeTab === "all" || activeTab === "architecture") && (
+          {(activeTab === "architecture" || activeTab === "all") && (
             <section className="space-y-6">
               <div>
                 <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
@@ -644,6 +716,22 @@ export function SpecificationsPage() {
                   </div>
                 </div>
               </div>
+            </section>
+          )}
+
+          {/* Interactive Tools & FAQ Section */}
+          {(activeTab === "tools" || activeTab === "all") && (
+            <section className="space-y-8">
+              <MeltCalculatorCard />
+              <GradingRoiCard />
+              <SpecificationsFaqCard />
+            </section>
+          )}
+
+          {/* Standalone FAQ for other tabs */}
+          {activeTab !== "tools" && activeTab !== "all" && (
+            <section className="pt-4 border-t border-slate-800/60">
+              <SpecificationsFaqCard />
             </section>
           )}
 

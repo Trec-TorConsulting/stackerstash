@@ -60,11 +60,19 @@ The pricing presentation on `/` and `/pricing` SHALL display all four SaaS acces
 - **THEN** all four SaaS tiers with exact vault/item limits and pricing plus the `Self-Hosted / Open Source` card are rendered with clear `/register` call-to-action links
 
 ### Requirement: Dedicated public routes for SEO and enterprise trust
-The application SHALL provide dedicated unauthenticated public routes at `/features`, `/pricing`, `/security`, `/privacy`, and `/terms` (in addition to `/` and `/marketing`), with frontend-only navigation and contact CTAs (`/register`, `/login`, `mailto:`, and GitHub) and zero fake or unpersisted lead-capture forms.
+The application SHALL provide dedicated unauthenticated public routes at `/features`, `/pricing`, `/security`, `/privacy`, `/terms`, and `/specifications` (in addition to `/` and `/marketing`), with frontend-only navigation and contact CTAs (`/register`, `/login`, `mailto:`, and GitHub) and zero fake or unpersisted lead-capture forms.
 
 #### Scenario: Visitor opens enterprise security and legal disclosure routes
 - **WHEN** a visitor navigates directly to `/security`, `/privacy`, or `/terms`
 - **THEN** the site renders complete architecture security disclosures (tenant isolation, Fernet BYOK encryption, HMAC-signed media, OWASP protections), privacy policy, or terms of service with links back to `/register` and `/`
+
+#### Scenario: Visitor opens specifications route
+- **WHEN** a visitor navigates directly to `/specifications`
+- **THEN** the site renders complete technical specifications with navigation links back to `/register` and `/`
+
+#### Scenario: Visitor views early access and launch pages
+- **WHEN** a visitor visits `/coming-soon`
+- **THEN** the page displays direct sign-up and sign-in access CTAs without non-functional or unpersisted email capture forms
 
 ### Requirement: Responsive navigation and accessible WCAG controls
 The public header and marketing pages SHALL provide a keyboard-accessible skip-to-content link, semantic `<header>`, `<nav>`, `<main>`, and `<footer>` landmarks, an interactive mobile navigation menu toggle on narrow viewports, accessible focus outlines, and `prefers-reduced-motion` safety.
@@ -72,3 +80,35 @@ The public header and marketing pages SHALL provide a keyboard-accessible skip-t
 #### Scenario: Mobile visitor opens navigation drawer
 - **WHEN** a visitor on a mobile viewport activates the menu toggle button
 - **THEN** navigation links to `/features`, `/pricing`, `/security`, `/login`, and `/register` become visible and can be closed via button or `Escape` key
+
+### Requirement: Dedicated technical specifications and data reference page
+The application SHALL provide a dedicated public and authenticated route at `/specifications` (with `/specs` as an alias) presenting a compact, category-scoped technical breakdown of asset attributes, grading scales, certified slab deep-link patterns, bullion conversion formulas, and vision/valuation architectures. The specifications page SHALL default to a focused category tab with collapsible scale tiers, and SHALL embed interactive utility tools including a live spot melt floor calculator, certified slab deep-link generator, grading ROI simulator, and FAQ accordion.
+
+#### Scenario: Collector visits specifications page
+- **WHEN** a visitor or authenticated collector navigates to `/specifications` or `/specs`
+- **THEN** the application renders the comprehensive specifications matrix with categorized sections for numismatics, banknotes, bullion, cards, grading slabs, vision intake, and valuation math
+
+#### Scenario: Visitor navigates from features CTA
+- **WHEN** a visitor clicks "Explore full specifications →" on `/features` or the home page
+- **THEN** the application navigates directly to `/specifications` instead of reloading or linking back to `/features`
+
+#### Scenario: Collector interacts with collapsible scale tiers
+- **WHEN** a visitor selects the "Numismatics & Strikes" tab
+- **THEN** the Sheldon 1–70 grading scale displays collapsible tiers (Mint State 60–70 expanded by default; AU and Circulated collapsed by default)
+- **AND** the strike designations section displays the top designations with an interactive toggle to expand the full catalog
+
+#### Scenario: Collector uses interactive live scrap melt calculator
+- **WHEN** a visitor navigates to the Bullion specifications section or accesses the embedded melt calculator
+- **THEN** the calculator allows selecting a precious metal (Gold, Silver, Platinum, Palladium, Copper), purity, and mass in grams or troy ounces
+- **AND** computes the calculated pure metal melt value in real time
+
+#### Scenario: Collector uses interactive grading ROI simulator
+- **WHEN** a visitor inputs a raw purchase price, estimated slab grade, and grading tier fee in the Grading ROI simulator
+- **THEN** the tool calculates the projected slab market uplift, net profit or loss, and break-even grade threshold
+
+### Requirement: Zero circular self-referencing navigation links
+All navigation links, feature teasers, and section call-to-actions across the public website SHALL point to distinct destination URLs or semantic anchor targets, and SHALL NOT link to the exact same page path on which they are rendered.
+
+#### Scenario: Visitor inspects slab specifications CTA on features page
+- **WHEN** a visitor views the supported grading slabs callout on `/features`
+- **THEN** the link destination points to `/specifications` rather than `/features`
