@@ -63,6 +63,8 @@ export async function convertHeicToJpeg(file: File | Blob, quality = 0.92): Prom
   if (typeof window === "undefined") {
     return file instanceof File ? file : new File([file], "converted.jpg", { type: "image/jpeg" });
   }
+
+  // 1. Try fast in-browser conversion via heic2any
   try {
     const heic2anyModule = await import("heic2any");
     const heic2any = heic2anyModule.default || heic2anyModule;
@@ -76,9 +78,22 @@ export async function convertHeicToJpeg(file: File | Blob, quality = 0.92): Prom
     const baseName = rawName.replace(/\.(heic|heif|hif)$/i, "") || "photo";
     return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
   } catch (err) {
-    console.warn("Client-side HEIC conversion fallback:", err);
-    return file instanceof File ? file : new File([file], "photo.heic", { type: "image/heic" });
+    console.warn("Client-side HEIC conversion failed, falling back to server:", err);
   }
+
+  // 2. Authoritative server-side conversion fallback via backend pillow-heif
+  try {
+    const { api } = await import("./api");
+    const rawName = "name" in file && typeof file.name === "string" ? file.name : "photo.heic";
+    const converted = await api.convertImageToJpeg(file, rawName);
+    if (converted && converted.size > 0) {
+      return converted;
+    }
+  } catch (serverErr) {
+    console.warn("Server-side HEIC conversion fallback failed:", serverErr);
+  }
+
+  return file instanceof File ? file : new File([file], "photo.heic", { type: "image/heic" });
 }
 
 export interface SourceCropRect {

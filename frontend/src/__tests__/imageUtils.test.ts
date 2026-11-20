@@ -355,7 +355,7 @@ describe("imageUtils", () => {
   it("handles convertHeicToJpeg with mocked heic2any and handles fallback on error", async () => {
     const heicFile = new File(["fake-heic"], "coin.heic", { type: "image/heic" });
 
-    // 1. Successful conversion
+    // 1. Successful client conversion
     vi.doMock("heic2any", () => ({
       default: vi.fn().mockResolvedValue(new Blob(["fake-jpeg-bytes"], { type: "image/jpeg" })),
     }));
@@ -363,14 +363,29 @@ describe("imageUtils", () => {
     expect(converted.type).toBe("image/jpeg");
     expect(converted.name).toBe("coin.jpg");
 
-    // 2. Fallback on error
+    // 2. Client conversion fails, server conversion succeeds
     vi.doMock("heic2any", () => ({
-      default: vi.fn().mockRejectedValue(new Error("heic conversion error")),
+      default: vi.fn().mockRejectedValue(new Error("heic wasm error")),
+    }));
+    vi.doMock("../lib/api", () => ({
+      api: {
+        convertImageToJpeg: vi.fn().mockResolvedValue(new File(["server-jpeg-bytes"], "coin.jpg", { type: "image/jpeg" })),
+      },
+    }));
+    const serverConverted = await convertHeicToJpeg(heicFile);
+    expect(serverConverted.type).toBe("image/jpeg");
+    expect(serverConverted.name).toBe("coin.jpg");
+
+    // 3. Client and server conversion both fail -> fallback to original file
+    vi.doMock("../lib/api", () => ({
+      api: {
+        convertImageToJpeg: vi.fn().mockRejectedValue(new Error("server error")),
+      },
     }));
     const fallback = await convertHeicToJpeg(heicFile);
     expect(fallback).toBe(heicFile);
 
-    // 3. Fallback on Blob input without name
+    // 4. Fallback on Blob input without name when both fail
     const rawBlob = new Blob(["blob-heic"], { type: "image/heic" });
     const blobFallback = await convertHeicToJpeg(rawBlob);
     expect(blobFallback.type).toBe("image/heic");

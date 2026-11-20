@@ -14,7 +14,13 @@
  *    machine-readable `reason`.
  *  - Zero runtime dependencies and no background removal (rectangle crop only).
  */
-import { canvasToOptimizedBlob, decodeImageBitmapUpright, isSupportedImageFile } from "./imageUtils";
+import {
+  canvasToOptimizedBlob,
+  convertHeicToJpeg,
+  decodeImageBitmapUpright,
+  isHeicFile,
+  isSupportedImageFile,
+} from "./imageUtils";
 
 export type AutoCropShape = "coin" | "rect";
 
@@ -675,11 +681,15 @@ export async function autoCropImageFile(file: File, options: AutoCropOptions = {
   if (!isAutoCropSupported()) {
     return { file, applied: false, reason: "unsupported", durationMs: 0 };
   }
+  let targetFile = file;
+  if (isHeicFile(file)) {
+    targetFile = await convertHeicToJpeg(file);
+  }
   try {
-    return await withTimeout(runAutoCrop(file, opts, started), opts.timeoutMs);
+    return await withTimeout(runAutoCrop(targetFile, opts, started), opts.timeoutMs);
   } catch (err) {
     return {
-      file,
+      file: targetFile,
       applied: false,
       reason: err instanceof AutoCropTimeout ? "timeout" : "error",
       durationMs: now() - started,
