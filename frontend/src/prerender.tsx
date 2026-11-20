@@ -15,6 +15,7 @@ export const PRERENDER_ROUTES = [
   "/terms",
   "/coming-soon",
   "/specifications",
+  "/specs",
 ] as const;
 
 export function renderRouteHtml(url: string): { appHtml: string; headHtml: string } {
