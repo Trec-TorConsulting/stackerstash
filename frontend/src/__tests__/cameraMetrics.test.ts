@@ -202,6 +202,51 @@ describe("cameraMetrics", () => {
     expect(box!.centerX).toBeLessThan(0.65);
   });
 
+  it("detects hollow/reflective rim coins without getting pulled by heavy right-margin hand or shadow", () => {
+    const w = 80;
+    const h = 60;
+    const buf = new Float32Array(w * h).fill(80);
+    // Heavy hand/shadow on the right margin (columns 74..79)
+    for (let r = 0; r < h; r++) {
+      for (let c = 74; c < w; c++) {
+        buf[r * w + c] = 220;
+      }
+    }
+    // Centered coin with hollow/flat interior (only rim has high contrast)
+    for (let r = 0; r < h; r++) {
+      for (let c = 0; c < w; c++) {
+        const d = Math.hypot(c - 40, r - 30);
+        if (d >= 10 && d <= 14) {
+          buf[r * w + c] = 210;
+        }
+      }
+    }
+    const box = detectSubjectBox(buf, w, h);
+    expect(box).not.toBeNull();
+    expect(box!.shape).toBe("coin");
+    // Center must remain near the middle, NOT pulled to the right margin
+    expect(box!.centerX).toBeGreaterThan(0.40);
+    expect(box!.centerX).toBeLessThan(0.60);
+    expect(evaluateFramingState(box)).toBe("locked");
+  });
+
+  it("detects standard trading card (2.5 x 3.5 aspect ratio) as card shape", () => {
+    const w = 80;
+    const h = 60;
+    const buf = new Float32Array(w * h).fill(60);
+    // Standard card aspect ratio: 2.5 : 3.5 = 0.714
+    // In 80x60 with viewfinderAspect 4/3: width 20, height 28 -> normW 0.25, normH 0.4667 -> aspect 0.714
+    for (let r = 16; r <= 44; r++) {
+      for (let c = 30; c <= 50; c++) {
+        buf[r * w + c] = 210;
+      }
+    }
+    const box = detectSubjectBox(buf, w, h);
+    expect(box).not.toBeNull();
+    expect(box!.shape).toBe("card");
+    expect(evaluateFramingState(box)).toBe("locked");
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();

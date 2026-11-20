@@ -241,6 +241,8 @@ describe("GuidedCameraModal complete controls, lifecycle, and fallback coverage"
     fireEvent.click(screen.getByRole("button", { name: "Coin (Circle)" }));
     fireEvent.click(screen.getByRole("button", { name: "Slab / Bar" }));
     fireEvent.click(screen.getByRole("button", { name: "Note / Bar (Rect)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Card" }));
+    expect(screen.getByTestId("card-guide-reticle")).toBeInTheDocument();
 
     // Zoom pill + container stopPropagation + zoom slider
     const twoXBtn = screen.getByRole("button", { name: "2x" });
