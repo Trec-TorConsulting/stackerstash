@@ -1886,19 +1886,36 @@ def analyze_image_quality_and_forensics(
                         "Heavy specular glare detected over subject — tilt the item or diffuse lighting."
                     )
 
-                luma_q = cv2.cvtColor(arr_q, cv2.COLOR_RGB2GRAY).astype(np.float32)
-                edge_strips = [
-                    luma_q[:3, :],
-                    luma_q[-3:, :],
-                    luma_q[:, :3],
-                    luma_q[:, -3:],
-                ]
-                clipped_edges = sum(1 for strip in edge_strips if float(strip.std()) > 22.0)
-                metrics["clipped_edges"] = clipped_edges
-                if clipped_edges >= 2:
-                    warnings.append(
-                        "Subject appears clipped near frame edges — reframe with a small border."
-                    )
+                detected_box = detect_subject_crop_box(img)
+                is_safely_inside = False
+                if detected_box is not None:
+                    b_left, b_top, b_right, b_bottom = detected_box
+                    if (
+                        b_left >= int(width * 0.015)
+                        and b_top >= int(height * 0.015)
+                        and b_right <= int(width * 0.985)
+                        and b_bottom <= int(height * 0.985)
+                    ):
+                        is_safely_inside = True
+
+                if is_safely_inside:
+                    metrics["clipped_edges"] = 0
+                else:
+                    luma_q = cv2.cvtColor(arr_q, cv2.COLOR_RGB2GRAY).astype(np.float32)
+                    edge_strips = [
+                        luma_q[:3, :],
+                        luma_q[-3:, :],
+                        luma_q[:, :3],
+                        luma_q[:, -3:],
+                    ]
+                    # When a subject is not safely within the borders (e.g. touches frame edges),
+                    # check if multiple strips show high variation indicating the subject cuts across them.
+                    clipped_edges = sum(1 for strip in edge_strips if float(strip.std()) > 22.0)
+                    metrics["clipped_edges"] = clipped_edges
+                    if clipped_edges >= 2:
+                        warnings.append(
+                            "Subject appears clipped near frame edges — reframe with a small border."
+                        )
 
             edges = gray.filter(ImageFilter.FIND_EDGES)
             ew, eh = edges.size

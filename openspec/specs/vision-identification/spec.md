@@ -6,7 +6,7 @@ Provides mobile-first camera capture and photo upload workflows that identify co
 ## Requirements
 
 ### Requirement: Camera and photo upload intake
-The system SHALL allow users on mobile and desktop browsers to capture photos directly via the device camera or upload image files to initiate item identification, avoiding duplicate identification requests while capturing a Front and Back pair, and ensuring captured images are cropped to the subject framing and normalized to upright EXIF orientation before identification and upload.
+The system SHALL allow users on mobile and desktop browsers to capture photos directly via the device camera or upload image files to initiate item identification, avoiding duplicate identification requests while capturing a Front and Back pair, ensuring captured images are cropped to the subject framing and normalized to upright EXIF orientation before identification and upload, supporting resilient fallback across multiple Vision AI providers (Gemini, Groq, OpenRouter, Ollama), and allowing self-hosted Ollama deployments on cluster service DNS when allowlisted.
 
 #### Scenario: Capture obverse and reverse for identification
 - **WHEN** a user captures or uploads one or more images in the intake flow and triggers identification
@@ -31,6 +31,14 @@ The system SHALL allow users on mobile and desktop browsers to capture photos di
 #### Scenario: Wait for reverse photo in camera Front-and-Back flow
 - **WHEN** a user takes a Front (`OBVERSE`) photo using the camera intake button
 - **THEN** the system stages and auto-crops the Front photo locally without immediately calling Vision AI, prompting for **Snap Back** and automatically running identification once the Back (`REVERSE`) photo is captured (unless the user explicitly clicks **Identify with AI** for a single-sided item)
+
+#### Scenario: Gemini 429 quota exhaustion with Groq fallback
+- **WHEN** Gemini vision returns an HTTP 429 quota exhaustion error and Groq is configured
+- **THEN** the identification pipeline cascades to supported Groq vision models (`llama-3.2-11b-vision-preview` / `llama-3.2-90b-vision-preview`) and successfully identifies the collectible
+
+#### Scenario: Local cluster Ollama intake
+- **WHEN** a user or environment configures Ollama URL using an allowlisted cluster hostname (e.g. `http://ollama.ollama.svc.cluster.local:11434`)
+- **THEN** URL validation accepts the allowlisted cluster service URL without triggering SSRF suffix rejections
 
 ### Requirement: Multimodal Vision AI identification with fallback
 The system SHALL identify items using a local-first cascade—checking image hash caches, decoding barcodes/QR codes, running local OCR, and matching the static reference catalog before invoking a text-only LLM tier on rich OCR text or escalating to Vision AI only when local and text tiers cannot resolve the item.

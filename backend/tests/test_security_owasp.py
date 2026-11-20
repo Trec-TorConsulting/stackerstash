@@ -331,6 +331,7 @@ def test_a10_ssrf_url_validation_redirect_and_stream_cap(api_client, user_a, mon
             validate_ollama_url(bad_ol)
 
     assert validate_ollama_url("https://ollama.example.com:11434/") == "https://ollama.example.com:11434"
+    assert validate_ollama_url("http://ollama.ollama.svc.cluster.local:11434") == "http://ollama.ollama.svc.cluster.local:11434"
     assert (
         api_client.put(
             "/api/v1/settings/credentials/OLLAMA_URL",

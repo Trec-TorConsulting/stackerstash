@@ -155,3 +155,21 @@ def test_analyze_image_flags_clipped_subject_edges():
     assert any("clipped" in w.lower() for w in res["warnings"])
 
 
+def test_analyze_image_does_not_flag_subject_within_frame_on_textured_background():
+    # Coin centered comfortably within frame with textured background (table grain/gradient)
+    img = Image.new("RGB", (600, 600), (80, 70, 60))
+    draw = ImageDraw.Draw(img)
+    # Background texture gradient
+    for x in range(0, 600, 10):
+        draw.line((x, 0, x, 600), fill=(80 + (x % 30), 70, 60), width=5)
+    # Centered coin well within frame borders
+    draw.ellipse((150, 150, 450, 450), fill=(185, 185, 190), outline=(100, 100, 105), width=4)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=95)
+
+    res = analyze_image_quality_and_forensics(buf.getvalue(), mode="camera")
+    assert res["metrics"]["clipped_edges"] == 0
+    assert not any("clipped" in w.lower() for w in res["warnings"])
+
+
+
