@@ -164,6 +164,7 @@ describe("ScanAddPage full coverage", () => {
       },
     });
     const { unmount: u1 } = renderScan();
+    fireEvent.click(screen.getByRole("button", { name: "Open Camera" }));
     u1();
 
     // 2. Cancelled unmount while getUserMedia is pending (resolve AND reject), plus unmounts during pending autoCrop & harmonize
@@ -191,11 +192,13 @@ describe("ScanAddPage full coverage", () => {
       },
     });
     const { unmount: u2 } = renderScan();
+    fireEvent.click(screen.getByRole("button", { name: "Open Camera" }));
     u2();
     resMedia({ getTracks: () => [stoppedTrack] });
     await waitFor(() => expect(stoppedTrack.stop).toHaveBeenCalled());
 
     const { unmount: u2b } = renderScan();
+    fireEvent.click(screen.getByRole("button", { name: "Open Camera" }));
     u2b();
     rejMedia(new Error("late deny"));
 
@@ -256,6 +259,7 @@ describe("ScanAddPage full coverage", () => {
       },
     });
     const { container } = renderScan();
+    fireEvent.click(screen.getByRole("button", { name: "Open Camera" }));
     expect(await screen.findByText(/Cam denied/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Open Camera" }));
@@ -289,6 +293,12 @@ describe("ScanAddPage full coverage", () => {
     Object.defineProperty(vid2, "videoHeight", { configurable: true, value: 480 });
     fireEvent.loadedMetadata(vid2);
     fireEvent.click(await screen.findByRole("button", { name: /Snap Back Photo/i }));
+
+    // Guided Scan modal open and close
+    fireEvent.click(screen.getByRole("button", { name: /Guided Scan/i }));
+    expect(screen.getByRole("dialog", { name: /Guided Camera Capture/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Close camera/i }));
+    expect(screen.queryByRole("dialog", { name: /Guided Camera Capture/i })).not.toBeInTheDocument();
 
     await waitFor(() => expect(autoCrop.harmonizeCropPair).toHaveBeenCalled());
     await waitFor(() => expect(apiModule.api.identifyImages).toHaveBeenCalled());

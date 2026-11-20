@@ -17,6 +17,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { PhotoCropRotateView } from "../components/PhotoCropRotateView";
+import { GuidedCameraModal } from "../components/GuidedCameraModal";
 import {
   api,
   isPlanLimitError,
@@ -152,9 +153,8 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
   }, []);
   const [editingPhotoIndex, setEditingPhotoIndex] = useState<number | null>(null);
   const [intakeSource, setIntakeSource] = useState<"CAMERA" | "UPLOAD" | "MANUAL">("MANUAL");
-  const [cameraOpen, setCameraOpen] = useState(
-    () => typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia)
-  );
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [guidedModalOpen, setGuidedModalOpen] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -840,42 +840,50 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
         }`}
       >
         {cameraOpen && (
-          <div className="relative rounded-xl overflow-hidden bg-black border border-slate-700 aspect-[4/3] sm:aspect-video">
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              onLoadedMetadata={() => setCameraReady(true)}
-              className="w-full h-full object-cover"
-            />
-            {/* Centering guide overlay */}
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <div className="relative w-56 h-56 sm:w-64 sm:h-64 rounded-2xl border-2 border-dashed border-amber-400/85 shadow-[0_0_0_9999px_rgba(2,6,23,0.45)] flex items-center justify-center">
-                <div className="w-3 h-3 rounded-full border border-amber-300/90 bg-amber-400/20" />
+          <div className="space-y-3">
+            <div className="relative rounded-2xl overflow-hidden bg-black border border-slate-700 aspect-[3/4] sm:aspect-video shadow-inner">
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                onLoadedMetadata={() => setCameraReady(true)}
+                className="w-full h-full object-cover"
+              />
+              {/* Centering guide overlay - clean corner brackets, NO dark vignette shadow */}
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
+                <div className="relative w-full max-w-[280px] aspect-square rounded-2xl border border-amber-400/30 flex items-center justify-center">
+                  <span className="absolute -top-0.5 -left-0.5 w-6 h-6 border-t-2 border-l-2 border-amber-400 rounded-tl-lg" />
+                  <span className="absolute -top-0.5 -right-0.5 w-6 h-6 border-t-2 border-r-2 border-amber-400 rounded-tr-lg" />
+                  <span className="absolute -bottom-0.5 -left-0.5 w-6 h-6 border-b-2 border-l-2 border-amber-400 rounded-bl-lg" />
+                  <span className="absolute -bottom-0.5 -right-0.5 w-6 h-6 border-b-2 border-r-2 border-amber-400 rounded-br-lg" />
+                  <div className="w-2.5 h-2.5 rounded-full border border-amber-300/80 bg-amber-400/20" />
+                </div>
+              </div>
+              <div className="pointer-events-none absolute top-3 inset-x-0 flex justify-center">
+                <span className="px-3 py-1 rounded-full bg-slate-950/80 border border-slate-700 text-xs font-medium text-amber-300 shadow-sm backdrop-blur-sm">
+                  {hasObverse && !hasReverse
+                    ? "Step 2: Center Back (Reverse) in frame"
+                    : "Step 1: Center Front (Obverse) in frame"}
+                </span>
               </div>
             </div>
-            <div className="pointer-events-none absolute top-3 inset-x-0 flex justify-center">
-              <span className="px-3 py-1 rounded-full bg-slate-950/80 border border-slate-700 text-xs font-medium text-amber-300">
-                {hasObverse && !hasReverse
-                  ? "Center Back (Reverse) in frame"
-                  : "Center Front (Obverse) in frame"}
-              </span>
-            </div>
-            <div className="absolute bottom-3 inset-x-3 flex items-center justify-between gap-2">
+
+            {/* Viewfinder action controls - docked neatly underneath the video, never blocking the camera view */}
+            <div className="flex items-center justify-between gap-3 pt-1">
               <button
                 type="button"
                 onClick={() => setCameraOpen(false)}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-950/85 hover:bg-slate-900 border border-slate-700 text-slate-200 text-xs font-medium transition"
+                className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium transition"
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="h-4 w-4" />
                 Close Camera
               </button>
               <button
                 type="button"
                 disabled={!cameraReady}
                 onClick={captureFromViewfinder}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-semibold text-sm shadow-lg transition"
+                className="flex-1 flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold text-sm shadow-lg transition"
               >
                 <Camera className="h-4 w-4" />
                 {hasObverse && !hasReverse ? "Snap Back Photo" : "Snap Front Photo"}
@@ -889,18 +897,28 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
           </p>
         )}
         <div className="flex flex-wrap gap-2.5">
-          {!cameraOpen &&
-            typeof navigator !== "undefined" &&
-            Boolean(navigator.mediaDevices?.getUserMedia) && (
+          {typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia) && (
+            <>
               <button
                 type="button"
-                onClick={() => setCameraOpen(true)}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-sm cursor-pointer transition"
+                onClick={() => setGuidedModalOpen(true)}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm cursor-pointer shadow-md transition"
               >
-                <Camera className="h-4 w-4" />
-                Open Camera
+                <Sparkles className="h-4 w-4" />
+                Guided Scan
               </button>
-            )}
+              {!cameraOpen && (
+                <button
+                  type="button"
+                  onClick={() => setCameraOpen(true)}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 font-medium text-sm cursor-pointer border border-slate-700 transition"
+                >
+                  <Camera className="h-4 w-4" />
+                  Open Camera
+                </button>
+              )}
+            </>
+          )}
           <label className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-700 hover:border-slate-500 text-slate-200 font-medium text-sm cursor-pointer transition">
             <Camera className="h-4 w-4" />
             {hasObverse && !hasReverse ? "Snap Back Photo" : "Take Photo"}
@@ -927,6 +945,17 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
               onChange={(e) => handleFilePick(e, "OBVERSE")}
             />
           </label>
+        </div>
+
+        {/* iOS Camera Permission Guidance Tip */}
+        <div className="rounded-xl border border-slate-800/90 bg-slate-950/70 p-3 text-xs text-slate-400 space-y-1">
+          <div className="flex items-center gap-1.5 text-amber-300 font-medium">
+            <Sparkles className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+            <span>iPhone Camera Tip: Permanently Allow Access</span>
+          </div>
+          <p className="text-slate-400 leading-relaxed">
+            To stop Safari from asking for camera permission every time: Tap <strong className="text-slate-200">aA</strong> (or the page settings icon) on the left of the address bar &gt; <strong className="text-slate-200">Website Settings</strong> &gt; set <strong className="text-slate-200">Camera</strong> to <strong className="text-amber-300">Allow</strong>.
+          </p>
         </div>
 
         <p className="text-xs text-slate-400">
@@ -1833,6 +1862,27 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
             </form>
           </div>
         )}
+
+      {guidedModalOpen && (
+        <GuidedCameraModal
+          open={guidedModalOpen}
+          onClose={() => setGuidedModalOpen(false)}
+          onComplete={({ frontFile, backFile }) => {
+            setGuidedModalOpen(false);
+            const captures = backFile ? [frontFile, backFile] : [frontFile];
+            ingestFiles(captures, "OBVERSE", "CAMERA");
+          }}
+          initialShape={
+            form.category === "COIN"
+              ? "coin"
+              : form.category === "PAPER"
+                ? "note"
+                : form.category === "TRADING_CARD"
+                  ? "slab"
+                  : "auto"
+          }
+        />
+      )}
       </div>
     </div>
   );
