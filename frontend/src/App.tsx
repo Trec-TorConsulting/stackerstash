@@ -25,6 +25,7 @@ import { ItemDetailPage } from "./pages/ItemDetailPage";
 import { MarketingPage } from "./pages/MarketingPage";
 import { ScanAddPage } from "./pages/ScanAddPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { SpecificationsPage } from "./pages/SpecificationsPage";
 
 const SITE_MODE = import.meta.env.VITE_SITE_MODE || "marketing";
 
@@ -117,6 +118,8 @@ export function AppRoutes() {
           <Route path="/security" element={<MarketingPage section="security" />} />
           <Route path="/privacy" element={<MarketingPage section="privacy" />} />
           <Route path="/terms" element={<MarketingPage section="terms" />} />
+          <Route path="/specifications" element={<SpecificationsPage />} />
+          <Route path="/specs" element={<SpecificationsPage />} />
           <Route
             path="/login"
             element={<AuthPage onAuth={handleAuthenticated} initialMode="login" />}
@@ -146,6 +149,8 @@ export function AppRoutes() {
         <Route path="/security" element={<MarketingPage section="security" />} />
         <Route path="/privacy" element={<MarketingPage section="privacy" />} />
         <Route path="/terms" element={<MarketingPage section="terms" />} />
+        <Route path="/specifications" element={<SpecificationsPage />} />
+        <Route path="/specs" element={<SpecificationsPage />} />
       <Route
         element={
           <Layout

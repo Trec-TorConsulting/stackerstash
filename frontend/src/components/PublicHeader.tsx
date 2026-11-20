@@ -6,6 +6,7 @@ import { BrandLogo } from "./BrandLogo";
 
 const NAV_LINKS = [
   { to: "/features", label: "Features" },
+  { to: "/specifications", label: "Specifications" },
   { to: "/pricing", label: "Pricing" },
   { to: "/security", label: "Security" },
 ];

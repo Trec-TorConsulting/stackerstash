@@ -6,7 +6,8 @@ import json
 import logging
 import re
 import time
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
+from statistics import median
 from typing import Any
 
 import httpx
@@ -1156,11 +1157,119 @@ def _collect_item_photo_b64(
     return [(mime, base64.b64encode(img_bytes).decode("ascii")) for img_bytes, mime in prepared]
 
 
+def extract_grounding_market_comps(
+    grounded_sources: list[dict[str, str]], text_context: str = ""
+) -> dict[str, Any] | None:
+    """Extract structured sold and active asking quotes from Gemini Search Grounding citations."""
+    if not grounded_sources and not text_context:
+        return None
+
+    sold_prices: list[Decimal] = []
+    ask_prices: list[Decimal] = []
+
+    price_pattern = re.compile(
+        r"(?:\$|USD\s*)([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?|[0-9]+(?:\.[0-9]{2})?)"
+    )
+
+    for src in grounded_sources or []:
+        title = src.get("title", "")
+        uri = src.get("uri", "")
+        combined = f"{title} {uri}".lower()
+        is_sold = any(w in combined for w in ["sold", "realized", "auction-result", "ended", "completed"])
+
+        for match in price_pattern.finditer(title):
+            raw_val = match.group(1).replace(",", "")
+            val = Decimal(raw_val)
+            if Decimal("1.00") <= val <= Decimal("500000.00"):
+                if is_sold:
+                    sold_prices.append(val)
+                else:
+                    ask_prices.append(val)
+
+    if not sold_prices and not ask_prices and text_context:
+        for line in text_context.splitlines():
+            line_lower = line.lower()
+            if any(term in line_lower for term in ["sold", "sale", "price", "ebay", "auction", "heritage", "comps"]):
+                is_sold = any(w in line_lower for w in ["sold", "realized", "cleared", "ended"])
+                for match in price_pattern.finditer(line):
+                    raw_val = match.group(1).replace(",", "")
+                    val = Decimal(raw_val)
+                    if Decimal("1.00") <= val <= Decimal("500000.00"):
+                        if is_sold:
+                            sold_prices.append(val)
+                        else:
+                            ask_prices.append(val)
+
+    all_prices = sold_prices + ask_prices
+    if not all_prices:
+        return None
+
+    from apps.valuation.providers import _trim_outliers
+
+    trimmed_all = _trim_outliers(all_prices) if len(all_prices) >= 4 else all_prices
+
+    trimmed_sold = [p for p in sold_prices if p in trimmed_all]
+    trimmed_ask = [p for p in ask_prices if p in trimmed_all]
+
+    med_val = Decimal(str(median([float(p) for p in trimmed_all]))).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+    low_val = min(trimmed_all).quantize(Decimal("0.01"))
+    high_val = max(trimmed_all).quantize(Decimal("0.01"))
+
+    is_blended = bool(trimmed_sold and trimmed_ask)
+    is_ask = bool(trimmed_ask and not trimmed_sold)
+
+    sold_data = None
+    if trimmed_sold:
+        sold_med = Decimal(str(median([float(p) for p in trimmed_sold]))).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        sold_data = {
+            "count": len(trimmed_sold),
+            "low": min(trimmed_sold).quantize(Decimal("0.01")),
+            "high": max(trimmed_sold).quantize(Decimal("0.01")),
+            "median": sold_med,
+        }
+
+    ask_data = None
+    if trimmed_ask:
+        ask_mean = (sum(trimmed_ask) / Decimal(str(len(trimmed_ask)))).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        ask_data = {
+            "count": len(trimmed_ask),
+            "low": min(trimmed_ask).quantize(Decimal("0.01")),
+            "high": max(trimmed_ask).quantize(Decimal("0.01")),
+            "mean": ask_mean,
+        }
+
+    return {
+        "source": "SEARCH_GROUNDING",
+        "is_blended": is_blended,
+        "is_ask": is_ask,
+        "value": med_val,
+        "median": med_val,
+        "low": low_val,
+        "high": high_val,
+        "count": len(trimmed_all),
+        "sold": sold_data,
+        "active_ask": ask_data,
+        "raw": {
+            "sample_count": len(trimmed_all),
+            "is_blended": is_blended,
+            "tier": "SEARCH_GROUNDING",
+            "prices": [str(p) for p in trimmed_all[:10]],
+        },
+    }
+
+
 def _normalize_ai_appraisal(
     parsed: dict[str, Any],
     photo_inspected: bool,
     is_raw_gradeable: bool = False,
     grounded_sources: list[dict[str, str]] | None = None,
+    raw_text: str = "",
 ) -> tuple[Decimal | None, dict[str, Any]]:
     raw_mid = parsed.get("mid_usd") or parsed.get("estimated_value_usd") or 0
     try:
@@ -1211,6 +1320,7 @@ def _normalize_ai_appraisal(
         "inferred_specs": parsed.get("inferred_specs") if isinstance(parsed.get("inferred_specs"), dict) else {},
         "photo_inspected": photo_inspected,
         "grounded_sources": grounded_sources or [],
+        "grounded_comps": extract_grounding_market_comps(grounded_sources or [], text_context=raw_text),
         "estimated_grade": str(parsed.get("estimated_grade") or "").strip()[:32] if is_raw_gradeable else "",
         "estimated_grade_range": str(parsed.get("estimated_grade_range") or "").strip()[:32] if is_raw_gradeable else "",
         "estimated_grade_rationale": str(parsed.get("estimated_grade_rationale") or "").strip() if is_raw_gradeable else "",
@@ -1351,6 +1461,7 @@ def estimate_item_value_with_ai(
                             photo_inspected,
                             is_raw_gradeable=is_raw_gradeable,
                             grounded_sources=grounded,
+                            raw_text=text_out,
                         )
                         if val is not None:
                             normalized["ai_provider"] = "GEMINI"

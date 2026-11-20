@@ -31,6 +31,9 @@ export function SiteFooter({ compact = false }: SiteFooterProps) {
           <Link to="/features" className="hover:text-amber-400 transition">
             Features
           </Link>
+          <Link to="/specifications" className="hover:text-amber-400 transition">
+            Specifications
+          </Link>
           <Link to="/pricing" className="hover:text-amber-400 transition">
             Pricing
           </Link>

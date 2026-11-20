@@ -9,6 +9,7 @@ import { EstimatedGradeCard } from "../components/valuation/EstimatedGradeCard";
 import { NumismaticSpecsCard } from "../components/valuation/NumismaticSpecsCard";
 import {
   getValuationFreshness,
+  renderSourceStatusBadge,
   ValuationBreakdownCard,
 } from "../components/valuation/ValuationBreakdownCard";
 import { api, type AppraisalJob, type CollectionItem, type ValuationHistoryEntry } from "../lib/api";
@@ -111,7 +112,9 @@ describe("Valuation & Specs UI Components", () => {
     render(<AppraisalProgressBanner job={job} />);
     expect(screen.getByText(/Running multi-source appraisal/i)).toBeInTheDocument();
     expect(screen.getByText("Spot Melt")).toBeInTheDocument();
-    expect(screen.getByText("Sold Comps")).toBeInTheDocument();
+    expect(screen.getByText("Item Specs")).toBeInTheDocument();
+    expect(screen.getByText("Market Comps")).toBeInTheDocument();
+    expect(screen.getByText("Multimodal AI")).toBeInTheDocument();
   });
 
   it("renders ValuationBreakdownCard with drivers, range, and expandable source table", () => {
@@ -123,6 +126,40 @@ describe("Valuation & Specs UI Components", () => {
     fireEvent.click(screen.getByText(/Source Comparison \(2 evaluated\)/i));
     expect(screen.getByText("Live Spot Melt")).toBeInTheDocument();
     expect(screen.getByText("Multimodal AI Appraisal")).toBeInTheDocument();
+  });
+
+  it("renders ValuationBreakdownCard with multi-source fallback status badges", () => {
+    const historyWithBadges: ValuationHistoryEntry = {
+      id: "hist-multi",
+      melt_value_unit: "23.20",
+      market_value_unit: "4200.00",
+      source: "COMPS",
+      is_estimate: false,
+      raw_payload: {
+        sources: {
+          COMPS: { value: "4200.00", status: "BLENDED", is_blended: true, count: 5 },
+          SEARCH_GROUNDING: { value: "4150.00", status: "SEARCH_GROUNDING", count: 4 },
+          ZERO_KEY_COMPS: { value: "4100.00", status: "ZERO_KEY", count: 3 },
+          EBAY_UNCONFIGURED: { value: null, status: "NOT_CONFIGURED" },
+        },
+      },
+      recorded_at: "2026-11-13T10:00:00Z",
+    };
+    render(<ValuationBreakdownCard item={SAMPLE_ITEM} latestHistory={historyWithBadges} />);
+    fireEvent.click(screen.getByText(/Source Comparison \(4 evaluated\)/i));
+    expect(screen.getAllByText("Blended").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Search Grounding")).toBeInTheDocument();
+    expect(screen.getByText("Zero-Key")).toBeInTheDocument();
+    expect(screen.getByText("Not Configured")).toBeInTheDocument();
+
+    expect(renderSourceStatusBadge(undefined)).toBeNull();
+    expect(renderSourceStatusBadge("")).toBeNull();
+    const { unmount: unmountActive } = render(<>{renderSourceStatusBadge("ACTIVE_ASK")}</>);
+    expect(screen.getByText("Active Ask")).toBeInTheDocument();
+    unmountActive();
+    const { unmount: unmountCustom } = render(<>{renderSourceStatusBadge("CUSTOM_CODE")}</>);
+    expect(screen.getByText("CUSTOM_CODE")).toBeInTheDocument();
+    unmountCustom();
   });
 
   it("renders CollectibilityThesisCard with raw grading upside tip contextualized by asset class", () => {

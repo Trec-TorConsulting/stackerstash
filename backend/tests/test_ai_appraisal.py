@@ -8,7 +8,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 
 from apps.accounts.models import ProviderCredential, Workspace
 from apps.catalog.models import CollectionItem, ItemPhoto
-from apps.vision.services import estimate_item_value_with_ai
+from apps.vision.services import estimate_item_value_with_ai, extract_grounding_market_comps
 
 
 @pytest.mark.django_db
@@ -281,3 +281,105 @@ def test_estimate_item_value_with_ai_falls_back_to_groq_when_gemini_exhausted(re
     val, payload = estimate_item_value_with_ai(item, ws)
     assert val == Decimal("38.00")
     assert groq_route.call_count == 1
+
+
+def test_extract_grounding_market_comps_empty():
+    assert extract_grounding_market_comps([]) is None
+    assert extract_grounding_market_comps([], "") is None
+    assert extract_grounding_market_comps([{"title": "No prices here", "uri": "https://example.com"}]) is None
+
+
+def test_extract_grounding_market_comps_from_citations():
+    citations = [
+        {"title": "1881-S Morgan Dollar MS65 - Sold for $185.00 on eBay", "uri": "https://ebay.com/itm/1"},
+        {"title": "1881-S Morgan Dollar MS65 - Realized $195.00 at Heritage", "uri": "https://ha.com/itm/2"},
+        {"title": "Buy 1881-S Morgan Dollar MS65 PCGS - $210.00 Active Listing", "uri": "https://ebay.com/itm/3"},
+    ]
+    comps = extract_grounding_market_comps(citations)
+    assert comps is not None
+    assert comps["source"] == "SEARCH_GROUNDING"
+    assert comps["is_blended"] is True
+    assert comps["count"] == 3
+    assert comps["sold"]["count"] == 2
+    assert comps["sold"]["median"] == Decimal("190.00")
+    assert comps["active_ask"]["count"] == 1
+    assert comps["active_ask"]["mean"] == Decimal("210.00")
+    assert comps["median"] == Decimal("195.00")
+    assert comps["raw"]["tier"] == "SEARCH_GROUNDING"
+
+
+def test_extract_grounding_market_comps_from_text_fallback():
+    text = """
+    Market summary for 1928 $50 Gold Certificate:
+    Recent eBay sold comps show $650.00 and $700.00 realized prices.
+    Active dealer asking price is $750.00 on Heritage Auctions.
+    """
+    comps = extract_grounding_market_comps([], text_context=text)
+    assert comps is not None
+    assert comps["source"] == "SEARCH_GROUNDING"
+    assert comps["is_blended"] is True
+    assert comps["sold"]["count"] == 2
+    assert comps["active_ask"]["count"] == 1
+    assert comps["value"] == Decimal("700.00")
+
+
+@pytest.mark.django_db
+@patch("apps.vision.services.httpx.Client")
+def test_estimate_item_value_with_ai_extracts_grounded_comps(mock_client_cls):
+    user = get_user_model().objects.create_user(email="ai_grounded@example.com", password="pw")
+    ws = Workspace.objects.create(name="Test Vault Grounded", slug="test-vault-grounded", owner=user)
+    cred = ProviderCredential(workspace=ws, provider=ProviderCredential.Provider.GEMINI)
+    cred.set_secret("fake-gemini-key")
+    cred.save()
+
+    item = CollectionItem.objects.create(
+        workspace=ws,
+        category=CollectionItem.Category.COIN,
+        title="1881-S Morgan Dollar",
+        year="1881",
+        mint_mark="S",
+        metal_type=CollectionItem.MetalType.SILVER,
+        weight_value=Decimal("0.7734"),
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_resp.json.return_value = {
+        "candidates": [
+            {
+                "groundingMetadata": {
+                    "groundingChunks": [
+                        {"web": {"title": "1881-S Morgan Dollar MS65 - Sold for $180.00", "uri": "https://ebay.com/1"}},
+                        {"web": {"title": "1881-S Morgan Dollar MS65 - Realized $190.00", "uri": "https://ha.com/2"}},
+                    ]
+                },
+                "content": {
+                    "parts": [
+                        {
+                            "text": json.dumps(
+                                {
+                                    "low_usd": 170,
+                                    "mid_usd": 185,
+                                    "high_usd": 200,
+                                    "valuation_drivers": ["Gem BU 1881-S"],
+                                    "collectibility_tier": "NUMISMATIC",
+                                }
+                            )
+                        }
+                    ]
+                },
+            }
+        ]
+    }
+    mock_client = MagicMock()
+    mock_client.__enter__.return_value = mock_client
+    mock_client.post.return_value = mock_resp
+    mock_client_cls.return_value = mock_client
+
+    val, payload = estimate_item_value_with_ai(item, ws)
+    assert val == Decimal("185.00")
+    assert payload["grounded_comps"] is not None
+    assert payload["grounded_comps"]["source"] == "SEARCH_GROUNDING"
+    assert payload["grounded_comps"]["count"] == 2
+    assert payload["grounded_comps"]["median"] == Decimal("185.00")
+

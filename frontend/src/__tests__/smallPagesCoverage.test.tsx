@@ -44,23 +44,17 @@ describe("AuthPage, ComingSoonPage, DashboardPage, InviteAcceptPage full coverag
     expect(await screen.findByText("Invalid credentials")).toBeInTheDocument();
   });
 
-  it("covers ComingSoonPage waitlist form empty guard and submission", () => {
+  it("covers ComingSoonPage authentic direct access buttons", () => {
     render(
       <MemoryRouter>
         <ComingSoonPage />
       </MemoryRouter>,
     );
 
-    const input = screen.getByPlaceholderText("Enter email for launch updates...");
-    const form = input.closest("form")!;
-
-    fireEvent.change(input, { target: { value: "   " } });
-    fireEvent.submit(form);
-    expect(screen.queryByText(/launch radar/i)).not.toBeInTheDocument();
-
-    fireEvent.change(input, { target: { value: "early@example.com" } });
-    fireEvent.submit(form);
-    expect(screen.getByText(/You're on the launch radar/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Create Free Account/i })).toHaveAttribute("href", "/register");
+    const loginCtas = screen.getAllByRole("link", { name: /Vault Sign In/i });
+    expect(loginCtas.length).toBeGreaterThanOrEqual(1);
+    expect(loginCtas[0]).toHaveAttribute("href", "/login");
   });
 
   it("covers DashboardPage manual refresh button, interval refresh, and spot refresh error toast", async () => {
