@@ -352,21 +352,10 @@ describe("imageUtils", () => {
     expect(isHeicFile(new File(["a"], "normal.png", { type: "image/png" }))).toBe(false);
   });
 
-  it("handles convertHeicToJpeg with mocked heic2any and handles fallback on error", async () => {
+  it("handles convertHeicToJpeg with server conversion first and client fallback", async () => {
     const heicFile = new File(["fake-heic"], "coin.heic", { type: "image/heic" });
 
-    // 1. Successful client conversion
-    vi.doMock("heic2any", () => ({
-      default: vi.fn().mockResolvedValue(new Blob(["fake-jpeg-bytes"], { type: "image/jpeg" })),
-    }));
-    const converted = await convertHeicToJpeg(heicFile);
-    expect(converted.type).toBe("image/jpeg");
-    expect(converted.name).toBe("coin.jpg");
-
-    // 2. Client conversion fails, server conversion succeeds
-    vi.doMock("heic2any", () => ({
-      default: vi.fn().mockRejectedValue(new Error("heic wasm error")),
-    }));
+    // 1. Successful server conversion
     vi.doMock("../lib/api", () => ({
       api: {
         convertImageToJpeg: vi.fn().mockResolvedValue(new File(["server-jpeg-bytes"], "coin.jpg", { type: "image/jpeg" })),
@@ -376,11 +365,22 @@ describe("imageUtils", () => {
     expect(serverConverted.type).toBe("image/jpeg");
     expect(serverConverted.name).toBe("coin.jpg");
 
-    // 3. Client and server conversion both fail -> fallback to original file
+    // 2. Server conversion fails, client fallback succeeds
     vi.doMock("../lib/api", () => ({
       api: {
         convertImageToJpeg: vi.fn().mockRejectedValue(new Error("server error")),
       },
+    }));
+    vi.doMock("heic2any", () => ({
+      default: vi.fn().mockResolvedValue(new Blob(["fake-jpeg-bytes"], { type: "image/jpeg" })),
+    }));
+    const clientConverted = await convertHeicToJpeg(heicFile);
+    expect(clientConverted.type).toBe("image/jpeg");
+    expect(clientConverted.name).toBe("coin.jpg");
+
+    // 3. Client and server conversion both fail -> fallback to original file
+    vi.doMock("heic2any", () => ({
+      default: vi.fn().mockRejectedValue(new Error("wasm error")),
     }));
     const fallback = await convertHeicToJpeg(heicFile);
     expect(fallback).toBe(heicFile);
