@@ -1014,3 +1014,87 @@ def test_valuation_api_models_tasks_and_services_edges(api_client, user_a):
         assert melt_res.collectibility_tier == CollectionItem.CollectibilityTier.BULLION
 
 
+@pytest.mark.django_db
+@respx.mock
+def test_infer_image_mime_and_vision_heic_support(api_client, user_a):
+    import io
+
+    from PIL import Image
+
+    from apps.vision.services import _infer_image_mime
+
+    # 1. Test all branches of _infer_image_mime
+    assert _infer_image_mime(b"\x00\x00\x00\x18ftypheic", None) == "image/heic"
+    assert _infer_image_mime(b"\x00\x00\x00\x18ftypheif", None) == "image/heif"
+    assert _infer_image_mime(b"\x00\x00\x00\x18ftypavif", None) == "image/avif"
+    assert _infer_image_mime(b"BM\x00\x00\x00", None) == "image/bmp"
+    assert _infer_image_mime(b"II*\x00\x00", None) == "image/tiff"
+    assert _infer_image_mime(b"MM\x00*\x00", None) == "image/tiff"
+    assert _infer_image_mime(b"GIF87a\x00", None) == "image/gif"
+    assert _infer_image_mime(b"GIF89a\x00", None) == "image/gif"
+    assert _infer_image_mime(b"\x89PNG\r\n\x1a\n", None) == "image/png"
+    assert _infer_image_mime(b"RIFF\x00\x00\x00\x00WEBP", None) == "image/webp"
+    assert _infer_image_mime(b"\xff\xd8\xff\xe0", None) == "image/jpeg"
+    assert _infer_image_mime(b"unknown-data", "image/png") == "image/png"
+    assert _infer_image_mime(b"unknown-data", "application/octet-stream") == "image/jpeg"
+
+    # 2. Test identify API with HEIC file
+    _, ws, token = user_a
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    c = ProviderCredential(workspace=ws, provider="GEMINI")
+    c.set_secret("test-gemini-key")
+    c.save()
+
+    respx.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": json.dumps(
+                                        {
+                                            "category": "COIN",
+                                            "title": "1881-S Morgan Silver Dollar",
+                                            "year": "1881",
+                                            "country": "United States",
+                                            "metal_type": "SILVER",
+                                            "weight_value": 0.7734,
+                                            "weight_unit": "OZ_T",
+                                            "purity": 0.9,
+                                            "grading_service": "NONE",
+                                            "estimated_grade": "MS-65",
+                                            "ai_confidence": 0.95,
+                                            "notes": "Sharp strike, frosty luster.",
+                                        }
+                                    )
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+        )
+    )
+
+    heif_buf = io.BytesIO()
+    Image.new("RGB", (100, 100), (200, 100, 50)).save(heif_buf, format="HEIF")
+    heif_img = SimpleUploadedFile("slab.heic", heif_buf.getvalue(), content_type="application/octet-stream")
+
+    resp = api_client.post(
+        "/api/v1/vision/identify",
+        data={"files": [heif_img], "intake_mode": "upload"},
+        **headers,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["provider_used"] == "GEMINI"
+    assert data["candidate"]["title"] == "1881-S Morgan Silver Dollar"
+
+
+

@@ -14,7 +14,7 @@
  *    machine-readable `reason`.
  *  - Zero runtime dependencies and no background removal (rectangle crop only).
  */
-import { canvasToOptimizedBlob, decodeImageBitmapUpright } from "./imageUtils";
+import { canvasToOptimizedBlob, decodeImageBitmapUpright, isSupportedImageFile } from "./imageUtils";
 
 export type AutoCropShape = "coin" | "rect";
 
@@ -669,7 +669,7 @@ async function runAutoCrop(
 export async function autoCropImageFile(file: File, options: AutoCropOptions = {}): Promise<AutoCropResult> {
   const opts = { ...AUTO_CROP_DEFAULTS, ...options };
   const started = now();
-  if (file.type && !file.type.startsWith("image/")) {
+  if (!isSupportedImageFile(file)) {
     return { file, applied: false, reason: "not_image", durationMs: 0 };
   }
   if (!isAutoCropSupported()) {

@@ -22,6 +22,7 @@ import {
   type SubjectBox,
 } from '../lib/cameraMetrics';
 import {
+  SUPPORTED_IMAGE_ACCEPT,
   canvasToOptimizedBlob,
   computeCoverCropRect,
   computeSubjectCropRect,
@@ -865,7 +866,7 @@ export function GuidedCameraModal({
                   Capture {step === 'front' ? 'Front' : 'Back'} Photo
                   <input
                     type="file"
-                    accept="image/*"
+                    accept={SUPPORTED_IMAGE_ACCEPT}
                     capture="environment"
                     onChange={handleNativeFallback}
                     className="hidden"
@@ -1070,7 +1071,7 @@ export function GuidedCameraModal({
                   <span>Native Camera</span>
                   <input
                     type="file"
-                    accept="image/*"
+                    accept={SUPPORTED_IMAGE_ACCEPT}
                     capture="environment"
                     onChange={handleNativeFallback}
                     className="hidden"

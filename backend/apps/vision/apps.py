@@ -6,3 +6,8 @@ class VisionConfig(AppConfig):
     name = "apps.vision"
     verbose_name = "Vision Identification"
 
+    def ready(self) -> None:
+        from pillow_heif import register_heif_opener
+
+        register_heif_opener()
+

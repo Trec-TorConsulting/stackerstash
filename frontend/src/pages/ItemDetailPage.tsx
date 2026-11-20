@@ -5,12 +5,14 @@ import {
   Camera,
   Check,
   Copy,
-  Edit3,
   ExternalLink,
+  Lock,
+  Pencil,
   RotateCw,
   Sparkles,
   Star,
   Trash2,
+  Unlock,
   Upload,
   WifiOff,
   X,
@@ -42,7 +44,13 @@ import {
   formatUsd,
   isCardItem,
 } from "../lib/format";
-import { normalizeImageFileForUpload } from "../lib/imageUtils";
+import {
+  SUPPORTED_IMAGE_ACCEPT,
+  convertHeicToJpeg,
+  isHeicFile,
+  isSupportedImageFile,
+  normalizeImageFileForUpload,
+} from "../lib/imageUtils";
 import { cacheItemSnapshot, getCachedItemSnapshot } from "../lib/offlineCache";
 import { AppraisalProgressBanner } from "../components/valuation/AppraisalProgressBanner";
 import { CardSpecsCard } from "../components/valuation/CardSpecsCard";
@@ -299,11 +307,16 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
   });
 
   async function handleAddPhoto(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
+    const rawFile = e.target.files?.[0];
     e.target.value = "";
-    if (!file || !id) return;
+    if (!rawFile || !id) return;
+    if (!isSupportedImageFile(rawFile)) {
+      toast.error("Please select a supported image file (HEIC, JPEG, PNG, WebP, AVIF, TIFF, BMP).");
+      return;
+    }
     setIsRotating(true);
     try {
+      const file = isHeicFile(rawFile) ? await convertHeicToJpeg(rawFile) : rawFile;
       const normalized = await normalizeImageFileForUpload(file, 2048, 0.92);
       const existingLabels = new Set((item?.photos || []).map((p) => p.label));
       const nextLabel =
@@ -538,14 +551,6 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
           ) : (
             <>
               <button
-                type="button"
-                onClick={() => (isEditing ? setIsEditing(false) : startEditing())}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-amber-500/40 text-slate-200 text-sm font-medium transition"
-              >
-                {isEditing ? <X className="h-4 w-4" /> : <Edit3 className="h-4 w-4" />}
-                {isEditing ? "Cancel" : "Edit Details"}
-              </button>
-              <button
                 onClick={() => appraiseMut.mutate()}
                 disabled={!isOnline || appraiseMut.isPending || activeJob?.status === "PENDING" || activeJob?.status === "RUNNING"}
                 title={!isOnline ? "Unavailable while offline" : "Run multi-source appraisal"}
@@ -555,31 +560,6 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
                 {appraiseMut.isPending || activeJob?.status === "PENDING" || activeJob?.status === "RUNNING"
                   ? "Appraising..."
                   : "Appraise Now"}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const nextProv = { ...(item.specs_provenance || {}) };
-                  if (nextProv.market_value_unit === "USER") {
-                    delete nextProv.market_value_unit;
-                  } else {
-                    nextProv.market_value_unit = "USER";
-                  }
-                  updateMut.mutate({ specs_provenance: nextProv });
-                }}
-                disabled={!isOnline || updateMut.isPending}
-                title={
-                  item.specs_provenance?.market_value_unit === "USER"
-                    ? "Unlock market value for scheduled re-appraisal"
-                    : "Lock market value against scheduled re-appraisal"
-                }
-                className={`px-3 py-2 rounded-xl text-sm font-medium border transition ${
-                  item.specs_provenance?.market_value_unit === "USER"
-                    ? "bg-sky-500/20 text-sky-200 border-sky-500/40 hover:bg-sky-500/30"
-                    : "bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800"
-                } disabled:opacity-50`}
-              >
-                {item.specs_provenance?.market_value_unit === "USER" ? "Value Locked" : "Lock Value"}
               </button>
               <button
                 type="button"
@@ -713,12 +693,12 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
                 <label className="h-16 w-16 rounded-xl border border-dashed border-amber-500/60 hover:border-amber-400 bg-amber-500/10 flex flex-col items-center justify-center text-amber-300 cursor-pointer text-[10px]">
                   <Camera className="h-4 w-4 mb-0.5" />
                   Camera
-                  <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleAddPhoto} />
+                  <input type="file" accept={SUPPORTED_IMAGE_ACCEPT} capture="environment" className="hidden" onChange={handleAddPhoto} />
                 </label>
                 <label className="h-16 w-16 rounded-xl border border-dashed border-slate-700 hover:border-amber-500/50 flex flex-col items-center justify-center text-slate-400 cursor-pointer text-[10px]">
                   <Upload className="h-4 w-4 mb-0.5" />
                   Upload
-                  <input type="file" accept="image/*" className="hidden" onChange={handleAddPhoto} />
+                  <input type="file" accept={SUPPORTED_IMAGE_ACCEPT} className="hidden" onChange={handleAddPhoto} />
                 </label>
                 <select
                   aria-label="Upload photo label"
@@ -742,12 +722,52 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
         {/* Valuation & Specs */}
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
-              <div className="text-xs text-slate-400">
-                Market Value {item.is_estimate ? "(Estimate)" : ""}
-              </div>
-              <div className="text-2xl font-mono font-bold text-amber-300 mt-1">
-                {formatUsd(item.total_market_value)}
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs text-slate-400">
+                    Market Value {item.is_estimate ? "(Estimate)" : ""}
+                  </div>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextProv = { ...(item.specs_provenance || {}) };
+                        if (nextProv.market_value_unit === "USER") {
+                          delete nextProv.market_value_unit;
+                        } else {
+                          nextProv.market_value_unit = "USER";
+                        }
+                        updateMut.mutate({ specs_provenance: nextProv });
+                      }}
+                      disabled={!isOnline || updateMut.isPending}
+                      title={
+                        item.specs_provenance?.market_value_unit === "USER"
+                          ? "Unlock market value for scheduled re-appraisal"
+                          : "Lock market value against scheduled re-appraisal"
+                      }
+                      aria-label={
+                        item.specs_provenance?.market_value_unit === "USER"
+                          ? "Value Locked"
+                          : "Lock Value"
+                      }
+                      className={`inline-flex items-center p-1 rounded-lg border transition ${
+                        item.specs_provenance?.market_value_unit === "USER"
+                          ? "bg-sky-500/20 text-sky-200 border-sky-500/40 hover:bg-sky-500/30"
+                          : "bg-slate-800/80 text-slate-400 border-slate-700/60 hover:text-slate-200 hover:border-slate-500"
+                      } disabled:opacity-50`}
+                    >
+                      {item.specs_provenance?.market_value_unit === "USER" ? (
+                        <Lock className="h-3.5 w-3.5 text-sky-300" />
+                      ) : (
+                        <Unlock className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  )}
+                </div>
+                <div className="text-2xl font-mono font-bold text-amber-300 mt-1">
+                  {formatUsd(item.total_market_value)}
+                </div>
               </div>
               <div className="text-xs text-slate-500 mt-1">Source: {item.valuation_source}</div>
             </div>
@@ -781,6 +801,31 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
           </div>
 
           <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-2.5 text-sm">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <h2 className="text-sm font-semibold text-slate-100 tracking-wide uppercase">
+                Item Details
+              </h2>
+              {canEdit &&
+                (!isEditing ? (
+                  <button
+                    type="button"
+                    onClick={startEditing}
+                    className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-amber-300 transition"
+                    aria-label="Edit Details"
+                  >
+                    <Pencil className="h-3.5 w-3.5" /> Edit details
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setIsEditing(false)}
+                    className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition"
+                    aria-label="Cancel"
+                  >
+                    <X className="h-3.5 w-3.5" /> Cancel
+                  </button>
+                ))}
+            </div>
             {item.year && (
               <div className="flex justify-between">
                 <span className="text-slate-400">Year / Series Date</span>

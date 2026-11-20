@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  SUPPORTED_IMAGE_ACCEPT,
+  SUPPORTED_IMAGE_EXTENSIONS,
   canvasToOptimizedBlob,
   computeCoverCropRect,
   computeSubjectCropRect,
+  convertHeicToJpeg,
   decodeImageBitmapUpright,
+  isHeicFile,
+  isSupportedImageFile,
   normalizeImageFileForUpload,
   renderCroppedRotatedImage,
   rotateImageFile90,
@@ -317,5 +322,57 @@ describe("imageUtils", () => {
         : origCreateElement(tag)) as typeof document.createElement);
     expect(await normalizeImageFileForUpload(bigFile)).toBe(bigFile);
     expect(await rotateImageFile90(bigFile)).toBe(bigFile);
+  });
+
+  it("correctly identifies supported image files and extensions", () => {
+    expect(SUPPORTED_IMAGE_EXTENSIONS).toContain("heic");
+    expect(SUPPORTED_IMAGE_EXTENSIONS).toContain("heif");
+    expect(SUPPORTED_IMAGE_EXTENSIONS).toContain("avif");
+    expect(SUPPORTED_IMAGE_EXTENSIONS).toContain("tiff");
+    expect(SUPPORTED_IMAGE_ACCEPT).toContain(".heic");
+    expect(SUPPORTED_IMAGE_ACCEPT).toContain(".heif");
+
+    expect(isSupportedImageFile(new File(["a"], "test.jpg", { type: "image/jpeg" }))).toBe(true);
+    expect(isSupportedImageFile(new File(["a"], "test.png", { type: "image/png" }))).toBe(true);
+    expect(isSupportedImageFile(new File(["a"], "test.heic", { type: "image/heic" }))).toBe(true);
+    expect(isSupportedImageFile(new File(["a"], "test.HEIC", { type: "application/octet-stream" }))).toBe(true);
+    expect(isSupportedImageFile(new File(["a"], "scan.tiff", { type: "application/octet-stream" }))).toBe(true);
+    expect(isSupportedImageFile(new File(["a"], "photo.bmp", { type: "" }))).toBe(true);
+    expect(isSupportedImageFile(new Blob(["raw"]))).toBe(true);
+    expect(isSupportedImageFile(new File(["a"], "doc.pdf", { type: "application/pdf" }))).toBe(false);
+    expect(isSupportedImageFile(new File(["a"], "script.exe", { type: "application/x-msdownload" }))).toBe(false);
+  });
+
+  it("correctly checks for HEIC/HEIF files", () => {
+    expect(isHeicFile(new File(["a"], "photo.heic", { type: "image/heic" }))).toBe(true);
+    expect(isHeicFile(new File(["a"], "photo.HEIF", { type: "image/heif" }))).toBe(true);
+    expect(isHeicFile(new File(["a"], "burst.hif", { type: "application/octet-stream" }))).toBe(true);
+    expect(isHeicFile(new File(["a"], "seq.heic", { type: "image/heic-sequence" }))).toBe(true);
+    expect(isHeicFile(new File(["a"], "normal.jpg", { type: "image/jpeg" }))).toBe(false);
+    expect(isHeicFile(new File(["a"], "normal.png", { type: "image/png" }))).toBe(false);
+  });
+
+  it("handles convertHeicToJpeg with mocked heic2any and handles fallback on error", async () => {
+    const heicFile = new File(["fake-heic"], "coin.heic", { type: "image/heic" });
+
+    // 1. Successful conversion
+    vi.doMock("heic2any", () => ({
+      default: vi.fn().mockResolvedValue(new Blob(["fake-jpeg-bytes"], { type: "image/jpeg" })),
+    }));
+    const converted = await convertHeicToJpeg(heicFile);
+    expect(converted.type).toBe("image/jpeg");
+    expect(converted.name).toBe("coin.jpg");
+
+    // 2. Fallback on error
+    vi.doMock("heic2any", () => ({
+      default: vi.fn().mockRejectedValue(new Error("heic conversion error")),
+    }));
+    const fallback = await convertHeicToJpeg(heicFile);
+    expect(fallback).toBe(heicFile);
+
+    // 3. Fallback on Blob input without name
+    const rawBlob = new Blob(["blob-heic"], { type: "image/heic" });
+    const blobFallback = await convertHeicToJpeg(rawBlob);
+    expect(blobFallback.type).toBe("image/heic");
   });
 });

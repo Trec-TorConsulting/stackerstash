@@ -9,6 +9,9 @@ from typing import Any
 import cv2
 import numpy as np
 from PIL import ExifTags, Image, ImageEnhance, ImageFilter, ImageOps, ImageStat
+from pillow_heif import register_heif_opener
+
+register_heif_opener()
 
 logger = logging.getLogger(__name__)
 

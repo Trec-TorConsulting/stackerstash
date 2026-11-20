@@ -1,3 +1,5 @@
+import { isSupportedImageFile } from "./imageUtils";
+
 export interface FrameQuality {
   label: string;
   tone: 'good' | 'warn';
@@ -597,7 +599,7 @@ export function evaluateRgbaGlare(
 export async function evaluateImageFileGlare(
   file: File,
 ): Promise<{ hasGlare: boolean; glareRatio: number }> {
-  if (typeof document === "undefined" || !file.type.startsWith("image/")) {
+  if (typeof document === "undefined" || !isSupportedImageFile(file)) {
     return { hasGlare: false, glareRatio: 0 };
   }
   try {
