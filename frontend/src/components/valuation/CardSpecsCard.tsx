@@ -11,6 +11,7 @@ interface CardSpecsCardProps {
 
 const PROVENANCE_BADGE: Record<string, string> = {
   USER: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+  STATIC_CATALOG: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
   POKEMON_TCG: "bg-amber-500/15 text-amber-300 border-amber-500/30",
   SCRYFALL: "bg-sky-500/15 text-sky-300 border-sky-500/30",
   PRICECHARTING: "bg-violet-500/15 text-violet-300 border-violet-500/30",
@@ -122,6 +123,20 @@ export function CardSpecsCard({ item, onSaveSpecs, isSaving }: CardSpecsCardProp
       key: "tag_dig_report",
       label: "TAG DIG Report",
       value: `https://my.taggrading.com/card/${item.cert_number.trim()}`,
+    });
+  }
+  const fit = (attrs.storage_fit || (attrs.specs as Record<string, unknown> | undefined)?.storage_fit) as Record<string, any> | undefined;
+  const pt = attrs.thickness_pt || fit?.card_point_size || 35;
+  rows.push({
+    key: "protection_fit",
+    label: "Protection Fit",
+    value: fit?.holder_recommendation || `${pt}pt Toploader / Standard Sleeve`,
+  });
+  if (attrs.print_run_markers || (attrs.specs as Record<string, unknown> | undefined)?.print_run_markers) {
+    rows.push({
+      key: "print_run_markers",
+      label: "Print Run Markers",
+      value: String(attrs.print_run_markers || (attrs.specs as Record<string, unknown> | undefined)?.print_run_markers),
     });
   }
 

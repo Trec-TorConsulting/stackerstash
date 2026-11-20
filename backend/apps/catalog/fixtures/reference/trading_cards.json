@@ -1,0 +1,145 @@
+[
+  {
+    "ref_key": "pokemon_base_4_102",
+    "card_game": "Pokémon",
+    "set_name": "Base Set",
+    "set_code": "BS",
+    "card_number": "4/102",
+    "card_name": "Charizard",
+    "release_year": 1999,
+    "rarity": "Holo Rare",
+    "card_finish": "Holo",
+    "card_edition": "1st Edition / Shadowless / Unlimited",
+    "language": "English",
+    "artist": "Mitsuhiro Arita",
+    "width_mm": "63.50",
+    "height_mm": "88.90",
+    "thickness_pt": 35,
+    "external_ids": {
+      "pokemon_tcg_id": "base1-4",
+      "pricecharting_id": "pokemon-base-set-charizard-4"
+    },
+    "keywords": ["CHARIZARD 4/102", "BASE SET CHARIZARD", "1ST EDITION CHARIZARD"],
+    "extra_specs": {
+      "is_high_counterfeit_risk": true,
+      "print_runs": ["1st Edition", "Shadowless", "Unlimited", "1999-2000 UK 4th Print"],
+      "hp": 120,
+      "sub_types": ["Stage 2"]
+    },
+    "sync_tier": "STATIC",
+    "source_name": "STATIC_SEED"
+  },
+  {
+    "ref_key": "mtg_alpha_black_lotus",
+    "card_game": "Magic: The Gathering",
+    "set_name": "Limited Edition Alpha",
+    "set_code": "LEA",
+    "card_number": "232",
+    "card_name": "Black Lotus",
+    "release_year": 1993,
+    "rarity": "Rare",
+    "card_finish": "Non-Foil",
+    "card_edition": "Alpha",
+    "language": "English",
+    "artist": "Christopher Rush",
+    "width_mm": "63.50",
+    "height_mm": "88.90",
+    "thickness_pt": 35,
+    "external_ids": {
+      "scryfall_id": "d060060c-3493-4757-99d0-43883c42c40c",
+      "pricecharting_id": "magic-limited-edition-alpha-black-lotus"
+    },
+    "keywords": ["BLACK LOTUS", "ALPHA BLACK LOTUS", "LEA BLACK LOTUS"],
+    "extra_specs": {
+      "is_high_counterfeit_risk": true,
+      "power_nine": true,
+      "mana_cost": "{0}",
+      "type_line": "Artifact"
+    },
+    "sync_tier": "STATIC",
+    "source_name": "STATIC_SEED"
+  },
+  {
+    "ref_key": "yugioh_lob_001_blue_eyes",
+    "card_game": "Yu-Gi-Oh!",
+    "set_name": "Legend of Blue Eyes White Dragon",
+    "set_code": "LOB",
+    "card_number": "LOB-001",
+    "card_name": "Blue-Eyes White Dragon",
+    "release_year": 2002,
+    "rarity": "Ultra Rare",
+    "card_finish": "Ultra Rare Holo",
+    "card_edition": "1st Edition / Unlimited",
+    "language": "English",
+    "artist": "Kazuki Takahashi",
+    "width_mm": "59.00",
+    "height_mm": "86.00",
+    "thickness_pt": 35,
+    "external_ids": {
+      "ygoprodeck_id": "89631139"
+    },
+    "keywords": ["BLUE-EYES WHITE DRAGON", "LOB-001", "LEGEND OF BLUE EYES"],
+    "extra_specs": {
+      "japanese_size": true,
+      "attack": 3000,
+      "defense": 2500,
+      "level": 8
+    },
+    "sync_tier": "STATIC",
+    "source_name": "STATIC_SEED"
+  },
+  {
+    "ref_key": "lorcana_tfc_214_elsa",
+    "card_game": "Disney Lorcana",
+    "set_name": "The First Chapter",
+    "set_code": "TFC",
+    "card_number": "214/204",
+    "card_name": "Elsa - Spirit of Winter (Enchanted)",
+    "release_year": 2023,
+    "rarity": "Enchanted",
+    "card_finish": "Foil Holo",
+    "card_edition": "1st Chapter",
+    "language": "English",
+    "artist": "Matthew Robert Davies",
+    "width_mm": "63.50",
+    "height_mm": "88.90",
+    "thickness_pt": 35,
+    "external_ids": {
+      "pricecharting_id": "lorcana-the-first-chapter-elsa-spirit-of-winter-enchanted"
+    },
+    "keywords": ["ELSA SPIRIT OF WINTER", "ELSA ENCHANTED", "TFC 214/204"],
+    "extra_specs": {
+      "ink_cost": 8,
+      "enchanted_case_hit": true
+    },
+    "sync_tier": "STATIC",
+    "source_name": "STATIC_SEED"
+  },
+  {
+    "ref_key": "sports_topps_chrome_2011_trout",
+    "card_game": "Sports — Baseball",
+    "set_name": "2011 Topps Update / Chrome",
+    "set_code": "US175",
+    "card_number": "US175",
+    "card_name": "Mike Trout (Rookie Card)",
+    "release_year": 2011,
+    "rarity": "Rookie Card (RC)",
+    "card_finish": "Base / Refractor / Cognac",
+    "card_edition": "Update Series",
+    "language": "English",
+    "artist": "Topps",
+    "width_mm": "63.50",
+    "height_mm": "88.90",
+    "thickness_pt": 35,
+    "external_ids": {
+      "pricecharting_id": "baseball-2011-topps-update-mike-trout-us175"
+    },
+    "keywords": ["MIKE TROUT US175", "2011 TOPPS UPDATE TROUT", "TROUT ROOKIE"],
+    "extra_specs": {
+      "rookie_card": true,
+      "is_high_counterfeit_risk": true
+    },
+    "sync_tier": "STATIC",
+    "source_name": "STATIC_SEED"
+  }
+]

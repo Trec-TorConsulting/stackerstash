@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from celery.schedules import crontab
 from corsheaders.defaults import default_headers
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -219,6 +220,7 @@ CELERY_TASK_ALWAYS_EAGER = os.getenv("CELERY_TASK_ALWAYS_EAGER", "false").lower(
     "true",
     "yes",
 }
+
 CELERY_BEAT_SCHEDULE = {
     "refresh-spot-prices-every-5-minutes": {
         "task": "apps.valuation.tasks.refresh_spot_prices_task",
@@ -227,6 +229,18 @@ CELERY_BEAT_SCHEDULE = {
     "process-deferred-ai-enrichment-every-15-minutes": {
         "task": "apps.valuation.tasks.process_deferred_ai_enrichment_task",
         "schedule": 900.0,
+    },
+    "sync-weekly-static-catalog": {
+        "task": "apps.catalog.tasks.sync_weekly_static_catalog_task",
+        "schedule": crontab(minute=0, hour=3, day_of_week=0),
+    },
+    "sync-daily-reference-baselines": {
+        "task": "apps.catalog.tasks.sync_daily_reference_baselines_task",
+        "schedule": crontab(minute=0, hour=4),
+    },
+    "sync-hourly-market-baselines": {
+        "task": "apps.catalog.tasks.sync_hourly_market_baselines_task",
+        "schedule": crontab(minute=5),
     },
 }
 

@@ -9,6 +9,9 @@ from typing import Any
 import httpx
 
 from apps.catalog.models import AVDP_OZ_GRAMS, TROY_OZ_GRAMS
+from apps.catalog.reference_data.cert_patterns import (
+    build_cert_verification_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,29 +22,6 @@ GOLD_API_SYMBOLS = {
     "PALLADIUM": "XPD",
     "COPPER": "HG",
 }
-
-CERT_VERIFICATION_URLS = {
-    "PCGS": "https://www.pcgs.com/cert/{cert}",
-    "NGC": "https://www.ngccoin.com/certlookup/{cert}/",
-    "PMG": "https://www.pmgnotes.com/certlookup/{cert}/",
-    "PCGS_BANKNOTE": "https://www.pcgs.com/banknote/cert/{cert}",
-    "CACG": "https://www.cacgrading.com/cert/{cert}",
-    "ANACS": "https://www.anacs.com/Verify/CertVerification.aspx?cert={cert}",
-    "PSA": "https://www.psacard.com/cert/{cert}",
-    "BGS": "https://www.beckett.com/grading/card-lookup?item_type=BGS&item_id={cert}",
-    "CGC": "https://www.cgccards.com/certlookup/{cert}/",
-    "SGC": "https://www.gosgc.com/cert-code-lookup?cert={cert}",
-    "TAG": "https://my.taggrading.com/card/{cert}",
-}
-
-
-def build_cert_verification_url(grading_service: str, cert_number: str) -> str | None:
-    """Return the official third-party cert lookup URL if available."""
-    cert = cert_number.strip()
-    template = CERT_VERIFICATION_URLS.get(grading_service)
-    if not cert or not template:
-        return None
-    return template.format(cert=cert)
 
 
 def fetch_spot_prices_from_gold_api(timeout: float = 8.0) -> dict[str, Decimal]:

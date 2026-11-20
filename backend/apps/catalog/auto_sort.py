@@ -19,6 +19,7 @@ from apps.accounts.models import (
     validate_ollama_url,
 )
 from apps.catalog.models import CollectionItem
+from apps.catalog.reference_catalog import match_static_reference
 
 logger = logging.getLogger(__name__)
 
@@ -385,6 +386,34 @@ def _normalize_card_franchise(item: CollectionItem) -> str:
 
 def classify_item_deterministic(item: CollectionItem) -> SortResult:
     """Classify an item into canonical sort_category and sort_subcategory using local rules."""
+    # Tier 0: Static collectible reference catalog matching
+    item_text = " ".join(filter(None, [item.title, item.series, item.notes]))
+    if item_text.strip():
+        ref_match = match_static_reference(
+            item_text,
+            hints={
+                "year": item.year,
+                "grading_service": item.grading_service,
+                "denomination": item.denomination,
+                "serial_number": item.serial_number,
+            },
+        )
+        if ref_match and ref_match.get("candidate"):
+            cand = ref_match["candidate"]
+            cand_cat = cand.get("category", "")
+            if cand_cat == "CARD":
+                sub = cand.get("series") or _normalize_card_franchise(item)
+                return SortResult(sort_category=CollectionItem.SortCategory.CARD, sort_subcategory=sub)
+            if cand_cat == "PAPER":
+                sub = cand.get("country") or "United States"
+                return SortResult(sort_category=CollectionItem.SortCategory.PAPER, sort_subcategory=sub)
+            if cand_cat in ("BAR", "ROUND"):
+                sub = cand.get("mint_or_refiner") or _normalize_mint_or_pourer(item)
+                return SortResult(sort_category=cand_cat, sort_subcategory=sub)
+            if cand_cat in ("COIN", "SLAB"):
+                sub = cand.get("country") or _normalize_country_or_era(item)
+                return SortResult(sort_category=CollectionItem.SortCategory.COIN, sort_subcategory=sub)
+
     sort_cat = _determine_sort_category(item)
     if sort_cat in (CollectionItem.SortCategory.COIN, CollectionItem.SortCategory.PAPER):
         subcat = _normalize_country_or_era(item)

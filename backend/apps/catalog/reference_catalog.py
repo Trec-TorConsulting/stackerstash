@@ -1,8 +1,22 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any
+
+from django.core.cache import cache
+
+from apps.catalog.reference_data.ancient import decode_ancient_legend
+from apps.catalog.reference_data.authentication import get_authentication_profile
+from apps.catalog.reference_data.banknote_guru import GOLDBACK_STATE_MATRIX, analyze_us_serial
+from apps.catalog.reference_data.constants import detect_transition_year_metal
+from apps.catalog.reference_data.grading import CARD_CENTERING_RUBRICS
+from apps.catalog.reference_data.storage_fit import recommend_storage_fit
+
+logger = logging.getLogger(__name__)
 
 # Goldback fractional denominations -> fine troy ounces of 24K (.9999) gold
 GOLDBACK_DENOM_OZT: dict[str, str] = {
@@ -343,7 +357,7 @@ def _match_goldback(upper: str, hints: dict[str, Any]) -> dict[str, Any] | None:
     else:
         title = " ".join(p for p in (year, state, "Goldback") if p)
 
-    return {
+    res = {
         "matched": True,
         "key": f"goldback_{state.lower().replace(' ', '_') or 'us'}_{denom or '1'}",
         "confidence": 0.92 if (state and denom) else 0.82,
@@ -369,8 +383,226 @@ def _match_goldback(upper: str, hints: dict[str, Any]) -> dict[str, Any] | None:
         },
         "specs": {
             "composition": "99.99% 24K Gold (Polymer Foil)",
+            "storage_fit": recommend_storage_fit(item_type="PAPER"),
         },
     }
+    if state and state.upper() in GOLDBACK_STATE_MATRIX:
+        res["specs"]["goldback_matrix"] = GOLDBACK_STATE_MATRIX[state.upper()]
+    return res
+
+
+def _enrich_specs(
+    candidate: dict[str, Any],
+    specs: dict[str, Any],
+    ocr_text: str,
+    hints: dict[str, Any],
+) -> dict[str, Any]:
+    """Enrich specs with deterministic physical, grading, and authentication metrics."""
+    upper = (ocr_text or "").upper()
+    cat = candidate.get("category", "")
+    year_str = str(candidate.get("year") or hints.get("year") or "")
+    year_int = int(year_str) if year_str.isdigit() else None
+
+    # 1. Transition-year silver/copper detection
+    trans = detect_transition_year_metal(
+        country=hints.get("country") or candidate.get("country", ""),
+        denomination=hints.get("denomination") or candidate.get("denomination", ""),
+        year=year_int,
+        mint_mark=hints.get("mint_mark"),
+    )
+    if trans:
+        specs["transition_metal"] = trans
+
+    # 2. Authentication, acoustic ping & counterfeit risk
+    auth = get_authentication_profile(candidate.get("series") or candidate.get("title") or "")
+    if auth.get("ping_frequencies_hz") or auth.get("security_features") or auth.get("is_high_risk_counterfeit"):
+        specs["authentication"] = auth
+
+    # 3. Storage fit (capsule, tube, toploader, sleeve)
+    if "storage_fit" not in specs:
+        dia = float(specs["diameter_mm"]) if specs.get("diameter_mm") else None
+        thick = float(specs["thickness_mm"]) if specs.get("thickness_mm") else None
+        point_th = int(specs.get("point_thickness", 35)) if cat == "CARD" else None
+        specs["storage_fit"] = recommend_storage_fit(
+            item_type=cat,
+            diameter_mm=dia,
+            thickness_mm=thick,
+            point_thickness=point_th,
+        )
+
+    # 4. Ancient coinage legend decoding
+    if "ANCIENT" in upper or "ROMAN" in upper or "GREEK" in upper or (year_int and year_int < 500) or "BC" in upper:
+        ancient = decode_ancient_legend(ocr_text)
+        if ancient.get("matched_ruler") or ancient.get("abbreviations"):
+            specs["ancient_legend"] = ancient
+
+    # 5. Banknote fancy serial number analysis
+    serial = str(hints.get("serial_number") or candidate.get("serial_number") or "").strip()
+    if not serial and cat == "PAPER":
+        sm = re.search(r"\b([A-L]\s*\d{8}\s*[A-Z*])(?:\b|\s|$)", upper)
+        if sm:
+            serial = sm.group(1).replace(" ", "")
+    if serial:
+        specs["serial_analysis"] = analyze_us_serial(serial)
+
+    # 6. Trading card centering rubrics
+    if cat == "CARD":
+        specs["centering_rubrics"] = CARD_CENTERING_RUBRICS
+
+    return specs
+
+
+def _match_from_database(
+    upper: str,
+    hints: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Attempt match against StaticCardSpec, StaticBanknoteSpec, and StaticNumismaticSpec DB models."""
+    try:
+        from django.db.models import Q
+
+        from apps.catalog.models import (
+            StaticBanknoteSpec,
+            StaticCardSpec,
+            StaticNumismaticSpec,
+        )
+
+        # A. Trading cards: check set_code, card_number, or keywords
+        set_code = str(hints.get("set_code") or "").strip()
+        card_num = str(hints.get("card_number") or "").strip()
+        if set_code and card_num:
+            card = StaticCardSpec.objects.filter(
+                set_code__iexact=set_code, card_number__iexact=card_num
+            ).first()
+            if card:
+                cand_title = f"{card.release_year or ''} {card.card_game} {card.set_name} #{card.card_number} {card.card_name}".strip()
+                return {
+                    "matched": True,
+                    "key": card.ref_key,
+                    "confidence": 0.95,
+                    "source": "STATIC_CATALOG",
+                    "candidate": {
+                        "category": "CARD",
+                        "title": cand_title,
+                        "country": "",
+                        "year": str(card.release_year or ""),
+                        "mint_or_refiner": "",
+                        "denomination": "",
+                        "series": f"{card.card_game} {card.set_name}".strip(),
+                        "metal_type": "NONE",
+                        "weight_value": "0.0000",
+                        "weight_unit": "OZ_T",
+                        "purity": "0.000000",
+                        "grading_service": str(hints.get("grading_service") or "NONE"),
+                        "cert_number": str(hints.get("cert_number") or ""),
+                        "grade": str(hints.get("grade") or ""),
+                        "serial_number": str(hints.get("serial_number") or ""),
+                        "ai_confidence": 0.95,
+                        "notes": "Matched from static trading card catalog.",
+                    },
+                    "specs": {
+                        "point_thickness": card.thickness_pt,
+                        "rarity": card.rarity,
+                        "finish": card.card_finish,
+                    },
+                }
+
+        # B. Banknotes: check catalog_number or keywords
+        cat_num = str(hints.get("catalog_number") or "").strip()
+        if cat_num:
+            bn = StaticBanknoteSpec.objects.filter(
+                Q(friedberg_number__iexact=cat_num) | Q(pick_number__iexact=cat_num)
+            ).first()
+            if bn:
+                cand_title = f"{bn.series} {bn.title} {bn.denomination}".strip()
+                return {
+                    "matched": True,
+                    "key": bn.ref_key,
+                    "confidence": 0.93,
+                    "source": "STATIC_CATALOG",
+                    "candidate": {
+                        "category": "PAPER",
+                        "title": cand_title,
+                        "country": bn.country,
+                        "year": bn.series,
+                        "mint_or_refiner": "Bureau of Engraving and Printing",
+                        "denomination": bn.denomination,
+                        "series": bn.title,
+                        "metal_type": "NONE",
+                        "weight_value": "0.0000",
+                        "weight_unit": "OZ_T",
+                        "purity": "0.000000",
+                        "grading_service": str(hints.get("grading_service") or "NONE"),
+                        "cert_number": str(hints.get("cert_number") or ""),
+                        "grade": str(hints.get("grade") or ""),
+                        "serial_number": str(hints.get("serial_number") or ""),
+                        "ai_confidence": 0.93,
+                        "notes": "Matched from static banknote reference database.",
+                    },
+                    "specs": {
+                        "catalog_number": bn.friedberg_number or bn.pick_number,
+                        "seal_color": bn.seal_color,
+                        "size_class": bn.size_class,
+                        "signatures": bn.signatures,
+                        "is_star_note_run": bn.is_scarce_run,
+                        "star_note_run_size": bn.print_run_size,
+                    },
+                }
+
+        # C. Numismatics: keyword score from DB
+        best_num: StaticNumismaticSpec | None = None
+        best_score = 0
+        for num in StaticNumismaticSpec.objects.all()[:200]:
+            p_hits = sum(1 for kw in num.keywords if kw.upper() in upper)
+            s_hits = sum(1 for kw in num.secondary_keywords if kw.upper() in upper)
+            if p_hits > 0:
+                sc = p_hits * 3 + s_hits
+                if sc >= 3 and sc > best_score:
+                    best_score = sc
+                    best_num = num
+
+        if best_num:
+            yr = str(hints.get("year") or "")
+            t = f"{yr} {best_num.series} {best_num.denomination}".strip() if yr else f"{best_num.series} {best_num.denomination}".strip()
+            cat = best_num.item_kind if best_num.item_kind in ("COIN", "BAR", "ROUND") else "COIN"
+            return {
+                "matched": True,
+                "key": best_num.ref_key,
+                "confidence": 0.90,
+                "source": "STATIC_CATALOG",
+                "candidate": {
+                    "category": cat,
+                    "title": t,
+                    "country": best_num.country,
+                    "year": yr,
+                    "mint_or_refiner": best_num.mint_or_refiner,
+                    "denomination": best_num.denomination,
+                    "series": best_num.series,
+                    "metal_type": best_num.metal_type,
+                    "weight_value": str(best_num.weight_value or "0.0000"),
+                    "weight_unit": best_num.weight_unit,
+                    "purity": str(best_num.purity or "0.000000"),
+                    "grading_service": str(hints.get("grading_service") or "NONE"),
+                    "cert_number": str(hints.get("cert_number") or ""),
+                    "grade": str(hints.get("grade") or ""),
+                    "serial_number": str(hints.get("serial_number") or ""),
+                    "ai_confidence": 0.90,
+                    "notes": "Matched from static numismatic reference database.",
+                },
+                "specs": {
+                    "diameter_mm": str(best_num.diameter_mm) if best_num.diameter_mm else None,
+                    "thickness_mm": str(best_num.thickness_mm) if best_num.thickness_mm else None,
+                    "gross_weight_grams": str(best_num.gross_weight_grams) if best_num.gross_weight_grams else None,
+                    "composition": best_num.composition,
+                    "edge_type": best_num.edge_type,
+                    "is_key_date": best_num.is_key_date,
+                    "varieties": best_num.varieties,
+                },
+            }
+
+    except Exception as exc:
+        logger.debug("Database reference match skipped or failed: %s", exc)
+
+    return None
 
 
 def match_static_reference(
@@ -388,12 +620,36 @@ def match_static_reference(
     upper = text.upper()
     hints = hints or {}
 
+    # Check hot Redis / Django cache
+    cache_key = f"ref:match:{hashlib.sha256((upper + json.dumps(hints, sort_keys=True, default=str)).encode()).hexdigest()}"
+    try:
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+    except Exception as exc:
+        logger.debug("Cache get skipped: %s", exc)
+
     # 1. Goldbacks (very high precision via state + fractional denominator)
     gb = _match_goldback(upper, hints)
     if gb is not None:
+        gb["specs"] = _enrich_specs(gb["candidate"], gb["specs"], ocr_text, hints)
+        try:
+            cache.set(cache_key, gb, timeout=3600)
+        except Exception as exc:
+            logger.debug("Cache set skipped: %s", exc)
         return gb
 
-    # 2. Classic & bullion reference catalog entries
+    # 2. Database models (StaticCardSpec, StaticBanknoteSpec, StaticNumismaticSpec)
+    db_match = _match_from_database(upper, hints)
+    if db_match is not None:
+        db_match["specs"] = _enrich_specs(db_match["candidate"], db_match["specs"], ocr_text, hints)
+        try:
+            cache.set(cache_key, db_match, timeout=3600)
+        except Exception as exc:
+            logger.debug("Cache set skipped: %s", exc)
+        return db_match
+
+    # 3. Built-in classic & bullion fallback catalog entries
     best_item: ReferenceItem | None = None
     best_score = 0
     for item in STATIC_REFERENCE_CATALOG:
@@ -415,7 +671,7 @@ def match_static_reference(
     category = "SLAB" if grading_service != "NONE" else best_item.category
     title = f"{year} {best_item.title}".strip() if year else best_item.title
 
-    return {
+    res = {
         "matched": True,
         "key": best_item.key,
         "confidence": best_item.confidence,
@@ -447,3 +703,11 @@ def match_static_reference(
             "edge_type": best_item.edge_type,
         },
     }
+    res["specs"] = _enrich_specs(res["candidate"], res["specs"], ocr_text, hints)
+
+    try:
+        cache.set(cache_key, res, timeout=3600)
+    except Exception as exc:
+        logger.debug("Cache set fallback skipped: %s", exc)
+
+    return res

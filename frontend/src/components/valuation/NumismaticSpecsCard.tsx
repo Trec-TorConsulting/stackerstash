@@ -10,6 +10,7 @@ interface NumismaticSpecsCardProps {
 
 const PROVENANCE_BADGE: Record<string, string> = {
   USER: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+  STATIC_CATALOG: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
   PCGS: "bg-amber-500/15 text-amber-300 border-amber-500/30",
   NUMISTA: "bg-sky-500/15 text-sky-300 border-sky-500/30",
   AI: "bg-indigo-500/15 text-indigo-300 border-indigo-500/30",
@@ -62,6 +63,10 @@ export function NumismaticSpecsCard({ item, onSaveSpecs, isSaving }: NumismaticS
 
   const prov = item.specs_provenance || {};
   const catalogEntries = Object.entries(item.catalog_numbers || {});
+  const attrs = (item.attributes || {}) as Record<string, any>;
+  const auth = attrs.authentication || attrs.specs?.authentication;
+  const storageFit = attrs.storage_fit || attrs.specs?.storage_fit;
+  const serialAnalysis = attrs.serial_analysis || attrs.specs?.serial_analysis;
 
   const rows: { key: string; label: string; value: string | null }[] = [
     { key: "mint_mark", label: "Mint Mark", value: item.mint_mark || null },
@@ -190,6 +195,36 @@ export function NumismaticSpecsCard({ item, onSaveSpecs, isSaving }: NumismaticS
                   {cat} #{num}
                 </span>
               ))}
+            </div>
+          )}
+          {auth?.counterfeit_alert && (
+            <div className="sm:col-span-2 rounded-xl p-3 bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs">
+              <span className="font-semibold block mb-0.5">⚠️ High Risk Counterfeit Checklist:</span>
+              {auth.counterfeit_alert.target} — {auth.counterfeit_alert.risk_level} Risk
+            </div>
+          )}
+          {(auth?.ping_specs || storageFit || serialAnalysis) && (
+            <div className="sm:col-span-2 flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800/80">
+              {auth?.ping_specs && (
+                <span className="px-2 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/30 text-[11px] font-mono text-amber-300">
+                  Ping: {auth.ping_specs.f1_fundamental_hz} Hz (±{auth.ping_specs.tolerance_pct}%)
+                </span>
+              )}
+              {storageFit?.air_tite_capsule && (
+                <span className="px-2 py-0.5 rounded-md bg-sky-500/10 border border-sky-500/30 text-[11px] font-mono text-sky-300">
+                  Capsule: Air-Tite {storageFit.air_tite_capsule.model}
+                </span>
+              )}
+              {serialAnalysis?.is_star_note && (
+                <span className="px-2 py-0.5 rounded-md bg-indigo-500/10 border border-indigo-500/30 text-[11px] font-mono text-indigo-300">
+                  ★ Star Note {serialAnalysis.frb_bank ? `(${serialAnalysis.frb_bank})` : ""}
+                </span>
+              )}
+              {serialAnalysis?.patterns?.length > 0 && (
+                <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-[11px] font-mono text-emerald-300">
+                  Fancy: {serialAnalysis.patterns.join(", ")}
+                </span>
+              )}
             </div>
           )}
         </div>
