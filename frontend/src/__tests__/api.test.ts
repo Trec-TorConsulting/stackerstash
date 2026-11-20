@@ -199,8 +199,10 @@ describe("api helpers and client methods", () => {
     await api.adminUpdateUserSubscription("u1", { tier: "UNLIMITED" });
     await api.adminListDedicatedInstances();
     await api.adminUpdateDedicatedInstance("d1", { status: "ACTIVE" });
+    await api.convertImageToJpeg(dummyFile);
+    await api.convertImageToJpeg(new Blob(["raw"]), "raw.heic");
 
-    expect(fetchMock).toHaveBeenCalledTimes(76);
+    expect(fetchMock).toHaveBeenCalledTimes(78);
   });
 });
 

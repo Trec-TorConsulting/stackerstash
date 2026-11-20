@@ -375,5 +375,22 @@ describe("imageUtils", () => {
     expect(blobFallback.type).toBe("image/heic");
 
     convertSpy.mockRestore();
+
+    // 4. SSR window === undefined branches
+    const origWindow = globalThis.window;
+    vi.stubGlobal("window", undefined);
+    const ssrFile = await convertHeicToJpeg(heicFile);
+    expect(ssrFile).toBe(heicFile);
+    const ssrBlob = await convertHeicToJpeg(new Blob(["raw"]));
+    expect(ssrBlob.name).toBe("converted.jpg");
+    vi.stubGlobal("window", origWindow);
+
+    // 5. normalizeImageFileForUpload with HEIC file exercises line 315
+    const normSpy = vi.spyOn(api, "convertImageToJpeg").mockResolvedValue(
+      new File([new Uint8Array(200_000)], "coin.jpg", { type: "image/jpeg" })
+    );
+    const normalizedHeic = await normalizeImageFileForUpload(heicFile);
+    expect(normalizedHeic.type).toBe("image/jpeg");
+    normSpy.mockRestore();
   });
 });

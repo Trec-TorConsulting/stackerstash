@@ -481,6 +481,11 @@ describe("browser autoCropImageFile, harmonizeCropPair, and preference error han
     expect(cropped.file.name).toBe("photo-autocrop.webp");
     expect(closeSpy).toHaveBeenCalled();
 
+    // 1b. HEIC input branch (line 686)
+    const heicFile = new File(["heic"], "coin.heic", { type: "image/heic" });
+    const heicCropped = await autoCropImageFile(heicFile);
+    expect(heicCropped.applied).toBe(true);
+
     // 2. too_small
     vi.stubGlobal(
       "createImageBitmap",

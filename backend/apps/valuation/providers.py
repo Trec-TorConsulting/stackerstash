@@ -388,6 +388,76 @@ def _trim_outliers(prices: list[Decimal]) -> list[Decimal]:
     return ordered[cut:-cut] or ordered
 
 
+def _fetch_ebay_sold_raw(
+    client: httpx.Client,
+    query: str,
+    client_id: str,
+    client_secret: str,
+) -> list[Decimal] | None:
+    """Query eBay Marketplace Insights for realized sold item sales."""
+    try:
+        token_resp = client.post(
+            "https://api.ebay.com/identity/v1/oauth2/token",
+            auth=(client_id, client_secret),
+            data={
+                "grant_type": "client_credentials",
+                "scope": "https://api.ebay.com/oauth/api_scope/buy.marketplace.insights",
+            },
+        )
+        if token_resp.status_code != 200:
+            return None
+        access_token = token_resp.json().get("access_token")
+        if not access_token:
+            return None
+        search_resp = client.get(
+            "https://api.ebay.com/buy/marketplace_insights/v1_beta/item_sales/search",
+            params={"q": query, "limit": 15},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if search_resp.status_code != 200:
+            return None
+        sales = search_resp.json().get("itemSales") or []
+        return _filter_comp_listings(sales, query=query, price_key="lastSoldPrice")
+    except Exception as exc:
+        logger.warning("eBay sold comps fetch failed for %s: %s", query, exc)
+        return None
+
+
+def _fetch_ebay_active_raw(
+    client: httpx.Client,
+    query: str,
+    client_id: str,
+    client_secret: str,
+) -> list[Decimal] | None:
+    """Query eBay Browse API for active asking item summaries."""
+    try:
+        token_resp = client.post(
+            "https://api.ebay.com/identity/v1/oauth2/token",
+            auth=(client_id, client_secret),
+            data={
+                "grant_type": "client_credentials",
+                "scope": "https://api.ebay.com/oauth/api_scope",
+            },
+        )
+        if token_resp.status_code != 200:
+            return None
+        access_token = token_resp.json().get("access_token")
+        if not access_token:
+            return None
+        search_resp = client.get(
+            "https://api.ebay.com/buy/browse/v1/item_summary/search",
+            params={"q": query, "limit": 15},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if search_resp.status_code != 200:
+            return None
+        summaries = search_resp.json().get("itemSummaries") or []
+        return _filter_comp_listings(summaries, query=query, price_key="price")
+    except Exception as exc:
+        logger.warning("eBay active asking fetch failed for %s: %s", query, exc)
+        return None
+
+
 def _lookup_ebay_browse_active(
     client: httpx.Client,
     query: str,
@@ -395,108 +465,203 @@ def _lookup_ebay_browse_active(
     client_secret: str,
 ) -> dict[str, Any] | None:
     """Fallback to eBay Browse API active listings when Marketplace Insights is unavailable."""
-    token_resp = client.post(
-        "https://api.ebay.com/identity/v1/oauth2/token",
-        auth=(client_id, client_secret),
-        data={
-            "grant_type": "client_credentials",
-            "scope": "https://api.ebay.com/oauth/api_scope",
-        },
-    )
-    if token_resp.status_code != 200:
-        return None
-    access_token = token_resp.json().get("access_token")
-    if not access_token:
-        return None
-    search_resp = client.get(
-        "https://api.ebay.com/buy/browse/v1/item_summary/search",
-        params={"q": query, "limit": 15},
-        headers={"Authorization": f"Bearer {access_token}"},
-    )
-    if search_resp.status_code != 200:
-        return None
-    summaries = search_resp.json().get("itemSummaries") or []
-    raw_prices = _filter_comp_listings(summaries, query=query, price_key="price")
-    trimmed = _trim_outliers(raw_prices)
+    raw_prices = _fetch_ebay_active_raw(client, query, client_id, client_secret)
+    trimmed = _trim_outliers(raw_prices) if raw_prices else []
     if not trimmed:
         return None
     from django.conf import settings
 
     discount = Decimal(str(getattr(settings, "EBAY_ACTIVE_ASK_DISCOUNT", "0.85")))
+    ask_mean = (sum(trimmed) / Decimal(str(len(trimmed)))).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
     med = (
         Decimal(str(median([float(p) for p in trimmed]))) * discount
     ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return {
         "source": "EBAY_ACTIVE_ASK",
         "is_ask": True,
+        "is_blended": False,
+        "value": med,
         "low": (min(trimmed) * discount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         "median": med,
         "high": (max(trimmed) * discount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         "count": len(trimmed),
+        "sold": None,
+        "active_ask": {
+            "count": len(trimmed),
+            "low": min(trimmed).quantize(Decimal("0.01")),
+            "high": max(trimmed).quantize(Decimal("0.01")),
+            "mean": ask_mean,
+        },
         "raw": {
             "sample_count": len(trimmed),
+            "is_blended": False,
             "ask_discount_factor": str(discount),
             "prices": [str(p) for p in trimmed[:10]],
         },
     }
 
 
-def lookup_ebay_sold_comps(
+def lookup_ebay_market_comps(
     query: str,
     client_id: str | None = None,
     client_secret: str | None = None,
     timeout: float = 10.0,
 ) -> dict[str, Any] | None:
-    """Fetch realized sold listings from eBay Marketplace Insights, falling back to Browse Active Ask."""
+    """Fetch realized sold listings and active asking listings in parallel and synthesize market comps."""
     if not query or not client_id or not client_secret:
         return None
-    try:
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    sold_raw: list[Decimal] | None = None
+    active_raw: list[Decimal] | None = None
+
+    def _do_sold() -> list[Decimal] | None:
         with httpx.Client(timeout=timeout) as client:
-            token_resp = client.post(
-                "https://api.ebay.com/identity/v1/oauth2/token",
-                auth=(client_id, client_secret),
-                data={
-                    "grant_type": "client_credentials",
-                    "scope": "https://api.ebay.com/oauth/api_scope/buy.marketplace.insights",
-                },
-            )
-            if token_resp.status_code in {400, 401, 403}:
-                return _lookup_ebay_browse_active(client, query, client_id, client_secret)
-            if token_resp.status_code != 200:
-                return None
-            access_token = token_resp.json().get("access_token")
-            if not access_token:
-                return None
-            search_resp = client.get(
-                "https://api.ebay.com/buy/marketplace_insights/v1_beta/item_sales/search",
-                params={"q": query, "limit": 15},
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
-            if search_resp.status_code in {403, 404}:
-                return _lookup_ebay_browse_active(client, query, client_id, client_secret)
-            if search_resp.status_code != 200:
-                return None
-            data = search_resp.json()
-            sales = data.get("itemSales") or []
-            raw_prices = _filter_comp_listings(sales, query=query, price_key="lastSoldPrice")
-            trimmed = _trim_outliers(raw_prices)
-            if not trimmed:
-                return None
-            med = Decimal(str(median([float(p) for p in trimmed]))).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
-            return {
-                "source": "COMPS",
-                "is_ask": False,
-                "low": min(trimmed).quantize(Decimal("0.01")),
-                "median": med,
-                "high": max(trimmed).quantize(Decimal("0.01")),
-                "count": len(trimmed),
-                "raw": {"sample_count": len(trimmed), "prices": [str(p) for p in trimmed[:10]]},
-            }
+            return _fetch_ebay_sold_raw(client, query, client_id, client_secret)
+
+    def _do_active() -> list[Decimal] | None:
+        with httpx.Client(timeout=timeout) as client:
+            return _fetch_ebay_active_raw(client, query, client_id, client_secret)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            fut_sold = executor.submit(_do_sold)
+            fut_active = executor.submit(_do_active)
+            sold_raw = fut_sold.result()
+            active_raw = fut_active.result()
     except Exception as exc:
-        logger.warning("eBay comps lookup failed for %s: %s", query, exc)
+        logger.warning("eBay parallel comps lookup failed for %s: %s", query, exc)
+        return None
+
+    trimmed_sold = _trim_outliers(sold_raw) if sold_raw else []
+    trimmed_ask = _trim_outliers(active_raw) if active_raw else []
+
+    if trimmed_sold and trimmed_ask:
+        sold_med = Decimal(str(median([float(p) for p in trimmed_sold]))).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        sold_low = min(trimmed_sold).quantize(Decimal("0.01"))
+        sold_high = max(trimmed_sold).quantize(Decimal("0.01"))
+
+        ask_mean = (sum(trimmed_ask) / Decimal(str(len(trimmed_ask)))).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        ask_low = min(trimmed_ask).quantize(Decimal("0.01"))
+        ask_high = max(trimmed_ask).quantize(Decimal("0.01"))
+
+        blended_val = ((sold_med + ask_mean) / Decimal("2")).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
+        return {
+            "source": "COMPS",
+            "is_blended": True,
+            "is_ask": False,
+            "value": blended_val,
+            "median": blended_val,
+            "low": min(sold_low, ask_low),
+            "high": max(sold_high, ask_high),
+            "count": len(trimmed_sold) + len(trimmed_ask),
+            "sold": {
+                "count": len(trimmed_sold),
+                "low": sold_low,
+                "high": sold_high,
+                "median": sold_med,
+            },
+            "active_ask": {
+                "count": len(trimmed_ask),
+                "low": ask_low,
+                "high": ask_high,
+                "mean": ask_mean,
+            },
+            "raw": {
+                "sample_count": len(trimmed_sold) + len(trimmed_ask),
+                "is_blended": True,
+                "sold": {
+                    "count": len(trimmed_sold),
+                    "low": str(sold_low),
+                    "high": str(sold_high),
+                    "median": str(sold_med),
+                },
+                "active_ask": {
+                    "count": len(trimmed_ask),
+                    "low": str(ask_low),
+                    "high": str(ask_high),
+                    "mean": str(ask_mean),
+                },
+                "prices": [str(p) for p in trimmed_sold[:5]] + [str(p) for p in trimmed_ask[:5]],
+            },
+        }
+
+    if trimmed_sold:
+        sold_med = Decimal(str(median([float(p) for p in trimmed_sold]))).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        sold_low = min(trimmed_sold).quantize(Decimal("0.01"))
+        sold_high = max(trimmed_sold).quantize(Decimal("0.01"))
+        return {
+            "source": "COMPS",
+            "is_blended": False,
+            "is_ask": False,
+            "value": sold_med,
+            "median": sold_med,
+            "low": sold_low,
+            "high": sold_high,
+            "count": len(trimmed_sold),
+            "sold": {
+                "count": len(trimmed_sold),
+                "low": sold_low,
+                "high": sold_high,
+                "median": sold_med,
+            },
+            "active_ask": None,
+            "raw": {
+                "sample_count": len(trimmed_sold),
+                "is_blended": False,
+                "prices": [str(p) for p in trimmed_sold[:10]],
+            },
+        }
+
+    if trimmed_ask:
+        from django.conf import settings
+
+        discount = Decimal(str(getattr(settings, "EBAY_ACTIVE_ASK_DISCOUNT", "0.85")))
+        ask_mean = (sum(trimmed_ask) / Decimal(str(len(trimmed_ask)))).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        ask_med = Decimal(str(median([float(p) for p in trimmed_ask])))
+        discounted_med = (ask_med * discount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return {
+            "source": "EBAY_ACTIVE_ASK",
+            "is_blended": False,
+            "is_ask": True,
+            "value": discounted_med,
+            "median": discounted_med,
+            "low": (min(trimmed_ask) * discount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+            "high": (max(trimmed_ask) * discount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+            "count": len(trimmed_ask),
+            "sold": None,
+            "active_ask": {
+                "count": len(trimmed_ask),
+                "low": min(trimmed_ask).quantize(Decimal("0.01")),
+                "high": max(trimmed_ask).quantize(Decimal("0.01")),
+                "mean": ask_mean,
+            },
+            "raw": {
+                "sample_count": len(trimmed_ask),
+                "is_blended": False,
+                "ask_discount_factor": str(discount),
+                "prices": [str(p) for p in trimmed_ask[:10]],
+            },
+        }
+
     return None
+
+
+lookup_ebay_sold_comps = lookup_ebay_market_comps
 
 
 BULLION_PREMIUM_BENCHMARKS: list[tuple[tuple[str, ...], str, Decimal, Decimal]] = [

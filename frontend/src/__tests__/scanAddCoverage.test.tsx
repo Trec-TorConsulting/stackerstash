@@ -95,6 +95,9 @@ describe("ScanAddPage full coverage", () => {
     vi.spyOn(imageUtils, "renderCroppedRotatedImage").mockResolvedValue(
       new File(["e"], "edited.jpg", { type: "image/jpeg" }),
     );
+    vi.spyOn(imageUtils, "convertHeicToJpeg").mockImplementation(async (f) =>
+      new File([f], "c.jpg", { type: "image/jpeg" }),
+    );
     vi.spyOn(imageUtils, "normalizeImageFileForUpload").mockImplementation(async (f) => f);
     vi.spyOn(apiModule.api, "getContainers").mockResolvedValue([
       {
@@ -351,7 +354,7 @@ describe("ScanAddPage full coverage", () => {
     fireEvent.drop(dropZone, {
       dataTransfer: {
         files: [
-          new File(["c"], "c.jpg", { type: "image/jpeg" }),
+          new File(["c"], "c.heic", { type: "image/heic" }),
           new File(["d"], "d.jpg", { type: "image/jpeg" }),
         ],
       },

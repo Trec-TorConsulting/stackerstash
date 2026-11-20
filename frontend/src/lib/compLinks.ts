@@ -48,6 +48,11 @@ export function buildCompLinks(
         url: `https://www.ebay.com/sch/i.html?_nkw=${encoded}&LH_Sold=1&LH_Complete=1`,
       },
       {
+        id: "ebay-active",
+        label: "eBay Active",
+        url: `https://www.ebay.com/sch/i.html?_nkw=${encoded}`,
+      },
+      {
         id: "tcgplayer",
         label: "TCGplayer",
         url: `https://www.tcgplayer.com/search/all/product?q=${encoded}&view=grid`,
@@ -99,6 +104,11 @@ export function buildCompLinks(
       id: "ebay-sold",
       label: "eBay Sold",
       url: `https://www.ebay.com/sch/i.html?_nkw=${encoded}&LH_Sold=1&LH_Complete=1`,
+    },
+    {
+      id: "ebay-active",
+      label: "eBay Active",
+      url: `https://www.ebay.com/sch/i.html?_nkw=${encoded}`,
     },
     {
       id: "heritage",

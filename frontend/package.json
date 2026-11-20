@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build && vite build --ssr src/prerender.tsx --outDir .prerender-tmp && node scripts/prerender.mjs",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:run": "vitest run",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {

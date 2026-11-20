@@ -91,6 +91,9 @@ export function ValuationBreakdownCard({
   const sourceEntries = Object.entries(sourcesMap);
   const compLinks = buildCompLinks(item);
 
+  const compsQuote = sourcesMap.COMPS || sourcesMap.EBAY_ACTIVE_ASK;
+  const isBlended = Boolean(compsQuote?.is_blended || (compsQuote?.sold && compsQuote?.active_ask));
+
   return (
     <div className="rounded-2xl bg-slate-900 border border-slate-800 p-5 space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -101,6 +104,12 @@ export function ValuationBreakdownCard({
           </h2>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {isBlended && (
+            <span className="px-2 py-0.5 rounded-full text-xs font-medium border bg-amber-500/15 text-amber-300 border-amber-500/30">
+              <Sparkles className="h-3 w-3 inline mr-1 -mt-0.5" />
+              Blended Value
+            </span>
+          )}
           {isLocked && (
             <span className="px-2 py-0.5 rounded-full text-xs font-medium border bg-sky-500/15 text-sky-300 border-sky-500/30">
               <Lock className="h-3 w-3 inline mr-1 -mt-0.5" />
@@ -193,6 +202,53 @@ export function ValuationBreakdownCard({
         </div>
       )}
 
+      {/* Dual-Stream Comps Breakdown */}
+      {isBlended && compsQuote && (
+        <div className="rounded-xl bg-slate-950/70 border border-amber-500/30 p-3.5 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-1 text-xs">
+            <span className="font-semibold text-amber-200 flex items-center gap-1.5">
+              <Sparkles className="h-3.5 w-3.5 text-amber-400" />
+              Dual-Stream Comps Breakdown
+            </span>
+            <span className="px-2 py-0.5 rounded-full text-[11px] font-medium border bg-amber-500/20 text-amber-300 border-amber-500/40">
+              Blended Value: {compsQuote.value ? formatUsd(compsQuote.value) : "—"}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+            {compsQuote.sold && (
+              <div className="rounded-lg bg-slate-900/90 border border-slate-800 p-2.5 space-y-1">
+                <div className="text-slate-400 font-medium">
+                  Sold Comps ({compsQuote.sold.count} sales)
+                </div>
+                <div className="text-slate-200 font-mono">
+                  Median: <strong className="text-emerald-300">{formatUsd(compsQuote.sold.median)}</strong>
+                </div>
+                {compsQuote.sold.low && compsQuote.sold.high && (
+                  <div className="text-slate-500 text-[11px] font-mono">
+                    Range: {formatUsd(compsQuote.sold.low)}–{formatUsd(compsQuote.sold.high)}
+                  </div>
+                )}
+              </div>
+            )}
+            {compsQuote.active_ask && (
+              <div className="rounded-lg bg-slate-900/90 border border-slate-800 p-2.5 space-y-1">
+                <div className="text-slate-400 font-medium">
+                  Active Asks ({compsQuote.active_ask.count} listings)
+                </div>
+                <div className="text-slate-200 font-mono">
+                  Mean: <strong className="text-sky-300">{formatUsd(compsQuote.active_ask.mean)}</strong>
+                </div>
+                {compsQuote.active_ask.low && compsQuote.active_ask.high && (
+                  <div className="text-slate-500 text-[11px] font-mono">
+                    Range: {formatUsd(compsQuote.active_ask.low)}–{formatUsd(compsQuote.active_ask.high)}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Value Drivers */}
       <div className="space-y-2">
         <div className="text-xs font-medium text-slate-400 uppercase tracking-wider">
@@ -241,10 +297,19 @@ export function ValuationBreakdownCard({
                   {sourceEntries.map(([key, quote]) => (
                     <tr key={key} className="text-slate-200">
                       <td className="py-2 px-3 font-medium">
-                        {SOURCE_LABELS[key] || key}
+                        {quote.is_blended
+                          ? "Blended Real-World Comps"
+                          : SOURCE_LABELS[key] || key}
                         {quote.count ? (
-                          <span className="text-slate-500 ml-1">({quote.count} sales)</span>
+                          <span className="text-slate-500 ml-1">
+                            ({quote.count} {quote.is_ask ? "listings" : "sales"})
+                          </span>
                         ) : null}
+                        {quote.is_blended && (
+                          <span className="ml-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                            Blended Value
+                          </span>
+                        )}
                       </td>
                       <td className="py-2 px-3 font-mono">
                         {quote.value ? formatUsd(quote.value) : "—"}
