@@ -29,15 +29,15 @@ The system SHALL enrich `CARD` items with authoritative set, numbering, rarity, 
 - **THEN** the enrichment step queries Scryfall, populates missing set code, rarity, artist, and `scryfall_id`, and records provenance
 
 ### Requirement: Card Specifications UI panel
-The system SHALL render a dedicated `Card Specifications` card on `ItemDetailPage` for `CARD` items (and slabs whose underlying item is a card), displaying franchise, set, card number, rarity, finish/parallel, edition, language, raw condition, and clickable external catalog links, instead of `Numismatic Specifications`.
+The system SHALL render a dedicated `Card Specifications` card on `ItemDetailPage` for `CARD` items (and slabs whose underlying item is a card), displaying franchise, set, card number, rarity, finish/parallel, edition, language, raw condition, subgrades, and clickable external catalog links, while strictly omitting numismatic specifications, denomination, and bullion metal/melt metrics.
 
 #### Scenario: Viewing a Pokémon card detail page
 - **WHEN** a user opens `ItemDetailPage` for a `CARD` item
-- **THEN** the page displays `Card Specifications` with set, number, rarity, finish, edition, and condition, and hides numismatic-only fields such as mintage, edge type, diameter, and melt floor
+- **THEN** the page displays `Card Specifications` with set, number, rarity, finish, edition, and condition, and completely hides numismatic fields (mintage, edge type, diameter, thickness), denomination, and metal weight / melt floor
 
 #### Scenario: Viewing a PSA-graded Pokémon slab detail page
 - **WHEN** a user opens `ItemDetailPage` for a `SLAB` item with `grading_service="PSA"` and card attributes
-- **THEN** the page displays `Card Specifications` rather than `Numismatic Specifications`
+- **THEN** the page displays `Card Specifications` rather than `Numismatic Specifications`, and hides metal weight, melt value, and coin dimensions
 
 ### Requirement: Structured grading sub-grades and TAG 1000-point score
 The system SHALL support storing and displaying structured grading sub-grades in card `attributes`/`specs` for BGS (Centering, Corners, Edges, Surface on 1–10 scale) and TAG Grading (1000-point TAG Score plus front/back Centering, Corners, Edges, Surface metrics).
