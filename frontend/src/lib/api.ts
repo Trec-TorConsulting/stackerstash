@@ -386,6 +386,10 @@ export interface ValuationSourceQuote {
   low?: string | null;
   high?: string | null;
   count?: number;
+  is_ask?: boolean;
+  is_blended?: boolean;
+  sold?: { count: number; median: string | number; low?: string | number; high?: string | number } | null;
+  active_ask?: { count: number; mean: string | number; low?: string | number; high?: string | number } | null;
   photo_inspected?: boolean;
   verification_url?: string | null;
   status: string;

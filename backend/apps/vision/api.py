@@ -1,5 +1,6 @@
 import io
 import re
+
 from django.http import HttpResponse
 from ninja import File, Form, Router, UploadedFile
 from ninja.errors import HttpError
@@ -42,7 +43,7 @@ def convert_image(request, file: UploadedFile = File(...)):
             img.save(out, format="JPEG", quality=90, optimize=True)
             jpeg_bytes = out.getvalue()
     except Exception as exc:
-        raise HttpError(400, f"Could not decode image format: {exc}")
+        raise HttpError(400, f"Could not decode image format: {exc}") from exc
 
     response = HttpResponse(jpeg_bytes, content_type="image/jpeg")
     base_name = re.sub(r"\.[^.]+$", "", getattr(file, "name", "") or "converted") or "converted"

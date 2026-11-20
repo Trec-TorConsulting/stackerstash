@@ -160,13 +160,70 @@ describe("Valuation & Specs UI Components", () => {
     expect(cached?.valuations).toHaveLength(1);
   });
 
-  it("builds pre-filled comp links for eBay Sold, Heritage, GreatCollections, and Stacks Bowers", () => {
+  it("builds pre-filled comp links for eBay Sold, eBay Active, Heritage, GreatCollections, and Stacks Bowers", () => {
     const links = buildCompLinks(SAMPLE_ITEM);
-    expect(links).toHaveLength(4);
+    expect(links).toHaveLength(5);
+    expect(links[0].id).toBe("ebay-sold");
+    expect(links[0].label).toBe("eBay Sold");
     expect(links[0].url).toContain("LH_Sold=1");
-    expect(links[1].url).toContain("coins.ha.com");
-    expect(links[2].url).toContain("greatcollections.com");
-    expect(links[3].url).toContain("stacksbowers.com");
+    expect(links[1].id).toBe("ebay-active");
+    expect(links[1].label).toBe("eBay Active");
+    expect(links[1].url).toContain("ebay.com/sch");
+    expect(links[2].url).toContain("coins.ha.com");
+    expect(links[3].url).toContain("greatcollections.com");
+    expect(links[4].url).toContain("stacksbowers.com");
+
+    const cardItem: CollectionItem = {
+      ...SAMPLE_ITEM,
+      category: "CARD",
+      is_card_item: true,
+      card_game: "Pokemon",
+      set_name: "Base Set",
+      card_number: "4/102",
+    };
+    const cardLinks = buildCompLinks(cardItem);
+    expect(cardLinks.some((l) => l.id === "ebay-sold" && l.label === "eBay Sold")).toBe(true);
+    expect(cardLinks.some((l) => l.id === "ebay-active" && l.label === "eBay Active")).toBe(true);
+  });
+
+  it("renders ValuationBreakdownCard with dual-stream blended comps synthesis", () => {
+    const blendedHistory: ValuationHistoryEntry = {
+      id: "hist-blended",
+      melt_value_unit: "23.20",
+      market_value_unit: "115.00",
+      source: "COMPS",
+      is_estimate: true,
+      raw_payload: {
+        sources: {
+          COMPS: {
+            value: "115.00",
+            low: "100.00",
+            high: "130.00",
+            count: 7,
+            is_blended: true,
+            status: "BLENDED_COMPS",
+            sold: { count: 3, median: "105.00", low: "100.00", high: "110.00" },
+            active_ask: { count: 4, mean: "125.00", low: "120.00", high: "130.00" },
+          },
+        },
+        valuation_drivers: [
+          "Real-world market comps: $115.00 (blended average of 3 sold sales [median $105.00] and 4 active asking listings [mean $125.00]).",
+        ],
+      },
+      recorded_at: "2026-11-20T10:00:00Z",
+    };
+
+    render(<ValuationBreakdownCard item={SAMPLE_ITEM} latestHistory={blendedHistory} />);
+
+    expect(screen.getAllByText(/Blended Value/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Dual-Stream Comps Breakdown")).toBeInTheDocument();
+    expect(screen.getByText(/Sold Comps \(3 sales\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Active Asks \(4 listings\)/i)).toBeInTheDocument();
+    expect(screen.getByText("$105.00")).toBeInTheDocument();
+    expect(screen.getByText("$125.00")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText(/Source Comparison \(1 evaluated\)/i));
+    expect(screen.getByText("Blended Real-World Comps")).toBeInTheDocument();
   });
 
   it("renders EstimatedGradeCard with ROI and allows manual grade override", async () => {
@@ -253,6 +310,7 @@ describe("Valuation & Specs UI Components", () => {
     const links = buildCompLinks(cardItem);
     expect(links.map((l) => l.label)).toEqual([
       "eBay Sold",
+      "eBay Active",
       "TCGplayer",
       "PriceCharting",
       "130point",
@@ -260,9 +318,10 @@ describe("Valuation & Specs UI Components", () => {
       "Card Ladder",
       "Collectr",
     ]);
-    expect(links[1].url).toContain("tcgplayer.com");
-    expect(links[2].url).toContain("pricecharting.com");
-    expect(links[3].url).toContain("130point.com");
+    expect(links[1].url).toContain("ebay.com/sch");
+    expect(links[2].url).toContain("tcgplayer.com");
+    expect(links[3].url).toContain("pricecharting.com");
+    expect(links[4].url).toContain("130point.com");
 
     const onSaveSpecs = vi.fn().mockResolvedValue(undefined);
     render(<CardSpecsCard item={cardItem} onSaveSpecs={onSaveSpecs} />);

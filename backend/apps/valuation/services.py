@@ -279,6 +279,296 @@ def _update_job_step(job: AppraisalJob | None, step: str, state: str) -> None:
     job.save(update_fields=["steps"])
 
 
+def reconcile_item_valuation(
+    item: CollectionItem,
+    results: dict[str, Any] | None = None,
+    *,
+    cert_res: dict[str, Any] | None = None,
+    gs_res: dict[str, Any] | None = None,
+    nm_res: dict[str, Any] | None = None,
+    card_guide_res: dict[str, Any] | None = None,
+    pc_res: dict[str, Any] | None = None,
+    comps_res: dict[str, Any] | None = None,
+    ai_val: Decimal | None = None,
+    ai_raw: dict[str, Any] | None = None,
+    bullion_bench: dict[str, Any] | None = None,
+    goldback_bench: dict[str, Any] | None = None,
+    is_card: bool = False,
+) -> dict[str, Any]:
+    """Reconcile multi-source valuation quotes, enforcing quote hierarchy, blended comps uplift, and melt floor."""
+    if results is not None:
+        cert_res = cert_res or results.get("cert")
+        gs_res = gs_res or results.get("greysheet")
+        nm_res = nm_res or results.get("numismedia")
+        card_guide_res = card_guide_res or results.get("card_guide")
+        pc_res = pc_res or results.get("pricecharting")
+        comps_res = comps_res or results.get("comps")
+        if ai_val is None and "ai" in results:
+            ai_tuple = results.get("ai")
+            ai_val, ai_raw = ai_tuple if isinstance(ai_tuple, tuple) else (ai_tuple, {})
+        bullion_bench = bullion_bench or results.get("bullion_bench")
+        goldback_bench = goldback_bench or results.get("goldback_bench")
+
+    sources_payload: dict[str, Any] = {}
+    if not is_card:
+        sources_payload["SPOT_MELT"] = {
+            "value": str(item.melt_value_unit),
+            "status": "OK" if item.melt_value_unit > 0 else "N/A",
+        }
+
+    # Quote candidate ranking:
+    # 10: Official Cert API (PCGS, PSA, PMG, etc.)
+    # 20: Blended Real-World Comps (COMPS with sold + ask average)
+    # 30: Condition-adjusted / Realized Sold Comps (unblended exact sold)
+    # 40: Condition-adjusted Price Guides (Greysheet, NumisMedia, PriceCharting, Card Guides)
+    # 50: Multimodal AI Estimate
+    # 60: Active Asking Comps (unblended active ask)
+    candidate_quotes: list[tuple[int, str, Decimal]] = []
+
+    if cert_res and cert_res.get("market_value"):
+        v = Decimal(str(cert_res["market_value"])).quantize(Decimal("0.01"))
+        sources_payload["PCGS"] = {"value": str(v), "status": "OK"}
+        candidate_quotes.append((10, CollectionItem.ValuationSource.PCGS, v))
+    elif cert_res:
+        sources_payload[cert_res["source"]] = {
+            "value": None,
+            "status": "LINK_ONLY",
+            "verification_url": cert_res.get("verification_url"),
+        }
+
+    if comps_res and comps_res.get("median"):
+        v = Decimal(str(comps_res["median"])).quantize(Decimal("0.01"))
+        comp_key = comps_res.get("source") or "COMPS"
+        is_blended = bool(comps_res.get("is_blended", False))
+        is_ask = bool(comps_res.get("is_ask", False))
+        sources_payload[comp_key] = {
+            "value": str(v),
+            "low": str(comps_res["low"]),
+            "high": str(comps_res["high"]),
+            "count": comps_res["count"],
+            "is_ask": is_ask,
+            "is_blended": is_blended,
+            "sold": comps_res.get("sold"),
+            "active_ask": comps_res.get("active_ask"),
+            "status": "BLENDED_COMPS" if is_blended else ("ACTIVE_ASK" if is_ask else "OK"),
+        }
+        if is_blended:
+            candidate_quotes.append((20, CollectionItem.ValuationSource.COMPS, v))
+        elif not is_ask:
+            candidate_quotes.append((30, CollectionItem.ValuationSource.COMPS, v))
+        else:
+            candidate_quotes.append((60, CollectionItem.ValuationSource.COMPS, v))
+
+    if gs_res and gs_res.get("market_value"):
+        v = Decimal(str(gs_res["market_value"])).quantize(Decimal("0.01"))
+        sources_payload["GREYSHEET"] = {"value": str(v), "status": "OK"}
+        candidate_quotes.append((40, CollectionItem.ValuationSource.GREYSHEET, v))
+
+    if nm_res and nm_res.get("market_value"):
+        v = Decimal(str(nm_res["market_value"])).quantize(Decimal("0.01"))
+        sources_payload["NUMISMEDIA"] = {"value": str(v), "status": "OK"}
+        candidate_quotes.append((40, CollectionItem.ValuationSource.NUMISMEDIA, v))
+
+    if card_guide_res and card_guide_res.get("market_value"):
+        v = Decimal(str(card_guide_res["market_value"])).quantize(Decimal("0.01"))
+        sources_payload[card_guide_res.get("source") or "CARD_GUIDE"] = {
+            "value": str(v),
+            "low": card_guide_res.get("low_usd"),
+            "high": card_guide_res.get("high_usd"),
+            "status": "OK",
+        }
+        candidate_quotes.append((40, CollectionItem.ValuationSource.COMPS, v))
+
+    if pc_res and pc_res.get("market_value"):
+        v = Decimal(str(pc_res["market_value"])).quantize(Decimal("0.01"))
+        sources_payload["PRICECHARTING"] = {"value": str(v), "status": "OK"}
+        candidate_quotes.append((40, CollectionItem.ValuationSource.COMPS, v))
+
+    if ai_val is not None:
+        ai_dict = ai_raw or {}
+        sources_payload["AI_ESTIMATE"] = {
+            "value": str(ai_val),
+            "low": ai_dict.get("low_usd"),
+            "high": ai_dict.get("high_usd"),
+            "photo_inspected": ai_dict.get("photo_inspected", False),
+            "status": "OK",
+        }
+        candidate_quotes.append((50, CollectionItem.ValuationSource.AI_ESTIMATE, ai_val))
+
+    # Sort candidate quotes by priority rank
+    quotes: list[tuple[str, Decimal]] = [
+        (src, val) for _, src, val in sorted(candidate_quotes, key=lambda x: x[0])
+    ]
+
+    if bullion_bench:
+        sources_payload["BULLION_BENCHMARK"] = {
+            "value": bullion_bench["low_usd"],
+            "low": bullion_bench["low_usd"],
+            "high": bullion_bench["high_usd"],
+            "status": "BENCHMARK",
+        }
+
+    goldback_grounded = False
+    if goldback_bench:
+        sources_payload["GOLDBACK_EXCHANGE"] = {
+            "value": goldback_bench["mid_usd"],
+            "low": goldback_bench["low_usd"],
+            "high": goldback_bench["high_usd"],
+            "denomination": goldback_bench["denomination"],
+            "status": "BENCHMARK",
+        }
+        # Ground unverified AI estimates for Goldbacks when no realized comps or price guide exist
+        if (
+            quotes
+            and quotes[0][0] == CollectionItem.ValuationSource.AI_ESTIMATE
+            and item.melt_value_unit
+            and item.melt_value_unit > Decimal("0.00")
+        ):
+            ai_quote = quotes[0][1]
+            gb_min = (item.melt_value_unit * Decimal("1.50")).quantize(Decimal("0.01"))
+            gb_max = (item.melt_value_unit * Decimal("3.00")).quantize(Decimal("0.01"))
+            if ai_quote < gb_min or ai_quote > gb_max:
+                quotes[0] = (CollectionItem.ValuationSource.AI_ESTIMATE, Decimal(goldback_bench["mid_usd"]))
+                goldback_grounded = True
+
+    # 3. Reconcile primary market value & enforce melt-floor invariant
+    melt_val = item.melt_value_unit or Decimal("0.00")
+    primary_source, primary_val = quotes[0] if quotes else (None, None)
+
+    final_val: Decimal | None = None
+    final_source: str | None = None
+    is_estimate = False
+
+    if primary_val is not None and primary_val >= melt_val:
+        final_val = primary_val
+        final_source = primary_source
+        is_estimate = primary_source in {
+            CollectionItem.ValuationSource.AI_ESTIMATE,
+            CollectionItem.ValuationSource.COMPS,
+        }
+    elif melt_val > Decimal("0.00"):
+        final_val = melt_val
+        final_source = CollectionItem.ValuationSource.SPOT_MELT
+        is_estimate = False
+
+    # 4. Compute Low / High range
+    low_val: Decimal | None = None
+    high_val: Decimal | None = None
+    if comps_res and comps_res.get("low") and comps_res.get("high"):
+        low_val = Decimal(str(comps_res["low"]))
+        high_val = Decimal(str(comps_res["high"]))
+    elif goldback_bench and goldback_grounded:
+        low_val = Decimal(goldback_bench["low_usd"])
+        high_val = Decimal(goldback_bench["high_usd"])
+    elif ai_raw and ai_raw.get("low_usd") and ai_raw.get("high_usd"):
+        low_val = Decimal(str(ai_raw["low_usd"]))
+        high_val = Decimal(str(ai_raw["high_usd"]))
+    elif final_val is not None and final_val > 0:
+        low_val = (final_val * Decimal("0.90")).quantize(Decimal("0.01"))
+        high_val = (final_val * Decimal("1.10")).quantize(Decimal("0.01"))
+
+    if melt_val > Decimal("0.00") and low_val is not None and low_val < melt_val:
+        low_val = melt_val
+    if final_val is not None and high_val is not None and high_val < final_val:
+        high_val = final_val
+
+    # 5. Confidence scoring
+    has_guide = any(
+        s in {
+            CollectionItem.ValuationSource.PCGS,
+            CollectionItem.ValuationSource.GREYSHEET,
+            CollectionItem.ValuationSource.NUMISMEDIA,
+        }
+        for s, _ in quotes
+    )
+    comps_count = comps_res.get("count", 0) if comps_res else 0
+    has_bench = bool(bullion_bench or goldback_bench)
+    if (has_guide or has_bench) and (comps_res and comps_count >= 3):
+        confidence = CollectionItem.ValuationConfidence.HIGH
+    elif has_guide and len(quotes) >= 2:
+        confidence = CollectionItem.ValuationConfidence.HIGH
+    elif has_guide or (comps_res and comps_count >= 3) or (
+        ai_val is not None and (ai_raw or {}).get("photo_inspected")
+    ):
+        confidence = CollectionItem.ValuationConfidence.MEDIUM
+    else:
+        confidence = CollectionItem.ValuationConfidence.LOW
+
+    # 6. Explainability drivers & Collectibility thesis
+    drivers: list[str] = []
+    if melt_val > Decimal("0.00"):
+        drivers.append(f"Live metal melt floor: ${melt_val:.2f} ({item.fine_troy_oz:.4f} fine ozt).")
+    if primary_val is not None and melt_val > primary_val:
+        drivers.append(
+            f"melt_floor_applied: Spot metal value (${melt_val:.2f}) exceeds guide/comp (${primary_val:.2f}); clamped to melt."
+        )
+    if cert_res and cert_res.get("market_value"):
+        drivers.append(f"PCGS cert #{item.cert_number} price guide: ${cert_res["market_value"]}.")
+    if gs_res and gs_res.get("market_value"):
+        drivers.append(f"Greysheet CDN valuation: ${gs_res["market_value"]}.")
+    if nm_res and nm_res.get("market_value"):
+        drivers.append(f"NumisMedia FMV: ${nm_res["market_value"]}.")
+    if comps_res:
+        if comps_res.get("is_blended"):
+            sold_info = comps_res.get("sold") or {}
+            ask_info = comps_res.get("active_ask") or {}
+            n_sold = sold_info.get("count", 0)
+            n_ask = ask_info.get("count", 0)
+            sold_med = Decimal(str(sold_info.get("median", comps_res.get("low"))))
+            ask_mean = Decimal(str(ask_info.get("mean", comps_res.get("high"))))
+            blended_val = Decimal(str(comps_res.get("value") or comps_res.get("median")))
+            drivers.append(
+                f"Real-world market comps: ${blended_val:.2f} (blended average of {n_sold} sold sales [median ${sold_med:.2f}] and {n_ask} active asking listings [mean ${ask_mean:.2f}])."
+            )
+        else:
+            comp_label = "Active eBay asking prices" if comps_res.get("is_ask") else "Realized sold comps"
+            drivers.append(
+                f"{comp_label} ({comps_res["count"]} listings): ${comps_res["low"]}–${comps_res["high"]} (median ${comps_res["median"]})."
+            )
+    if bullion_bench:
+        drivers.append(
+            f"Typical {bullion_bench["label"]} dealer premium: +{bullion_bench["low_pct"]:.0f}%–{bullion_bench["high_pct"]:.0f}% over melt (${bullion_bench["low_usd"]}–${bullion_bench["high_usd"]})."
+        )
+    if goldback_bench:
+        drivers.append(
+            f"Goldback Exchange Rate benchmark (~1.95x–2.10x 24K melt): ${goldback_bench["low_usd"]}–${goldback_bench["high_usd"]}."
+        )
+    for d in (ai_raw or {}).get("valuation_drivers") or []:
+        if d not in drivers:
+            drivers.append(d)
+
+    tier = (ai_raw or {}).get("collectibility_tier") or ""
+    if not tier:
+        if final_source == CollectionItem.ValuationSource.SPOT_MELT:
+            tier = CollectionItem.CollectibilityTier.BULLION
+        elif item.metal_type == CollectionItem.MetalType.NONE:
+            tier = CollectionItem.CollectibilityTier.NUMISMATIC
+        elif final_val and melt_val > 0 and final_val > melt_val * Decimal("1.15"):
+            tier = CollectionItem.CollectibilityTier.SEMI_NUMISMATIC
+        else:
+            tier = CollectionItem.CollectibilityTier.BULLION
+
+    hold_outlook = (ai_raw or {}).get("hold_outlook") or (
+        "Value tracks precious-metal spot prices closely; high bullion liquidity."
+        if tier == CollectionItem.CollectibilityTier.BULLION
+        else "Carries collector premium above melt; hold for numismatic demand or consider third-party grading if raw."
+    )
+
+    return {
+        "market_value_unit": final_val,
+        "valuation_source": final_source,
+        "is_estimate": is_estimate,
+        "market_value_low": low_val,
+        "market_value_high": high_val,
+        "valuation_confidence": confidence,
+        "valuation_drivers": drivers,
+        "sources_payload": sources_payload,
+        "collectibility_tier": tier,
+        "hold_outlook": hold_outlook,
+        "quotes": quotes,
+    }
+
+
 def appraise_item(
     item: CollectionItem, workspace: Workspace, job: AppraisalJob | None = None
 ) -> CollectionItem:
@@ -496,79 +786,6 @@ def appraise_item(
         item.catalog_numbers = merged_cats
         item.specs_provenance = prov
 
-    # 2. Collect all source quotes
-    sources_payload: dict[str, Any] = {}
-    if not is_card:
-        sources_payload["SPOT_MELT"] = {
-            "value": str(item.melt_value_unit),
-            "status": "OK" if item.melt_value_unit > 0 else "N/A",
-        }
-    quotes: list[tuple[str, Decimal]] = []
-
-    if cert_res and cert_res.get("market_value"):
-        v = Decimal(str(cert_res["market_value"])).quantize(Decimal("0.01"))
-        sources_payload["PCGS"] = {"value": str(v), "status": "OK"}
-        quotes.append((CollectionItem.ValuationSource.PCGS, v))
-    elif cert_res:
-        sources_payload[cert_res["source"]] = {
-            "value": None,
-            "status": "LINK_ONLY",
-            "verification_url": cert_res.get("verification_url"),
-        }
-
-    if gs_res and gs_res.get("market_value"):
-        v = Decimal(str(gs_res["market_value"])).quantize(Decimal("0.01"))
-        sources_payload["GREYSHEET"] = {"value": str(v), "status": "OK"}
-        quotes.append((CollectionItem.ValuationSource.GREYSHEET, v))
-
-    if nm_res and nm_res.get("market_value"):
-        v = Decimal(str(nm_res["market_value"])).quantize(Decimal("0.01"))
-        sources_payload["NUMISMEDIA"] = {"value": str(v), "status": "OK"}
-        quotes.append((CollectionItem.ValuationSource.NUMISMEDIA, v))
-
-    if card_guide_res and card_guide_res.get("market_value"):
-        v = Decimal(str(card_guide_res["market_value"])).quantize(Decimal("0.01"))
-        sources_payload[card_guide_res.get("source") or "CARD_GUIDE"] = {
-            "value": str(v),
-            "low": card_guide_res.get("low_usd"),
-            "high": card_guide_res.get("high_usd"),
-            "status": "OK",
-        }
-        quotes.append((CollectionItem.ValuationSource.COMPS, v))
-
-    if pc_res and pc_res.get("market_value"):
-        v = Decimal(str(pc_res["market_value"])).quantize(Decimal("0.01"))
-        sources_payload["PRICECHARTING"] = {"value": str(v), "status": "OK"}
-        quotes.append((CollectionItem.ValuationSource.COMPS, v))
-
-    if comps_res and comps_res.get("median"):
-        v = Decimal(str(comps_res["median"])).quantize(Decimal("0.01"))
-        comp_key = comps_res.get("source") or "COMPS"
-        sources_payload[comp_key] = {
-            "value": str(v),
-            "low": str(comps_res["low"]),
-            "high": str(comps_res["high"]),
-            "count": comps_res["count"],
-            "is_ask": bool(comps_res.get("is_ask", False)),
-            "status": "ACTIVE_ASK" if comps_res.get("is_ask") else "OK",
-        }
-        # Realized sold comps rank above AI; active asking prices rank below AI/guides
-        if not comps_res.get("is_ask"):
-            quotes.append((CollectionItem.ValuationSource.COMPS, v))
-
-    if ai_val is not None:
-        sources_payload["AI_ESTIMATE"] = {
-            "value": str(ai_val),
-            "low": ai_raw.get("low_usd"),
-            "high": ai_raw.get("high_usd"),
-            "photo_inspected": ai_raw.get("photo_inspected", False),
-            "status": "OK",
-        }
-        quotes.append((CollectionItem.ValuationSource.AI_ESTIMATE, ai_val))
-
-    if comps_res and comps_res.get("is_ask") and comps_res.get("median") and not quotes:
-        quotes.append((CollectionItem.ValuationSource.COMPS, Decimal(str(comps_res["median"])).quantize(Decimal("0.01"))))
-
     bullion_bench = (
         None
         if is_card
@@ -576,14 +793,6 @@ def appraise_item(
             item.title, item.metal_type, item.melt_value_unit or Decimal("0.00")
         )
     )
-    if bullion_bench:
-        sources_payload["BULLION_BENCHMARK"] = {
-            "value": bullion_bench["low_usd"],
-            "low": bullion_bench["low_usd"],
-            "high": bullion_bench["high_usd"],
-            "status": "BENCHMARK",
-        }
-
     goldback_bench = (
         None
         if is_card
@@ -591,138 +800,32 @@ def appraise_item(
             item.title, item.series, item.denomination, item.melt_value_unit or Decimal("0.00")
         )
     )
-    if goldback_bench:
-        sources_payload["GOLDBACK_EXCHANGE"] = {
-            "value": goldback_bench["mid_usd"],
-            "low": goldback_bench["low_usd"],
-            "high": goldback_bench["high_usd"],
-            "denomination": goldback_bench["denomination"],
-            "status": "BENCHMARK",
-        }
-        # Ground unverified AI estimates for Goldbacks when no realized comps or price guide exist
-        goldback_grounded = False
-        if (
-            quotes
-            and quotes[0][0] == CollectionItem.ValuationSource.AI_ESTIMATE
-            and item.melt_value_unit
-            and item.melt_value_unit > Decimal("0.00")
-        ):
-            ai_quote = quotes[0][1]
-            gb_min = (item.melt_value_unit * Decimal("1.50")).quantize(Decimal("0.01"))
-            gb_max = (item.melt_value_unit * Decimal("3.00")).quantize(Decimal("0.01"))
-            if ai_quote < gb_min or ai_quote > gb_max:
-                quotes[0] = (CollectionItem.ValuationSource.AI_ESTIMATE, Decimal(goldback_bench["mid_usd"]))
-                goldback_grounded = True
-    else:
-        goldback_grounded = False
 
-    # 3. Reconcile primary market value & enforce melt-floor invariant
-    melt_val = item.melt_value_unit or Decimal("0.00")
-    primary_source, primary_val = quotes[0] if quotes else (None, None)
-
-    final_val: Decimal | None = None
-    final_source: str | None = None
-    is_estimate = False
-
-    if primary_val is not None and primary_val >= melt_val:
-        final_val = primary_val
-        final_source = primary_source
-        is_estimate = primary_source in {
-            CollectionItem.ValuationSource.AI_ESTIMATE,
-            CollectionItem.ValuationSource.COMPS,
-        }
-    elif melt_val > Decimal("0.00"):
-        final_val = melt_val
-        final_source = CollectionItem.ValuationSource.SPOT_MELT
-        is_estimate = False
-
-    # 4. Compute Low / High range
-    low_val: Decimal | None = None
-    high_val: Decimal | None = None
-    if comps_res and comps_res.get("low") and comps_res.get("high"):
-        low_val = Decimal(str(comps_res["low"]))
-        high_val = Decimal(str(comps_res["high"]))
-    elif goldback_bench and goldback_grounded:
-        low_val = Decimal(goldback_bench["low_usd"])
-        high_val = Decimal(goldback_bench["high_usd"])
-    elif ai_raw and ai_raw.get("low_usd") and ai_raw.get("high_usd"):
-        low_val = Decimal(str(ai_raw["low_usd"]))
-        high_val = Decimal(str(ai_raw["high_usd"]))
-    elif final_val is not None and final_val > 0:
-        low_val = (final_val * Decimal("0.90")).quantize(Decimal("0.01"))
-        high_val = (final_val * Decimal("1.10")).quantize(Decimal("0.01"))
-
-    if melt_val > Decimal("0.00") and low_val is not None and low_val < melt_val:
-        low_val = melt_val
-    if final_val is not None and high_val is not None and high_val < final_val:
-        high_val = final_val
-
-    # 5. Confidence scoring
-    has_guide = any(
-        s in {
-            CollectionItem.ValuationSource.PCGS,
-            CollectionItem.ValuationSource.GREYSHEET,
-            CollectionItem.ValuationSource.NUMISMEDIA,
-        }
-        for s, _ in quotes
-    )
-    if has_guide and (comps_res or len(quotes) >= 2):
-        confidence = CollectionItem.ValuationConfidence.HIGH
-    elif has_guide or (comps_res and comps_res.get("count", 0) >= 3) or (
-        ai_val is not None and ai_raw.get("photo_inspected")
-    ):
-        confidence = CollectionItem.ValuationConfidence.MEDIUM
-    else:
-        confidence = CollectionItem.ValuationConfidence.LOW
-
-    # 6. Explainability drivers & Collectibility thesis
-    drivers: list[str] = []
-    if melt_val > Decimal("0.00"):
-        drivers.append(f"Live metal melt floor: ${melt_val:.2f} ({item.fine_troy_oz:.4f} fine ozt).")
-    if primary_val is not None and melt_val > primary_val:
-        drivers.append(
-            f"melt_floor_applied: Spot metal value (${melt_val:.2f}) exceeds guide/comp (${primary_val:.2f}); clamped to melt."
-        )
-    if cert_res and cert_res.get("market_value"):
-        drivers.append(f"PCGS cert #{item.cert_number} price guide: ${cert_res['market_value']}.")
-    if gs_res and gs_res.get("market_value"):
-        drivers.append(f"Greysheet CDN valuation: ${gs_res['market_value']}.")
-    if nm_res and nm_res.get("market_value"):
-        drivers.append(f"NumisMedia FMV: ${nm_res['market_value']}.")
-    if comps_res:
-        comp_label = "Active eBay asking prices" if comps_res.get("is_ask") else "Realized sold comps"
-        drivers.append(
-            f"{comp_label} ({comps_res['count']} listings): ${comps_res['low']}–${comps_res['high']} (median ${comps_res['median']})."
-        )
-    if bullion_bench:
-        drivers.append(
-            f"Typical {bullion_bench['label']} dealer premium: +{bullion_bench['low_pct']:.0f}%–{bullion_bench['high_pct']:.0f}% over melt (${bullion_bench['low_usd']}–${bullion_bench['high_usd']})."
-        )
-    if goldback_bench:
-        drivers.append(
-            f"Goldback Exchange Rate benchmark (~1.95x–2.10x 24K melt): ${goldback_bench['low_usd']}–${goldback_bench['high_usd']}."
-        )
-    for d in ai_raw.get("valuation_drivers") or []:
-        if d not in drivers:
-            drivers.append(d)
-
-    tier = ai_raw.get("collectibility_tier") or ""
-    if not tier:
-        if final_source == CollectionItem.ValuationSource.SPOT_MELT:
-            tier = CollectionItem.CollectibilityTier.BULLION
-        elif item.metal_type == CollectionItem.MetalType.NONE:
-            tier = CollectionItem.CollectibilityTier.NUMISMATIC
-        elif final_val and melt_val > 0 and final_val > melt_val * Decimal("1.15"):
-            tier = CollectionItem.CollectibilityTier.SEMI_NUMISMATIC
-        else:
-            tier = CollectionItem.CollectibilityTier.BULLION
-
-    hold_outlook = ai_raw.get("hold_outlook") or (
-        "Value tracks precious-metal spot prices closely; high bullion liquidity."
-        if tier == CollectionItem.CollectibilityTier.BULLION
-        else "Carries collector premium above melt; hold for numismatic demand or consider third-party grading if raw."
+    reconciled = reconcile_item_valuation(
+        item,
+        cert_res=cert_res,
+        gs_res=gs_res,
+        nm_res=nm_res,
+        card_guide_res=card_guide_res,
+        pc_res=pc_res,
+        comps_res=comps_res,
+        ai_val=ai_val,
+        ai_raw=ai_raw,
+        bullion_bench=bullion_bench,
+        goldback_bench=goldback_bench,
+        is_card=is_card,
     )
 
+    final_val = reconciled["market_value_unit"]
+    final_source = reconciled["valuation_source"]
+    is_estimate = reconciled["is_estimate"]
+    low_val = reconciled["market_value_low"]
+    high_val = reconciled["market_value_high"]
+    confidence = reconciled["valuation_confidence"]
+    drivers = reconciled["valuation_drivers"]
+    sources_payload = reconciled["sources_payload"]
+    tier = reconciled["collectibility_tier"]
+    hold_outlook = reconciled["hold_outlook"]
     # Raw / ungraded grade estimation enrichment (preserve USER override)
     if (
         item.grading_service == CollectionItem.GradingService.NONE

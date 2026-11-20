@@ -283,6 +283,13 @@ describe("ItemDetailPage full coverage", () => {
     // Upload photo: empty, fail, AUTO label (selects OTHER since OBVERSE & REVERSE exist), manual label
     const uploadInputs = document.querySelectorAll('input[type="file"]');
     fireEvent.change(uploadInputs[1], { target: { files: [] } });
+    const unsupportedFile = new File(["bad"], "bad.pdf", { type: "application/pdf" });
+    fireEvent.change(uploadInputs[1], { target: { files: [unsupportedFile] } });
+    expect(
+      await screen.findByText(
+        "Please select a supported image file (HEIC, JPEG, PNG, WebP, AVIF, TIFF, BMP).",
+      ),
+    ).toBeInTheDocument();
     vi.spyOn(apiModule.api, "uploadPhoto")
       .mockRejectedValueOnce(new Error("Upload err"))
       .mockResolvedValueOnce({ ...PHOTO_1, id: "p-3", url: "https://img.example/new.jpg" })
@@ -449,7 +456,7 @@ describe("ItemDetailPage full coverage", () => {
     fireEvent.click(screen.getByRole("button", { name: /Edit Details/i }));
     fireEvent.change(screen.getByLabelText("Grading Service"), { target: { value: "NONE" } });
     fireEvent.change(screen.getByDisplayValue("MS63"), { target: { value: "MS64" } });
-    fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[1]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]);
 
     // Inline CardSpecsCard save callback + Cancel in edit form + Reset to Auto-Sort
     fireEvent.click(screen.getByRole("button", { name: /Edit Specs/i }));
