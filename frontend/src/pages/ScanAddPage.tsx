@@ -35,7 +35,13 @@ import {
 } from "../lib/autoCrop";
 import { evaluateImageFileGlare } from "../lib/cameraMetrics";
 import { CATEGORY_LABELS, GRADING_SERVICE_OPTIONS, METAL_LABELS } from "../lib/format";
-import { normalizeImageFileForUpload } from "../lib/imageUtils";
+import {
+  SUPPORTED_IMAGE_ACCEPT,
+  convertHeicToJpeg,
+  isHeicFile,
+  isSupportedImageFile,
+  normalizeImageFileForUpload,
+} from "../lib/imageUtils";
 
 const IDENTIFIED_TEXT_FIELDS: (keyof VisionCandidate)[] = [
   "title",
@@ -296,13 +302,26 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
   }
 
   function ingestFiles(picked: File[], defaultLabel: string, source: "CAMERA" | "UPLOAD" = "UPLOAD") {
-    const imageFiles = picked.filter((f) => !f.type || f.type.startsWith("image/"));
-    if (!imageFiles.length) return;
+    const rawCandidates = picked.filter(isSupportedImageFile);
+    if (!rawCandidates.length) return;
     setIntakeSource(source);
     setVerificationStatus("NONE");
     setVerificationWarnings([]);
     setOverrideConfirmed(false);
 
+    if (rawCandidates.some(isHeicFile)) {
+      void Promise.all(
+        rawCandidates.map(async (file) => (isHeicFile(file) ? await convertHeicToJpeg(file) : file))
+      ).then((imageFiles) => {
+        processIngestFiles(imageFiles, defaultLabel, source);
+      });
+      return;
+    }
+
+    processIngestFiles(rawCandidates, defaultLabel, source);
+  }
+
+  function processIngestFiles(imageFiles: File[], defaultLabel: string, source: "CAMERA" | "UPLOAD") {
     if (!autoCropEnabled || !isAutoCropSupported()) {
       commitIngest(
         imageFiles.map((file) => ({ file, autoCropped: false, serverAutoCrop: autoCropEnabled })),
@@ -534,12 +553,12 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
       const items = Array.from(e.clipboardData?.items || []);
       const pastedFiles = items
-        .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+        .filter((item) => item.kind === "file" && (item.type.startsWith("image/") || !item.type))
         .map((item) => item.getAsFile())
-        .filter((f): f is File => Boolean(f));
+        .filter((f): f is File => Boolean(f) && isSupportedImageFile(f as File));
       if (pastedFiles.length > 0) {
         e.preventDefault();
-        ingestFilesRef.current(pastedFiles, "OBVERSE", "UPLOAD");
+        void ingestFilesRef.current(pastedFiles, "OBVERSE", "UPLOAD");
       }
     };
     window.addEventListener("paste", onPaste);
@@ -887,13 +906,13 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
             {hasObverse && !hasReverse ? "Snap Back Photo" : "Take Photo"}
             <input
               type="file"
-              accept="image/*"
+              accept={SUPPORTED_IMAGE_ACCEPT}
               capture="environment"
               className="hidden"
               onChange={(e) => {
                 const picked = Array.from(e.target.files || []);
                 e.target.value = "";
-                ingestFiles(picked, hasObverse && !hasReverse ? "REVERSE" : "OBVERSE", "CAMERA");
+                void ingestFiles(picked, hasObverse && !hasReverse ? "REVERSE" : "OBVERSE", "CAMERA");
               }}
             />
           </label>
@@ -902,7 +921,7 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
             Upload Obverse / Reverse
             <input
               type="file"
-              accept="image/*"
+              accept={SUPPORTED_IMAGE_ACCEPT}
               multiple
               className="hidden"
               onChange={(e) => handleFilePick(e, "OBVERSE")}
@@ -1077,13 +1096,13 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
                   <span>Snap Back</span>
                   <input
                     type="file"
-                    accept="image/*"
+                    accept={SUPPORTED_IMAGE_ACCEPT}
                     capture="environment"
                     className="hidden"
                     onChange={(e) => {
                       const picked = Array.from(e.target.files || []);
                       e.target.value = "";
-                      ingestFiles(picked, "REVERSE", "CAMERA");
+                      void ingestFiles(picked, "REVERSE", "CAMERA");
                     }}
                   />
                 </label>

@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 from django.core.cache import cache
 from PIL import Image, ImageOps
+from pillow_heif import register_heif_opener
 
 from apps.accounts.models import (
     ProviderCredential,
@@ -23,6 +24,8 @@ from apps.catalog.models import CollectionItem
 
 from .models import IdentificationJob
 from .ocr import extract_barcode_hint, extract_text_from_images, parse_ocr_numismatic_hints
+
+register_heif_opener()
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +195,14 @@ def _infer_image_mime(img_bytes: bytes, declared_mime: str | None) -> str:
             return "image/heic"
         if brand in {b"heif", b"msf1"}:
             return "image/heif"
+        if brand in {b"avif", b"avis"}:
+            return "image/avif"
+    if img_bytes.startswith(b"BM"):
+        return "image/bmp"
+    if img_bytes.startswith((b"II*\x00", b"MM\x00*")):
+        return "image/tiff"
+    if img_bytes.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
     return "image/jpeg"
 
 
@@ -1132,7 +1143,10 @@ def _collect_item_photo_b64(
             if not raw:
                 continue
             name = (photo.image.name or "").lower()
-            mime = "image/png" if name.endswith(".png") else "image/webp" if name.endswith(".webp") else "image/jpeg"
+            mime = _infer_image_mime(
+                raw,
+                "image/png" if name.endswith(".png") else "image/webp" if name.endswith(".webp") else "image/jpeg",
+            )
             raw_images.append((raw, mime))
         except Exception as exc:
             logger.debug("Skipping unreadable photo %s for item %s: %s", photo.id, item.id, exc)

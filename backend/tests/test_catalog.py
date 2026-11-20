@@ -1750,3 +1750,57 @@ def test_vision_and_csv_import_bounds_and_duplicate_cert_row_error(api_client, u
     assert "duplicate cert_number" in dup_resp.json()["errors"][0]["error"].lower()
 
 
+@pytest.mark.django_db
+def test_upload_photo_heic_and_multi_format_support(api_client, user_a):
+    from django.apps import apps
+
+    from apps.catalog.models import CollectionItem
+
+    # Test apps ready() methods
+    apps.get_app_config("catalog").ready()
+    apps.get_app_config("vision").ready()
+
+    _, ws, token = user_a
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+    item = CollectionItem.objects.create(workspace=ws, title="Multi-Format Proof Target", category="COIN")
+
+    # 1. HEIC / HEIF upload
+    heif_buf = io.BytesIO()
+    Image.new("RGB", (120, 120), (255, 215, 0)).save(heif_buf, format="HEIF")
+    heif_upload = SimpleUploadedFile("coin.heic", heif_buf.getvalue(), content_type="image/heic")
+    resp_heif = api_client.post(
+        f"/api/v1/catalog/items/{item.id}/photos",
+        data={"file": heif_upload, "label": "OBVERSE", "is_primary": "true"},
+        **headers,
+    )
+    assert resp_heif.status_code == 201
+    heif_data = resp_heif.json()
+    assert heif_data["url"].endswith(".webp")
+    assert heif_data["width"] > 0
+    assert heif_data["height"] > 0
+
+    # 2. TIFF upload
+    tiff_buf = io.BytesIO()
+    Image.new("RGB", (100, 100), (200, 200, 200)).save(tiff_buf, format="TIFF")
+    tiff_upload = SimpleUploadedFile("coin.tiff", tiff_buf.getvalue(), content_type="image/tiff")
+    resp_tiff = api_client.post(
+        f"/api/v1/catalog/items/{item.id}/photos",
+        data={"file": tiff_upload, "label": "REVERSE"},
+        **headers,
+    )
+    assert resp_tiff.status_code == 201
+    assert resp_tiff.json()["url"].endswith(".webp")
+
+    # 3. BMP upload
+    bmp_buf = io.BytesIO()
+    Image.new("RGB", (80, 80), (100, 150, 200)).save(bmp_buf, format="BMP")
+    bmp_upload = SimpleUploadedFile("coin.bmp", bmp_buf.getvalue(), content_type="image/bmp")
+    resp_bmp = api_client.post(
+        f"/api/v1/catalog/items/{item.id}/photos",
+        data={"file": bmp_upload, "label": "OTHER"},
+        **headers,
+    )
+    assert resp_bmp.status_code == 201
+    assert resp_bmp.json()["url"].endswith(".webp")
+
+

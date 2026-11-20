@@ -5,6 +5,82 @@ export interface PixelCropRect {
   height: number;
 }
 
+export const SUPPORTED_IMAGE_EXTENSIONS = [
+  "heic",
+  "heif",
+  "hif",
+  "jpg",
+  "jpeg",
+  "jfif",
+  "jpe",
+  "png",
+  "webp",
+  "avif",
+  "bmp",
+  "dib",
+  "tiff",
+  "tif",
+  "gif",
+] as const;
+
+export const SUPPORTED_IMAGE_ACCEPT =
+  "image/*,.heic,.heif,.hif,.avif,.webp,.png,.jpg,.jpeg,.jfif,.bmp,.tiff,.tif,.gif,image/heic,image/heif,image/avif";
+
+export function isSupportedImageFile(file: File | Blob): boolean {
+  if (file.type && file.type.startsWith("image/")) {
+    return true;
+  }
+  const name = "name" in file && typeof file.name === "string" ? file.name : "";
+  if (!name) {
+    return !file.type;
+  }
+  const ext = name.split(".").pop()?.toLowerCase() || "";
+  return SUPPORTED_IMAGE_EXTENSIONS.includes(ext as (typeof SUPPORTED_IMAGE_EXTENSIONS)[number]);
+}
+
+export function isHeicFile(file: File | Blob): boolean {
+  const type = (file.type || "").toLowerCase();
+  if (
+    type === "image/heic" ||
+    type === "image/heif" ||
+    type === "image/heic-sequence" ||
+    type === "image/heif-sequence"
+  ) {
+    return true;
+  }
+  const name = "name" in file && typeof file.name === "string" ? file.name : "";
+  if (/\.(heic|heif|hif)$/i.test(name)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Convert a HEIC/HEIF File or Blob to a standard JPEG File for universal browser rendering
+ * and downstream image processing.
+ */
+export async function convertHeicToJpeg(file: File | Blob, quality = 0.92): Promise<File> {
+  if (typeof window === "undefined") {
+    return file instanceof File ? file : new File([file], "converted.jpg", { type: "image/jpeg" });
+  }
+  try {
+    const heic2anyModule = await import("heic2any");
+    const heic2any = heic2anyModule.default || heic2anyModule;
+    const result = await heic2any({
+      blob: file,
+      toType: "image/jpeg",
+      quality,
+    });
+    const blob = Array.isArray(result) ? result[0] : result;
+    const rawName = "name" in file && typeof file.name === "string" ? file.name : "photo.jpg";
+    const baseName = rawName.replace(/\.(heic|heif|hif)$/i, "") || "photo";
+    return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
+  } catch (err) {
+    console.warn("Client-side HEIC conversion fallback:", err);
+    return file instanceof File ? file : new File([file], "photo.heic", { type: "image/heic" });
+  }
+}
+
 export interface SourceCropRect {
   sx: number;
   sy: number;
@@ -233,12 +309,17 @@ export async function normalizeImageFileForUpload(
     return file;
   }
 
+  let sourceFile = file;
+  if (isHeicFile(file)) {
+    sourceFile = await convertHeicToJpeg(file, quality);
+  }
+
   const isStandardSmallImage =
-    (file.type === "image/jpeg" || file.type === "image/png" || file.type === "image/webp") &&
-    file.size > 0 &&
-    file.size <= 350_000;
+    (sourceFile.type === "image/jpeg" || sourceFile.type === "image/png" || sourceFile.type === "image/webp") &&
+    sourceFile.size > 0 &&
+    sourceFile.size <= 350_000;
   if (isStandardSmallImage) {
-    return file;
+    return sourceFile;
   }
 
   let objectUrl: string | null = null;
@@ -249,12 +330,12 @@ export async function normalizeImageFileForUpload(
     let bitmap: ImageBitmap | null = null;
 
     if (typeof createImageBitmap === "function") {
-      bitmap = await decodeImageBitmapUpright(file);
+      bitmap = await decodeImageBitmapUpright(sourceFile);
       width = bitmap.width;
       height = bitmap.height;
       drawSource = bitmap;
     } else {
-      objectUrl = URL.createObjectURL(file);
+      objectUrl = URL.createObjectURL(sourceFile);
       const img = await new Promise<HTMLImageElement>((resolve, reject) => {
         const el = new Image();
         el.onload = () => resolve(el);
@@ -268,7 +349,7 @@ export async function normalizeImageFileForUpload(
 
     if (!width || !height) {
       bitmap?.close();
-      return file;
+      return sourceFile;
     }
 
     const scale = Math.min(1, maxDimension / Math.max(width, height));
@@ -281,20 +362,20 @@ export async function normalizeImageFileForUpload(
     const ctx = canvas.getContext("2d");
     if (!ctx) {
       bitmap?.close();
-      return file;
+      return sourceFile;
     }
     ctx.drawImage(drawSource, 0, 0, targetW, targetH);
     bitmap?.close();
 
     const encoded = await canvasToOptimizedBlob(canvas, quality);
     if (!encoded) {
-      return file;
+      return sourceFile;
     }
 
-    const baseName = file.name.replace(/\.[^.]+$/, "") || "photo";
+    const baseName = sourceFile.name.replace(/\.[^.]+$/, "") || "photo";
     return new File([encoded.blob], `${baseName}.${encoded.ext}`, { type: encoded.mimeType });
   } catch {
-    return file;
+    return sourceFile;
   } finally {
     if (objectUrl) {
       URL.revokeObjectURL(objectUrl);

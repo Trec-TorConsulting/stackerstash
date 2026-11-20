@@ -3,7 +3,7 @@ from ninja.errors import HttpError
 
 from apps.accounts.auth import WorkspaceAuth, require_editor
 
-from .services import identify_images
+from .services import _infer_image_mime, identify_images
 
 vision_router = Router(tags=["Vision"], auth=WorkspaceAuth())
 MAX_VISION_FILES = 4
@@ -29,7 +29,7 @@ def identify_item_from_photos(
         raw_bytes = f.read(MAX_VISION_FILE_BYTES + 1)
         if not raw_bytes or len(raw_bytes) > MAX_VISION_FILE_BYTES:
             raise HttpError(400, "Each uploaded image must be non-empty and at most 10 MB.")
-        content_type = getattr(f, "content_type", None) or "image/jpeg"
+        content_type = _infer_image_mime(raw_bytes, getattr(f, "content_type", None))
         image_tuples.append((raw_bytes, content_type))
     mode = "upload" if intake_mode == "upload" else "camera"
     id_mode = "fast_local" if identify_mode == "fast_local" else "full"
