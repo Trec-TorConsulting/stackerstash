@@ -44,6 +44,7 @@ describe("GuidedCameraModal", () => {
     expect(screen.getByRole("button", { name: "Coin (Circle)" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Slab / Bar" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Note / Bar (Rect)" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Card" })).toBeInTheDocument();
     expect(screen.getByLabelText("Camera zoom")).toBeInTheDocument();
     expect(screen.getByText(/Capture Front Photo/i)).toBeInTheDocument();
     const autoBtn = screen.getByRole("button", { name: /Auto-Capture Off/i });
@@ -51,6 +52,64 @@ describe("GuidedCameraModal", () => {
     fireEvent.click(autoBtn);
     expect(screen.getByRole("button", { name: /Auto-Capture On/i })).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByRole("button", { name: /Auto-Zoom/i })).not.toBeInTheDocument();
+  });
+
+  it("closes modal on bottom Cancel button click or Escape key press", () => {
+    const onClose = vi.fn();
+    render(
+      <GuidedCameraModal
+        open={true}
+        onClose={onClose}
+        onComplete={vi.fn()}
+      />
+    );
+
+    const cancelBtn = screen.getByRole("button", { name: /cancel/i });
+    expect(cancelBtn).toBeInTheDocument();
+    fireEvent.click(cancelBtn);
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows selecting Card reticle mode and renders card-guide-reticle", async () => {
+    const mockTrack = {
+      stop: vi.fn(),
+      getCapabilities: vi.fn(() => ({})),
+      applyConstraints: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const mockStream = {
+      getTracks: () => [mockTrack],
+      getVideoTracks: () => [mockTrack],
+    } as unknown as MediaStream;
+
+    const origMediaDevices = navigator.mediaDevices;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue(mockStream) },
+    });
+
+    try {
+      render(
+        <GuidedCameraModal
+          open={true}
+          onClose={vi.fn()}
+          onComplete={vi.fn()}
+          initialShape="auto"
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: "Card" })).toBeInTheDocument();
+      });
+
+      const cardBtn = screen.getByRole("button", { name: "Card" });
+      fireEvent.click(cardBtn);
+      expect(screen.getByTestId("card-guide-reticle")).toBeInTheDocument();
+    } finally {
+      Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: origMediaDevices });
+    }
   });
 
   it("defaults Auto-Capture On in auto mode and renders live-subject-box when an item is detected", async () => {

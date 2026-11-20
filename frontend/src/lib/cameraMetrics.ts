@@ -6,7 +6,7 @@ export interface FrameQuality {
   isGood: boolean;
 }
 
-export type DetectedShape = 'coin' | 'slab' | 'note';
+export type DetectedShape = 'coin' | 'slab' | 'note' | 'card';
 export type FramingState = 'none' | 'too_small' | 'edge_clipped' | 'off_center' | 'locked';
 
 export interface SubjectBox {
@@ -59,10 +59,107 @@ function sortedPercentile(values: number[], q: number): number {
   return sorted[idx];
 }
 
+/** Fill enclosed background holes (e.g. the flat field of a coin). */
+function fillHoles2D(mask: Uint8Array, w: number, h: number): Uint8Array {
+  const reach = new Uint8Array(w * h);
+  const queue = new Int32Array(w * h);
+  let head = 0;
+  let tail = 0;
+  const push = (p: number) => {
+    if (!mask[p] && !reach[p]) {
+      reach[p] = 1;
+      queue[tail++] = p;
+    }
+  };
+  for (let x = 0; x < w; x++) {
+    push(x);
+    push((h - 1) * w + x);
+  }
+  for (let y = 0; y < h; y++) {
+    push(y * w);
+    push(y * w + w - 1);
+  }
+  while (head < tail) {
+    const p = queue[head++];
+    const x = p % w;
+    const y = (p - x) / w;
+    if (x > 0) push(p - 1);
+    if (x < w - 1) push(p + 1);
+    if (y > 0) push(p - w);
+    if (y < h - 1) push(p + w);
+  }
+  const out = new Uint8Array(w * h);
+  for (let i = 0; i < out.length; i++) out[i] = reach[i] ? 0 : 1;
+  return out;
+}
+
+interface Component2D {
+  area: number;
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  sumX: number;
+  sumY: number;
+  touchesBorder: boolean;
+}
+
+function labelComponents2D(mask: Uint8Array, w: number, h: number, borderMargin: number): Component2D[] {
+  const seen = new Uint8Array(w * h);
+  const queue = new Int32Array(w * h);
+  const comps: Component2D[] = [];
+  for (let start = 0; start < mask.length; start++) {
+    if (!mask[start] || seen[start]) continue;
+    let head = 0;
+    let tail = 0;
+    queue[tail++] = start;
+    seen[start] = 1;
+    const c: Component2D = {
+      area: 0,
+      minX: w,
+      minY: h,
+      maxX: -1,
+      maxY: -1,
+      sumX: 0,
+      sumY: 0,
+      touchesBorder: false,
+    };
+    while (head < tail) {
+      const p = queue[head++];
+      const x = p % w;
+      const y = (p - x) / w;
+      c.area++;
+      c.sumX += x;
+      c.sumY += y;
+      if (x < c.minX) c.minX = x;
+      if (x > c.maxX) c.maxX = x;
+      if (y < c.minY) c.minY = y;
+      if (y > c.maxY) c.maxY = y;
+      if (x <= borderMargin || x >= w - 1 - borderMargin || y <= borderMargin || y >= h - 1 - borderMargin) {
+        c.touchesBorder = true;
+      }
+      const nbrs = [
+        x > 0 ? p - 1 : -1,
+        x < w - 1 ? p + 1 : -1,
+        y > 0 ? p - w : -1,
+        y < h - 1 ? p + w : -1,
+      ];
+      for (const n of nbrs) {
+        if (n >= 0 && mask[n] && !seen[n]) {
+          seen[n] = 1;
+          queue[tail++] = n;
+        }
+      }
+    }
+    comps.push(c);
+  }
+  return comps;
+}
+
 /**
  * Detect the primary foreground subject bounding box and classify its geometry
- * ('coin' | 'slab' | 'note') using border-background color/luma modeling and
- * interior gradient saliency.
+ * ('coin' | 'card' | 'slab' | 'note') using border-background color/luma modeling,
+ * morphological hole-filling, 2D connected-component grouping, and center weighting.
  */
 export function detectSubjectBox(
   luma: Float32Array,
@@ -163,8 +260,6 @@ export function detectSubjectBox(
 
   // 3x3 neighborhood filter to reject isolated single-pixel surface specks
   const filtered = new Uint8Array(width * height);
-  const colCounts = new Int32Array(width);
-  const rowCounts = new Int32Array(height);
   let fgCount = 0;
 
   for (let row = 1; row < height - 1; row++) {
@@ -181,8 +276,6 @@ export function detectSubjectBox(
       }
       if (neighbors >= 2) {
         filtered[p] = 1;
-        colCounts[col]++;
-        rowCounts[row]++;
         fgCount++;
       }
     }
@@ -193,53 +286,73 @@ export function detectSubjectBox(
     return null;
   }
 
-  let maxColCount = 0;
-  for (let c = 1; c < width - 1; c++) {
-    if (colCounts[c] > maxColCount) maxColCount = colCounts[c];
-  }
-  let maxRowCount = 0;
-  for (let r = 1; r < height - 1; r++) {
-    if (rowCounts[r] > maxRowCount) maxRowCount = rowCounts[r];
-  }
+  // Morphological hole filling so hollow rims of coins become solid circular discs
+  const filled = fillHoles2D(filtered, width, height);
 
-  const colCut = Math.max(1, Math.floor(maxColCount * 0.15));
-  const rowCut = Math.max(1, Math.floor(maxRowCount * 0.15));
+  // 2D connected-component analysis with border margin rejection
+  const borderMargin = Math.max(1, Math.floor(Math.min(width, height) * 0.03));
+  const comps = labelComponents2D(filled, width, height, borderMargin);
 
-  const pickBestSpan = (counts: Int32Array, limit: number, cut: number): [number, number] => {
-    let bestStart = limit - 1;
-    let bestEnd = 0;
-    let bestScore = -1;
-
-    let i = 1;
-    while (i < limit - 1) {
-      if (counts[i] < cut) {
-        i++;
-        continue;
-      }
-      const start = i;
-      let mass = 0;
-      while (i < limit - 1 && counts[i] >= cut) {
-        mass += counts[i];
-        i++;
-      }
-      const end = i - 1;
-      const midNorm = (start + end) / (2 * limit);
-      const centerWeight = 1 - 0.35 * Math.abs(midNorm - 0.5);
-      const score = mass * centerWeight;
-      if (score > bestScore) {
-        bestScore = score;
-        bestStart = start;
-        bestEnd = end;
-      }
-    }
-    return [bestStart, bestEnd];
-  };
-
-  const [minCol, maxCol] = pickBestSpan(colCounts, width, colCut);
-  const [minRow, maxRow] = pickBestSpan(rowCounts, height, rowCut);
-
-  if (maxCol <= minCol || maxRow <= minRow) {
+  const minArea = Math.max(6, Math.floor(interiorPixels * 0.012));
+  const maxArea = Math.floor(interiorPixels * 0.92);
+  const validComps = comps.filter(
+    (c) => c.area >= minArea && c.area <= maxArea && c.maxX > c.minX && c.maxY > c.minY,
+  );
+  if (!validComps.length) {
     return null;
+  }
+
+  // Reject or heavily penalize components touching outer borders (hands/shadows)
+  const interiorComps = validComps.filter((c) => !c.touchesBorder);
+  const candidates = interiorComps.length > 0 ? interiorComps : validComps;
+
+  let bestComp: Component2D | null = null;
+  let bestScore = -1;
+
+  for (const c of candidates) {
+    const cx = c.sumX / (c.area * width);
+    const cy = c.sumY / (c.area * height);
+    const centerDist = Math.hypot(cx - 0.5, cy - 0.5);
+    const centerWeight = Math.max(0.15, 1 - 0.65 * centerDist);
+    const borderPenalty = c.touchesBorder ? 0.35 : 1.0;
+    const score = c.area * centerWeight * borderPenalty;
+    if (score > bestScore) {
+      bestScore = score;
+      bestComp = c;
+    }
+  }
+
+  if (!bestComp || bestComp.maxX <= bestComp.minX || bestComp.maxY <= bestComp.minY) {
+    return null;
+  }
+
+  let minCol = bestComp.minX;
+  let maxCol = bestComp.maxX;
+  let minRow = bestComp.minY;
+  let maxRow = bestComp.maxY;
+  let totalArea = bestComp.area;
+
+  // Merge nearby secondary components that belong to the same collectible
+  const padX = Math.max(2, Math.floor(width * 0.05));
+  const padY = Math.max(2, Math.floor(height * 0.05));
+  for (const c of candidates) {
+    if (c === bestComp) continue;
+    if (c.minX >= minCol && c.maxX <= maxCol && c.minY >= minRow && c.maxY <= maxRow) {
+      totalArea += c.area;
+      continue;
+    }
+    const overlaps =
+      c.maxX >= minCol - padX &&
+      c.minX <= maxCol + padX &&
+      c.maxY >= minRow - padY &&
+      c.minY <= maxRow + padY;
+    if (overlaps && c.area >= bestComp.area * 0.08) {
+      minCol = Math.min(minCol, c.minX);
+      maxCol = Math.max(maxCol, c.maxX);
+      minRow = Math.min(minRow, c.minY);
+      maxRow = Math.max(maxRow, c.maxY);
+      totalArea += c.area;
+    }
   }
 
   const boxW = maxCol - minCol + 1;
@@ -253,7 +366,7 @@ export function detectSubjectBox(
   const areaRatio = normW * normH;
   const physicalAspect = (normW * viewfinderAspect) / Math.max(0.01, normH);
 
-  // Evaluate corner fill vs inscribed ellipse to distinguish round coins from square bars/slabs
+  // Evaluate corner fill vs inscribed ellipse to distinguish round coins from square cards/slabs
   const halfW = Math.max(1, boxW / 2);
   const halfH = Math.max(1, boxH / 2);
   const midC = (minCol + maxCol) / 2;
@@ -264,7 +377,7 @@ export function detectSubjectBox(
 
   for (let r = minRow; r <= maxRow; r++) {
     for (let c = minCol; c <= maxCol; c++) {
-      const isFg = filtered[r * width + c] === 1;
+      const isFg = filled[r * width + c] === 1;
       if (isFg) boxFg++;
       const nx = (c - midC) / halfW;
       const ny = (r - midR) / halfH;
@@ -279,9 +392,14 @@ export function detectSubjectBox(
   const boxFillRatio = boxFg / Math.max(1, boxW * boxH);
 
   let shape: DetectedShape;
-  if (physicalAspect >= 1.52 || physicalAspect <= 0.52) {
+  if (physicalAspect >= 1.58 || physicalAspect <= 0.48) {
     shape = 'note';
-  } else if (physicalAspect < 0.8 || physicalAspect > 1.26) {
+  } else if (
+    (physicalAspect >= 0.64 && physicalAspect <= 0.79) ||
+    (physicalAspect >= 1.27 && physicalAspect <= 1.56)
+  ) {
+    shape = 'card';
+  } else if (physicalAspect < 0.80 || physicalAspect > 1.25) {
     shape = 'slab';
   } else if (boxW >= 18 && boxH >= 18 && cornerFillRatio > 0.68) {
     shape = 'slab';

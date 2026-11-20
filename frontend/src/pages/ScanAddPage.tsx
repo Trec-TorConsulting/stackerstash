@@ -1867,19 +1867,28 @@ export function ScanAddPage({ activeWorkspace }: { activeWorkspace?: UserWorkspa
         <GuidedCameraModal
           open={guidedModalOpen}
           onClose={() => setGuidedModalOpen(false)}
-          onComplete={({ frontFile, backFile }) => {
+          onComplete={({ frontFile, backFile, detectedShape }) => {
             setGuidedModalOpen(false);
+            if (detectedShape === "card" && form.category !== "CARD") {
+              setForm((prev) => ({ ...prev, category: "CARD" }));
+            } else if (detectedShape === "coin" && form.category !== "COIN") {
+              setForm((prev) => ({ ...prev, category: "COIN" }));
+            } else if (detectedShape === "note" && form.category !== "PAPER") {
+              setForm((prev) => ({ ...prev, category: "PAPER" }));
+            }
             const captures = backFile ? [frontFile, backFile] : [frontFile];
             ingestFiles(captures, "OBVERSE", "CAMERA");
           }}
           initialShape={
             form.category === "COIN"
               ? "coin"
-              : form.category === "PAPER"
-                ? "note"
-                : form.category === "TRADING_CARD"
-                  ? "slab"
-                  : "auto"
+              : form.category === "CARD"
+                ? "card"
+                : form.category === "PAPER"
+                  ? "note"
+                  : form.category === "SLAB"
+                    ? "slab"
+                    : "auto"
           }
         />
       )}

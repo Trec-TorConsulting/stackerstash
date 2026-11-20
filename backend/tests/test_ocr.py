@@ -27,3 +27,23 @@ def test_extract_barcode_hint_graceful_on_blank_image():
     buf = io.BytesIO()
     img.save(buf, format="JPEG")
     assert extract_barcode_hint([(buf.getvalue(), "image/jpeg")]) == ""
+
+
+def test_parse_ocr_card_hints_without_explicit_franchise_title():
+    text = "Charizard\n120 HP\nStage 2\n4/102\n1st Edition\n©1995, 96, 98 Nintendo, Creatures, GAMEFREAK."
+    h = parse_ocr_numismatic_hints(text)
+    assert h["category"] == "CARD"
+    assert h["card_game"] == "Pokémon"
+    assert h["card_number"] == "4/102"
+    assert h["metal_type"] == "NONE"
+    assert h["weight_value"] == 0
+    assert h["has_usable_hints"] is True
+
+
+def test_parse_ocr_sports_card_hints():
+    text = "Ken Griffey Jr.\n1989 Upper Deck\nStar Rookie\nRC #1"
+    h = parse_ocr_numismatic_hints(text)
+    assert h["category"] == "CARD"
+    assert "Sports" in h["card_game"]
+    assert h["metal_type"] == "NONE"
+    assert h["weight_value"] == 0

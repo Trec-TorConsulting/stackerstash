@@ -94,7 +94,7 @@ export interface NormalizedSubjectBounds {
   y: number;
   width: number;
   height: number;
-  shape?: "coin" | "slab" | "note";
+  shape?: "coin" | "slab" | "note" | "card";
 }
 
 /**

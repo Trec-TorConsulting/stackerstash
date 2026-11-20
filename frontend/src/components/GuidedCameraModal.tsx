@@ -41,10 +41,11 @@ const BURST_INTERVAL_MS = 50;
 const AUTO_CAPTURE_TICKS = 3;
 const FLIP_COOLDOWN_MS = 1400;
 
-export type ReticleMode = 'auto' | 'coin' | 'slab' | 'note';
+export type ReticleMode = 'auto' | 'coin' | 'card' | 'slab' | 'note';
 
 const SHAPE_LABELS: Record<DetectedShape, string> = {
   coin: 'Coin / Round',
+  card: 'Trading Card',
   slab: 'Slab / Bar',
   note: 'Note / Goldback',
 };
@@ -60,12 +61,14 @@ type ImageCaptureConstructor = new (track: MediaStreamTrack) => {
 };
 
 function resolveInitialMode(
-  initialShape?: 'auto' | 'circle' | 'rect' | 'coin' | 'slab' | 'note',
+  initialShape?: 'auto' | 'circle' | 'rect' | 'coin' | 'card' | 'slab' | 'note',
 ): ReticleMode {
   if (!initialShape || initialShape === 'auto') return 'auto';
   if (initialShape === 'circle' || initialShape === 'coin') return 'coin';
-  if (initialShape === 'slab' || initialShape === 'rect') return 'slab';
-  return 'note';
+  if (initialShape === 'card') return 'card';
+  if (initialShape === 'slab') return 'slab';
+  if (initialShape === 'note' || initialShape === 'rect') return 'note';
+  return 'card';
 }
 
 async function canvasToJpegFile(canvas: HTMLCanvasElement, filename: string): Promise<File | null> {
@@ -87,7 +90,14 @@ function drawNormalizedSource(
 ): boolean {
   const baseZoom = applySoftwareZoom && zoom > 1 ? zoom : 1;
   // True WYSIWYG: match the exact centered viewfinder, or auto-crop tightly to a confident detected subject
-  const targetAspect = reticleMode === 'coin' ? 1 : VIEWFINDER_ASPECT;
+  const targetAspect =
+    reticleMode === 'coin'
+      ? 1
+      : reticleMode === 'card'
+        ? 3 / 4
+        : reticleMode === 'slab'
+          ? 4 / 3
+          : VIEWFINDER_ASPECT;
   const useSubjectCrop =
     Boolean(subjectBox) &&
     subjectBox!.confidence >= 0.45 &&
@@ -227,7 +237,7 @@ interface GuidedCameraModalProps {
   onClose: () => void;
   onComplete: (result: GuidedCameraResult) => void;
   requireBack?: boolean;
-  initialShape?: 'auto' | 'circle' | 'rect' | 'coin' | 'slab' | 'note';
+  initialShape?: 'auto' | 'circle' | 'rect' | 'coin' | 'card' | 'slab' | 'note';
 }
 
 export function GuidedCameraModal({
@@ -239,6 +249,7 @@ export function GuidedCameraModal({
 }: GuidedCameraModalProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const viewfinderContainerRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const prevLumaRef = useRef<Float32Array | null>(null);
   const prevSubjectBoxRef = useRef<SubjectBox | null>(null);
@@ -531,18 +542,24 @@ export function GuidedCameraModal({
     }
   }, [capturing, handleCapturedFile, reticleMode, step, zoom]);
 
-  // Spacebar shortcut on desktop when viewfinder is active
+  // Spacebar shortcut on desktop when viewfinder is active + Escape key to exit modal
   useEffect(() => {
-    if (!open || !cameraReady || pendingReviewFile || cameraError) return;
+    if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !e.repeat) {
+      if (e.key === 'Escape' || e.code === 'Escape') {
+        e.preventDefault();
+        stopStream();
+        onClose();
+        return;
+      }
+      if ((e.key === ' ' || e.code === 'Space') && !e.repeat && cameraReady && !pendingReviewFile && !cameraError) {
         e.preventDefault();
         void captureCurrentFrame();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, cameraReady, pendingReviewFile, cameraError, captureCurrentFrame]);
+  }, [open, cameraReady, pendingReviewFile, cameraError, captureCurrentFrame, stopStream, onClose]);
 
   // Calm live frame metrics & optional Auto-Capture loop (every 200ms)
   useEffect(() => {
@@ -565,10 +582,16 @@ export function GuidedCameraModal({
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) return;
 
+      const container = viewfinderContainerRef.current;
+      const containerAspect =
+        container && container.clientHeight > 0
+          ? container.clientWidth / container.clientHeight
+          : VIEWFINDER_ASPECT;
+
       const { sx, sy, sw, sh } = computeCoverCropRect(
         video.videoWidth,
         video.videoHeight,
-        VIEWFINDER_ASPECT,
+        containerAspect,
         hardwareZoomSupportedRef.current ? 1 : zoom,
       );
       ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sampleW, sampleH);
@@ -812,6 +835,18 @@ export function GuidedCameraModal({
                 <button
                   type="button"
                   onClick={() => {
+                    stopStream();
+                    onClose();
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800 hover:text-white"
+                  aria-label="Cancel capture"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
                     setPendingReviewFile(null);
                     setShowCropper(false);
                     steadyTicksRef.current = 0;
@@ -857,6 +892,7 @@ export function GuidedCameraModal({
         <div className={pendingReviewFile ? 'hidden' : 'flex flex-1 flex-col justify-between overflow-hidden'}>
           {/* Viewfinder */}
           <div
+            ref={viewfinderContainerRef}
             className="relative flex aspect-[4/3] w-full flex-1 items-center justify-center overflow-hidden bg-black sm:flex-none"
             onClick={triggerTapFocus}
           >
@@ -935,6 +971,11 @@ export function GuidedCameraModal({
                     </div>
                   ) : reticleMode === 'coin' ? (
                     <div className="h-52 w-52 rounded-full border-2 border-dashed border-amber-400/90 shadow-[0_0_0_9999px_rgba(2,6,23,0.42)] sm:h-60 sm:w-60" />
+                  ) : reticleMode === 'card' ? (
+                    <div
+                      data-testid="card-guide-reticle"
+                      className="h-64 w-44 rounded-xl border-2 border-dashed border-amber-400/90 shadow-[0_0_0_9999px_rgba(2,6,23,0.42)] sm:h-72 sm:w-52"
+                    />
                   ) : reticleMode === 'slab' ? (
                     <div className="h-56 w-44 rounded-2xl border-2 border-dashed border-amber-400/90 shadow-[0_0_0_9999px_rgba(2,6,23,0.42)] sm:h-64 sm:w-48" />
                   ) : (
@@ -1032,6 +1073,15 @@ export function GuidedCameraModal({
                 </button>
                 <button
                   type="button"
+                  onClick={() => setReticleMode('card')}
+                  className={`rounded-md px-2 py-1 font-medium transition ${
+                    reticleMode === 'card' ? 'bg-amber-500 text-slate-950' : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  Card
+                </button>
+                <button
+                  type="button"
                   onClick={() => setReticleMode('slab')}
                   className={`rounded-md px-2 py-1 font-medium transition ${
                     reticleMode === 'slab' ? 'bg-amber-500 text-slate-950' : 'text-slate-300 hover:text-white'
@@ -1123,7 +1173,17 @@ export function GuidedCameraModal({
                     </button>
                   </>
                 ) : (
-                  <div className="w-24 sm:w-28" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      stopStream();
+                      onClose();
+                    }}
+                    className="rounded-xl border border-slate-700 px-3.5 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800 hover:text-white transition"
+                    aria-label="Cancel capture"
+                  >
+                    Cancel
+                  </button>
                 )}
               </div>
             </div>

@@ -323,15 +323,54 @@ def parse_ocr_numismatic_hints(
         ("ONE PIECE", "One Piece"),
         ("TOPPS", "Sports — Baseball"),
         ("PANINI", "Sports — Basketball"),
+        ("BOWMAN", "Sports — Baseball"),
+        ("UPPER DECK", "Sports — Hockey"),
+        ("DONRUSS", "Sports — Football"),
+        ("FLEER", "Sports — Basketball"),
+        ("SCORE", "Sports — Football"),
+        ("LEAF", "Sports"),
     ):
         if kw in upper:
+            if kw == "LEAF" and "MAPLE LEAF" in upper:
+                continue
             card_game = canonical_game
             break
+
+    card_stat_match = bool(
+        re.search(
+            r"\b(?:\d{2,3}\s*HP|STAGE\s*[12]|BASIC\s*POK[EÉ]MON|TRAINER|ENERGY|1ST\s*EDITION|ROOKIE\s*CARD|\bRC\b|\bATK\b|\bDEF\b)\b",
+            upper,
+        )
+        or any(
+            m in upper
+            for m in (
+                "NINTENDO",
+                "CREATURES",
+                "GAMEFREAK",
+                "WIZARDS OF THE COAST",
+                "WIZARDS",
+                "KONAMI",
+                "BANDAI",
+            )
+        )
+    )
+    if not card_game and card_stat_match:
+        if any(pk in upper for pk in ("HP", "POKEMON", "POKÉMON", "NINTENDO", "GAMEFREAK")):
+            card_game = "Pokémon"
+        elif any(mtg in upper for mtg in ("WIZARDS", "MAGIC")):
+            card_game = "Magic: The Gathering"
+        elif "KONAMI" in upper:
+            card_game = "Yu-Gi-Oh!"
+        elif any(sp in upper for sp in ("ROOKIE", "RC", "PANINI", "TOPPS", "BOWMAN", "UPPER DECK", "DONRUSS", "FLEER")):
+            card_game = "Sports"
+        else:
+            card_game = "Trading Card"
+
     card_number = ""
     card_num_match = re.search(r"\b(\d{1,3}/\d{1,3})\b", upper)
-    if card_num_match and (card_game or grading_service in {"PSA", "BGS", "CGC", "SGC", "TAG"}):
+    if card_num_match and (card_game or card_stat_match or grading_service in {"PSA", "BGS", "CGC", "SGC", "TAG"}):
         card_number = card_num_match.group(1)
-    is_card = bool(card_game) or grading_service in {"PSA", "BGS", "CGC", "SGC", "TAG"}
+    is_card = bool(card_game) or card_stat_match or grading_service in {"PSA", "BGS", "CGC", "SGC", "TAG"}
 
     # 9. Category
     if grading_service != "NONE":
