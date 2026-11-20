@@ -111,7 +111,7 @@ The system SHALL support an optional BYOK `COLLECTR_API_KEY` credential for appr
 - **THEN** the appraisal engine skips Collectr API calls without raising an error
 
 ### Requirement: Grade- and Condition-Aware Source Weighting
-The appraisal engine SHALL weight and prioritize pricing sources based on provenance, recency, and grade/condition match: cert-verified grading APIs (PCGS, NGC, PMG, PSA) > exact-grade sold marketplace comps > condition-adjusted price guides (Greysheet, Numista, TCGplayer, Scryfall, PriceCharting) > bullion dealer or Goldback exchange benchmarks > spot melt value.
+The appraisal engine SHALL weight and prioritize pricing sources based on provenance, recency, and grade/condition match: cert-verified grading APIs (PCGS, NGC, PMG, PSA) > blended real-world market comps (averaging verified sold sales and active asking listings) > exact-grade sold marketplace comps > condition-adjusted price guides (Greysheet, Numista, TCGplayer, Scryfall, PriceCharting) > active asking comps > multimodal AI appraisal > bullion dealer or Goldback exchange benchmarks > spot melt value.
 
 #### Scenario: Precious-metal item never valued below melt
 - **WHEN** a bullion, coin, or round item with `fine_troy_oz > 0` is appraised and external comps or guides return a value below `melt_value_unit`
@@ -120,6 +120,10 @@ The appraisal engine SHALL weight and prioritize pricing sources based on proven
 #### Scenario: Graded slab prioritizes cert-verified or exact-grade comps
 - **WHEN** an item has `grading_service != NONE` and a `cert_number` or `grade`
 - **THEN** the engine SHALL prefer cert-verified pricing or comps matching the exact grade over ungraded/raw comps.
+
+#### Scenario: Blended real-world comps supersede unverified AI estimates
+- **WHEN** an appraisal retrieves verified eBay comps with both sold and active listings and also runs an ungrounded AI appraisal
+- **THEN** the engine SHALL prioritize the blended real-world comps value over the AI estimate as the primary market valuation
 
 ### Requirement: Scheduled Background Re-Appraisal
 The system SHALL support a periodic background task that identifies stale items (`valued_at` older than a configurable TTL, or precious-metal items whose spot price has drifted beyond a configurable percentage threshold) and re-appraises them in batches.
