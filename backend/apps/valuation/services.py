@@ -28,6 +28,7 @@ from .providers import (
     lookup_pricecharting_card,
     lookup_scryfall_card,
     lookup_tcgplayer_price,
+    lookup_zero_key_public_comps,
 )
 
 logger = logging.getLogger(__name__)
@@ -309,6 +310,10 @@ def reconcile_item_valuation(
         bullion_bench = bullion_bench or results.get("bullion_bench")
         goldback_bench = goldback_bench or results.get("goldback_bench")
 
+    # Tier 3 fallback: If no comps from official API or zero-key, harvest search-grounded comps
+    if comps_res is None and ai_raw and ai_raw.get("grounded_comps"):
+        comps_res = ai_raw.get("grounded_comps")
+
     sources_payload: dict[str, Any] = {}
     if not is_card:
         sources_payload["SPOT_MELT"] = {
@@ -341,6 +346,17 @@ def reconcile_item_valuation(
         comp_key = comps_res.get("source") or "COMPS"
         is_blended = bool(comps_res.get("is_blended", False))
         is_ask = bool(comps_res.get("is_ask", False))
+        if comp_key in ("SEARCH_GROUNDING", "SEARCH_GROUNDING_COMPS"):
+            comp_status = "SEARCH_GROUNDING"
+        elif comp_key == "ZERO_KEY_COMPS":
+            comp_status = "ZERO_KEY"
+        elif is_blended:
+            comp_status = "BLENDED_COMPS"
+        elif is_ask:
+            comp_status = "ACTIVE_ASK"
+        else:
+            comp_status = "OK"
+
         sources_payload[comp_key] = {
             "value": str(v),
             "low": str(comps_res["low"]),
@@ -350,7 +366,7 @@ def reconcile_item_valuation(
             "is_blended": is_blended,
             "sold": comps_res.get("sold"),
             "active_ask": comps_res.get("active_ask"),
-            "status": "BLENDED_COMPS" if is_blended else ("ACTIVE_ASK" if is_ask else "OK"),
+            "status": comp_status,
         }
         if is_blended:
             candidate_quotes.append((20, CollectionItem.ValuationSource.COMPS, v))
@@ -473,6 +489,16 @@ def reconcile_item_valuation(
         high_val = final_val
 
     # 5. Confidence scoring
+    eval_sources = [
+        k
+        for k, s in sources_payload.items()
+        if isinstance(s, dict)
+        and s.get("status") not in {"NOT_CONFIGURED", "N/A", "LINK_ONLY"}
+        and s.get("value") is not None
+        and Decimal(str(s["value"])) > Decimal("0.00")
+    ]
+    eval_sources_count = len(eval_sources)
+
     has_guide = any(
         s in {
             CollectionItem.ValuationSource.PCGS,
@@ -483,10 +509,16 @@ def reconcile_item_valuation(
     )
     comps_count = comps_res.get("count", 0) if comps_res else 0
     has_bench = bool(bullion_bench or goldback_bench)
+    is_ask_only_comps = bool(comps_res and comps_res.get("is_ask") and not comps_res.get("sold"))
+
     if (has_guide or has_bench) and (comps_res and comps_count >= 3):
         confidence = CollectionItem.ValuationConfidence.HIGH
     elif has_guide and len(quotes) >= 2:
         confidence = CollectionItem.ValuationConfidence.HIGH
+    elif eval_sources_count >= 3 and not is_ask_only_comps:
+        confidence = CollectionItem.ValuationConfidence.HIGH
+    elif eval_sources_count >= 2 and not (is_ask_only_comps and not has_guide and not ai_val):
+        confidence = CollectionItem.ValuationConfidence.MEDIUM
     elif has_guide or (comps_res and comps_count >= 3) or (
         ai_val is not None and (ai_raw or {}).get("photo_inspected")
     ):
@@ -496,6 +528,10 @@ def reconcile_item_valuation(
 
     # 6. Explainability drivers & Collectibility thesis
     drivers: list[str] = []
+    if eval_sources_count >= 2:
+        drivers.append(
+            f"Multi-source consensus: Synthesized {eval_sources_count} independent sources with {confidence} confidence."
+        )
     if melt_val > Decimal("0.00"):
         drivers.append(f"Live metal melt floor: ${melt_val:.2f} ({item.fine_troy_oz:.4f} fine ozt).")
     if primary_val is not None and melt_val > primary_val:
@@ -509,7 +545,15 @@ def reconcile_item_valuation(
     if nm_res and nm_res.get("market_value"):
         drivers.append(f"NumisMedia FMV: ${nm_res["market_value"]}.")
     if comps_res:
-        if comps_res.get("is_blended"):
+        if comps_res.get("source") == "SEARCH_GROUNDING":
+            drivers.append(
+                f"Search-grounded comps: Derived ${Decimal(str(comps_res['value'])):.2f} from live secondary market search citations ({comps_res['count']} citations)."
+            )
+        elif comps_res.get("source") == "ZERO_KEY_COMPS":
+            drivers.append(
+                f"Zero-key public comps: Median ${Decimal(str(comps_res['median'])):.2f} from {comps_res['count']} realized sales."
+            )
+        elif comps_res.get("is_blended"):
             sold_info = comps_res.get("sold") or {}
             ask_info = comps_res.get("active_ask") or {}
             n_sold = sold_info.get("count", 0)
@@ -698,20 +742,32 @@ def appraise_item(
         )
 
     def _run_comps():
+        if is_card:
+            q_parts = [
+                item.title,
+                str(attrs.get("set_name") or ""),
+                str(attrs.get("card_number") or ""),
+                str(attrs.get("card_finish") or ""),
+                item.grading_service if item.grading_service != CollectionItem.GradingService.NONE else "",
+                item.grade,
+            ]
+        else:
+            q_parts = [str(item.year) if item.year else "", item.mint_mark or "", item.title or "", item.grade or ""]
+        q = " ".join(p for p in q_parts if p).strip()
+        if not q:
+            return None
+
+        # Tier 1: Official eBay Developer API (if configured)
         if ebay_id and ebay_secret:
-            if is_card:
-                q_parts = [
-                    item.title,
-                    str(attrs.get("set_name") or ""),
-                    str(attrs.get("card_number") or ""),
-                    str(attrs.get("card_finish") or ""),
-                    item.grading_service if item.grading_service != CollectionItem.GradingService.NONE else "",
-                    item.grade,
-                ]
-            else:
-                q_parts = [item.year, item.mint_mark, item.title, item.grade]
-            q = " ".join(p for p in q_parts if p).strip()
-            return lookup_ebay_sold_comps(q, ebay_id, ebay_secret)
+            res_tier1 = lookup_ebay_sold_comps(q, ebay_id, ebay_secret)
+            if res_tier1 is not None:
+                return res_tier1
+
+        # Tier 2: Zero-Key Public Endpoint
+        res_tier2 = lookup_zero_key_public_comps(q)
+        if res_tier2 is not None:
+            return res_tier2
+
         return None
 
     def _run_ai():
@@ -755,6 +811,9 @@ def appraise_item(
     comps_res = results.get("comps")
     ai_tuple = results.get("ai")
     ai_val, ai_raw = ai_tuple if isinstance(ai_tuple, tuple) else (None, {})
+    if not comps_res and ai_raw.get("grounded_comps"):
+        comps_res = ai_raw.get("grounded_comps")
+        results["comps"] = comps_res
 
     # 1. Enrich specs in priority order: PCGS > NUMISTA > AI (or card guides for cards)
     spec_candidates: list[tuple[str, dict[str, Any]]] = []

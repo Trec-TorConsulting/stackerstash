@@ -10,6 +10,7 @@ from apps.valuation.providers import (
     _lookup_ebay_browse_active,
     lookup_ebay_market_comps,
     lookup_ebay_sold_comps,
+    lookup_zero_key_public_comps,
 )
 
 
@@ -238,4 +239,72 @@ def test_lookup_ebay_browse_active_with_listings():
     assert res["source"] == "EBAY_ACTIVE_ASK"
     assert res["is_ask"] is True
     assert res["count"] == 2
+
+
+def test_lookup_zero_key_public_comps_empty_inputs():
+    assert lookup_zero_key_public_comps("") is None
+    assert lookup_zero_key_public_comps("   ") is None
+    assert lookup_zero_key_public_comps("!@#$%^&*()") is None
+
+
+@respx.mock
+def test_lookup_zero_key_public_comps_success():
+    router = respx.mock
+    mock_html = """
+    <html>
+      <body>
+        <div class="s-item__price">$45.00</div>
+        <div class="s-item__price">$50.00</div>
+        <div class="s-item__price">$55.00</div>
+        <div class="s-item__price">$60.00</div>
+      </body>
+    </html>
+    """
+    router.get("https://www.ebay.com/sch/i.html").mock(
+        return_value=httpx.Response(200, text=mock_html)
+    )
+
+    res = lookup_zero_key_public_comps("1921 Morgan Dollar")
+    assert res is not None
+    assert res["source"] == "ZERO_KEY_COMPS"
+    assert res["is_blended"] is False
+    assert res["is_ask"] is False
+    assert res["count"] == 4
+    assert res["median"] == Decimal("52.50")
+    assert res["low"] == Decimal("45.00")
+    assert res["high"] == Decimal("60.00")
+    assert res["sold"]["count"] == 4
+    assert res["raw"]["tier"] == "ZERO_KEY"
+
+
+@respx.mock
+def test_lookup_zero_key_public_comps_throttled_or_error():
+    router = respx.mock
+    # 403 Forbidden
+    router.get("https://www.ebay.com/sch/i.html").mock(return_value=httpx.Response(403))
+    assert lookup_zero_key_public_comps("1921 Morgan Dollar") is None
+
+    # 429 Too Many Requests
+    router.get("https://www.ebay.com/sch/i.html").mock(return_value=httpx.Response(429))
+    assert lookup_zero_key_public_comps("1921 Morgan Dollar") is None
+
+    # 500 Error
+    router.get("https://www.ebay.com/sch/i.html").mock(return_value=httpx.Response(500))
+    assert lookup_zero_key_public_comps("1921 Morgan Dollar") is None
+
+
+@respx.mock
+def test_lookup_zero_key_public_comps_no_prices_or_network_exception():
+    router = respx.mock
+    router.get("https://www.ebay.com/sch/i.html").mock(
+        return_value=httpx.Response(200, text="<html><body>No items found</body></html>")
+    )
+    assert lookup_zero_key_public_comps("Unobtainium Coin") is None
+
+    # Network exception
+    router.get("https://www.ebay.com/sch/i.html").mock(
+        side_effect=httpx.ConnectTimeout("Connection timed out")
+    )
+    assert lookup_zero_key_public_comps("Timeout Coin") is None
+
 

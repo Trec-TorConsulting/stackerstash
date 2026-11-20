@@ -184,6 +184,35 @@ export function resolveSeoConfig(pathname: string): SeoConfig {
         twitterCard: "summary_large_image",
         jsonLd: [buildOrganizationSchema()],
       };
+    case "/specifications":
+    case "/specs":
+      return {
+        title: `Technical Specifications — ${BRAND_NAME} | Grading, Slabs & Bullion Math`,
+        description:
+          "Exhaustive technical specifications for Stacker Stash: Sheldon 1–70 grading scales, 13 certified slab verification URL schemas, spot metal conversion formulas, and vision pipeline architecture.",
+        canonical: `${SITE_ORIGIN}/specifications`,
+        robots: "index, follow",
+        ogType: "website",
+        ogImage: DEFAULT_IMAGE,
+        ogImageAlt: DEFAULT_IMAGE_ALT,
+        twitterCard: "summary_large_image",
+        jsonLd: [
+          buildOrganizationSchema(),
+          buildWebSiteSchema(),
+          buildSoftwareAppSchema(),
+          {
+            "@context": "https://schema.org",
+            "@type": "TechArticle",
+            headline: "Stacker Stash Technical Specifications & Grading Architecture",
+            description:
+              "Technical specification standards for coins, paper banknotes, precious metals bullion, trading cards, cert verification, and vision pipelines.",
+            author: {
+              "@type": "Organization",
+              name: BRAND_NAME,
+            },
+          },
+        ],
+      };
     case "/coming-soon":
       return {
         title: `Early Access Preview — ${BRAND_NAME}`,

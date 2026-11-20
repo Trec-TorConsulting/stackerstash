@@ -24,15 +24,66 @@ const SOURCE_LABELS: Record<string, string> = {
   PCGS: "PCGS Price Guide",
   GREYSHEET: "Greysheet CDN",
   NUMISMEDIA: "NumisMedia FMV",
+  NUMISTA: "Numista Catalog",
   COMPS: "Realized Sold Comps",
+  ZERO_KEY_COMPS: "Zero-Key Public Comps",
+  SEARCH_GROUNDING: "Search Grounding Comps",
+  SEARCH_GROUNDING_COMPS: "Search Grounding Comps",
   EBAY_ACTIVE_ASK: "eBay Active Ask (Listings)",
+  EBAY_UNCONFIGURED: "eBay Market Comps",
   BULLION_BENCHMARK: "Dealer Bullion Benchmark",
+  GOLDBACK_BENCHMARK: "Goldback Exchange Rate",
   AI_ESTIMATE: "Multimodal AI Appraisal",
   NGC: "NGC Cert Lookup",
   PMG: "PMG Cert Lookup",
   CACG: "CACG Cert Lookup",
   ANACS: "ANACS Cert Lookup",
+  PSA: "PSA Cert Lookup",
+  PRICECHARTING: "PriceCharting Market Guide",
+  TCGPLAYER: "TCGplayer Market Guide",
+  COLLECTR: "Collectr App Guide",
 };
+
+export function renderSourceStatusBadge(status?: string) {
+  if (!status) return null;
+  switch (status) {
+    case "BLENDED":
+    case "BLENDED_COMPS":
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-300 border border-amber-500/30">
+          Blended
+        </span>
+      );
+    case "SEARCH_GROUNDING":
+    case "GROUNDED":
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+          Search Grounding
+        </span>
+      );
+    case "ZERO_KEY":
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+          Zero-Key
+        </span>
+      );
+    case "NOT_CONFIGURED":
+    case "UNCONFIGURED":
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-800 text-slate-400 border border-slate-700">
+          Not Configured
+        </span>
+      );
+    case "ACTIVE_ASK":
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-sky-500/20 text-sky-300 border border-sky-500/30">
+          Active Ask
+        </span>
+      );
+    default:
+      return <span className="text-slate-400">{status}</span>;
+  }
+}
 
 export function getValuationFreshness(
   valuedAt?: string | null,
@@ -330,7 +381,7 @@ export function ValuationBreakdownCard({
                             Verify <ExternalLink className="h-3 w-3" />
                           </a>
                         ) : (
-                          <span className="text-slate-400">{quote.status}</span>
+                          renderSourceStatusBadge(quote.status)
                         )}
                       </td>
                     </tr>

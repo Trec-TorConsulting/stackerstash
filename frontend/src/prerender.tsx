@@ -3,6 +3,7 @@ import { Route, Routes, StaticRouter } from "react-router-dom";
 import { buildHeadTagsHtml, resolveSeoConfig } from "./lib/seo";
 import { ComingSoonPage } from "./pages/ComingSoonPage";
 import { MarketingPage } from "./pages/MarketingPage";
+import { SpecificationsPage } from "./pages/SpecificationsPage";
 
 export const PRERENDER_ROUTES = [
   "/",
@@ -13,6 +14,7 @@ export const PRERENDER_ROUTES = [
   "/privacy",
   "/terms",
   "/coming-soon",
+  "/specifications",
 ] as const;
 
 export function renderRouteHtml(url: string): { appHtml: string; headHtml: string } {
@@ -27,6 +29,8 @@ export function renderRouteHtml(url: string): { appHtml: string; headHtml: strin
         <Route path="/privacy" element={<MarketingPage section="privacy" />} />
         <Route path="/terms" element={<MarketingPage section="terms" />} />
         <Route path="/coming-soon" element={<ComingSoonPage />} />
+        <Route path="/specifications" element={<SpecificationsPage />} />
+        <Route path="/specs" element={<SpecificationsPage />} />
       </Routes>
     </StaticRouter>,
   );

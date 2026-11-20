@@ -47,7 +47,7 @@ describe("SEO & Social Metadata Engine", () => {
     expect(isPrivateRoute("/items/abc")).toBe(true);
     expect(isPrivateRoute("/pricing")).toBe(false);
 
-    for (const route of ["/", "/marketing", "/features", "/pricing", "/security", "/privacy", "/terms", "/coming-soon"]) {
+    for (const route of ["/", "/marketing", "/features", "/pricing", "/security", "/privacy", "/terms", "/coming-soon", "/specifications", "/specs"]) {
       const cfg = resolveSeoConfig(route);
       expect(cfg.title).toContain(BRAND_NAME);
       expect(cfg.ogImage).toBe("https://stackerstash.com/og-image.png");
@@ -101,7 +101,7 @@ describe("Static Crawler Assets & Edge Config", () => {
     expect(robots).toContain("Disallow: /settings");
 
     const sitemap = fs.readFileSync(path.join(FRONTEND_DIR, "public/sitemap.xml"), "utf8");
-    for (const loc of ["/", "/features", "/pricing", "/security", "/privacy", "/terms"]) {
+    for (const loc of ["/", "/features", "/pricing", "/security", "/privacy", "/terms", "/specifications"]) {
       expect(sitemap).toContain(`<loc>https://stackerstash.com${loc}</loc>`);
     }
 
@@ -228,8 +228,13 @@ describe("Public Header, Footer, Marketing Catalog & Prerender", () => {
 
     // SSR prerender helper
     expect(PRERENDER_ROUTES).toContain("/features");
+    expect(PRERENDER_ROUTES).toContain("/specifications");
     const rendered = renderRouteHtml("/security");
     expect(rendered.appHtml).toContain("Enterprise Vault Security");
     expect(rendered.headHtml).toContain("https://stackerstash.com/security");
+
+    const specRendered = renderRouteHtml("/specifications");
+    expect(specRendered.appHtml).toContain("Technical Specifications");
+    expect(specRendered.headHtml).toContain("https://stackerstash.com/specifications");
   });
 });

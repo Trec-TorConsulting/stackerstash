@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from decimal import ROUND_HALF_UP, Decimal
 from statistics import median
 from typing import Any
@@ -662,6 +663,93 @@ def lookup_ebay_market_comps(
 
 
 lookup_ebay_sold_comps = lookup_ebay_market_comps
+
+
+def lookup_zero_key_public_comps(
+    query: str,
+    timeout: float = 3.0,
+) -> dict[str, Any] | None:
+    """Lightweight zero-key secondary market comps query with browser headers and strict timeout."""
+    if not query or not query.strip():
+        return None
+
+    clean_q = re.sub(r"[^\w\s\-\.]", " ", query).strip()
+    if not clean_q:
+        return None
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    url = "https://www.ebay.com/sch/i.html"
+    params = {
+        "_nkw": clean_q,
+        "_sacat": "0",
+        "LH_Complete": "1",
+        "LH_Sold": "1",
+        "_sop": "13",
+    }
+
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
+            resp = client.get(url, params=params)
+            if resp.status_code in {403, 429, 503}:
+                logger.info("Zero-key comps throttled (%s) for '%s'", resp.status_code, clean_q)
+                return None
+            if resp.status_code != 200:
+                return None
+            html = resp.text
+    except Exception as exc:
+        logger.info("Zero-key comps request failed for '%s': %s", clean_q, exc)
+        return None
+
+    price_matches = re.findall(r'class="s-item__price"[^>]*>[\s\n]*\$([0-9,]+(?:\.[0-9]{2})?)', html)
+    if not price_matches:
+        price_matches = re.findall(r'\$([0-9,]+(?:\.[0-9]{2})?)', html)
+
+    raw_prices: list[Decimal] = []
+    for raw_p in price_matches:
+        val = Decimal(raw_p.replace(",", ""))
+        if Decimal("1.00") <= val <= Decimal("500000.00"):
+            raw_prices.append(val)
+
+    trimmed = _trim_outliers(raw_prices) if raw_prices else []
+    if not trimmed:
+        return None
+
+    med = Decimal(str(median([float(p) for p in trimmed]))).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+    low_val = min(trimmed).quantize(Decimal("0.01"))
+    high_val = max(trimmed).quantize(Decimal("0.01"))
+
+    return {
+        "source": "ZERO_KEY_COMPS",
+        "is_blended": False,
+        "is_ask": False,
+        "value": med,
+        "median": med,
+        "low": low_val,
+        "high": high_val,
+        "count": len(trimmed),
+        "sold": {
+            "count": len(trimmed),
+            "low": low_val,
+            "high": high_val,
+            "median": med,
+        },
+        "active_ask": None,
+        "raw": {
+            "sample_count": len(trimmed),
+            "is_blended": False,
+            "tier": "ZERO_KEY",
+            "prices": [str(p) for p in trimmed[:10]],
+        },
+    }
 
 
 BULLION_PREMIUM_BENCHMARKS: list[tuple[tuple[str, ...], str, Decimal, Decimal]] = [

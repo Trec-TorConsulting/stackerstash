@@ -1,7 +1,6 @@
 import {
   ArrowRight,
   Camera,
-  CheckCircle2,
   Coins,
   FileSpreadsheet,
   FolderTree,
@@ -9,7 +8,6 @@ import {
   Sparkles,
   TrendingUp,
 } from "lucide-react";
-import { useState } from "react";
 import { Link } from "react-router-dom";
 import { BrandLogo } from "../components/BrandLogo";
 import { SeoHead } from "../components/SeoHead";
@@ -61,16 +59,6 @@ const ROADMAP = [
 ];
 
 export function ComingSoonPage() {
-  const [notifyEmail, setNotifyEmail] = useState("");
-  const [notified, setNotified] = useState(false);
-
-  const handleNotify = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!notifyEmail.trim()) return;
-    setNotified(true);
-    setNotifyEmail("");
-  };
-
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       <SeoHead pathname="/coming-soon" />
@@ -118,31 +106,20 @@ export function ComingSoonPage() {
               coin collectors, paper currency enthusiasts, and precious-metals stackers.
             </p>
 
-            {/* Waitlist / Notify Preview */}
-            <div className="mt-8 max-w-md mx-auto">
-              {notified ? (
-                <div className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-sm">
-                  <CheckCircle2 className="h-4 w-4 shrink-0" />
-                  <span>You&apos;re on the launch radar. Early access is open via Sign In.</span>
-                </div>
-              ) : (
-                <form onSubmit={handleNotify} className="flex flex-col sm:flex-row gap-2.5">
-                  <input
-                    type="email"
-                    required
-                    value={notifyEmail}
-                    onChange={(e) => setNotifyEmail(e.target.value)}
-                    placeholder="Enter email for launch updates..."
-                    className="flex-1 px-4 py-3 rounded-xl bg-slate-900 border border-slate-800 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-amber-500/60"
-                  />
-                  <button
-                    type="submit"
-                    className="px-5 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-sm transition shrink-0"
-                  >
-                    Notify Me
-                  </button>
-                </form>
-              )}
+            {/* Direct Vault Access CTAs */}
+            <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3 max-w-md mx-auto">
+              <Link
+                to="/register"
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-sm transition shadow-lg shadow-amber-500/20"
+              >
+                Create Free Account <ArrowRight className="h-4 w-4" />
+              </Link>
+              <Link
+                to="/login"
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 font-semibold text-sm transition"
+              >
+                Vault Sign In
+              </Link>
             </div>
 
             <div className="mt-6 flex flex-wrap items-center justify-center gap-4 text-xs text-slate-500">

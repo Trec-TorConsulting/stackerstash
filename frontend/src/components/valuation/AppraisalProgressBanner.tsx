@@ -3,10 +3,10 @@ import type { AppraisalJob } from "../../lib/api";
 
 const STEP_LABELS: { key: string; label: string }[] = [
   { key: "melt", label: "Spot Melt" },
-  { key: "specs", label: "Coin Specs" },
+  { key: "specs", label: "Item Specs" },
   { key: "price_guides", label: "Price Guides" },
-  { key: "comps", label: "Sold Comps" },
-  { key: "ai", label: "AI Vision" },
+  { key: "comps", label: "Market Comps" },
+  { key: "ai", label: "Multimodal AI" },
 ];
 
 export function AppraisalProgressBanner({ job }: { job: AppraisalJob | null }) {

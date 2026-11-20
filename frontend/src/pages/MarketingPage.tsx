@@ -149,7 +149,7 @@ function AssetsAndFeaturesSection() {
                 {GRADING_SERVICES.cards.join(", ")})
               </span>
             </div>
-            <Link to="/features" className="text-amber-400 hover:text-amber-300 font-semibold shrink-0">
+            <Link to="/specifications" className="text-amber-400 hover:text-amber-300 font-semibold shrink-0">
               Explore full specifications →
             </Link>
           </div>
