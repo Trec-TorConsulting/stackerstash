@@ -1,0 +1,91 @@
+[
+  {
+    "ref_key": "us_fr_237_1899_silver_cert",
+    "record_kind": "BANKNOTE",
+    "country": "United States",
+    "title": "1899 $1 Silver Certificate 'Black Eagle'",
+    "series": "1899",
+    "denomination": "$1",
+    "friedberg_number": "Fr. 237",
+    "seal_color": "Blue",
+    "size_class": "LARGE",
+    "width_mm": "187.00",
+    "height_mm": "79.00",
+    "signatures": ["Lyons", "Roberts"],
+    "keywords": ["1899 $1", "BLACK EAGLE", "SILVER CERTIFICATE 1899"],
+    "extra_specs": {
+      "obverse_vignette": "American Bald Eagle perched on flag above Lincoln & Grant",
+      "popular_name": "Black Eagle"
+    },
+    "sync_tier": "STATIC",
+    "source_name": "STATIC_SEED"
+  },
+  {
+    "ref_key": "us_fr_1600_1928_red_seal",
+    "record_kind": "BANKNOTE",
+    "country": "United States",
+    "title": "1928 $1 United States Note (Red Seal)",
+    "series": "1928",
+    "denomination": "$1",
+    "friedberg_number": "Fr. 1600",
+    "seal_color": "Red",
+    "size_class": "SMALL",
+    "width_mm": "156.00",
+    "height_mm": "66.30",
+    "signatures": ["Woods", "Mellon"],
+    "keywords": ["1928 RED SEAL $1", "1928 UNITED STATES NOTE", "WOODS MELLON $1"],
+    "extra_specs": {
+      "popular_name": "1928 Red Seal Dollar",
+      "mintage": 1656000
+    },
+    "sync_tier": "STATIC",
+    "source_name": "STATIC_SEED"
+  },
+  {
+    "ref_key": "us_star_run_2013_1_b_scarce",
+    "record_kind": "STAR_RUN",
+    "country": "United States",
+    "title": "2013 $1 Federal Reserve Star Note (B - New York, Run 1)",
+    "series": "2013",
+    "denomination": "$1",
+    "frb_district": "B",
+    "seal_color": "Green",
+    "size_class": "SMALL",
+    "width_mm": "156.00",
+    "height_mm": "66.30",
+    "serial_range_start": 1,
+    "serial_range_end": 250000,
+    "print_run_size": 250000,
+    "is_scarce_run": true,
+    "keywords": ["2013 $1 STAR B", "NEW YORK STAR RUN 1"],
+    "extra_specs": {
+      "facility": "FW",
+      "duplicate_run_alert": true,
+      "scarcity_rank": "HIGHLY_SCARCE"
+    },
+    "sync_tier": "STATIC",
+    "source_name": "STATIC_SEED"
+  },
+  {
+    "ref_key": "goldback_utah_alpha_1",
+    "record_kind": "GOLDBACK",
+    "country": "United States",
+    "title": "2019 Utah 1 Goldback (Alpha First Year)",
+    "series": "Utah Goldback",
+    "denomination": "1 Goldback",
+    "seal_color": "Gold",
+    "size_class": "GOLDBACK",
+    "width_mm": "117.00",
+    "height_mm": "66.00",
+    "keywords": ["UTAH GOLDBACK", "2019 GOLDBACK", "1 GOLDBACK"],
+    "extra_specs": {
+      "state": "Utah",
+      "is_first_year": true,
+      "fine_gold_ozt": "0.001000",
+      "purity": "0.999900",
+      "vignette": "Prudentia (Prudence)"
+    },
+    "sync_tier": "STATIC",
+    "source_name": "STATIC_SEED"
+  }
+]

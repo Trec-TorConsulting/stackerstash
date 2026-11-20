@@ -105,6 +105,91 @@ def refresh_spot_prices(workspace: Workspace | None = None) -> dict[str, Decimal
     return spots
 
 
+def convert_to_usd(amount: Decimal | float | int | str, currency: str) -> Decimal:
+    """Convert foreign currency to USD using synced StaticMarketBaseline FX rates with static fallback."""
+    amt = Decimal(str(amount))
+    cur = (currency or "USD").upper().strip()
+    if cur == "USD":
+        return amt.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    rate: Decimal | None = None
+    try:
+        from apps.catalog.models import StaticMarketBaseline
+
+        bl = StaticMarketBaseline.objects.filter(
+            metric_kind=StaticMarketBaseline.MetricKind.FX_RATE,
+            symbol=cur,
+        ).first()
+        if bl and bl.value > 0:
+            rate = bl.value
+    except Exception as exc:
+        logger.debug("FX baseline lookup failed: %s", exc)
+
+    if rate is None:
+        # Static fallback rates (EUR, GBP, CAD, AUD, JPY, CHF per 1 USD)
+        fallback_rates: dict[str, Decimal] = {
+            "EUR": Decimal("0.92"),
+            "GBP": Decimal("0.79"),
+            "CAD": Decimal("1.36"),
+            "AUD": Decimal("1.52"),
+            "JPY": Decimal("155.00"),
+            "CHF": Decimal("0.89"),
+        }
+        rate = fallback_rates.get(cur)
+
+    if rate and rate > 0:
+        return (amt / rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return amt.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def compute_grading_roi_usd(
+    raw_market_val: Decimal | float | int | str,
+    graded_market_val: Decimal | float | int | str,
+    service: str = "PCGS",
+    tier: str = "ECONOMY",
+    shipping_buffer: Decimal | float | int | str | None = None,
+) -> Decimal:
+    """Compute deterministic grading ROI: graded_val - raw_val - (tier_fee + shipping_buffer)."""
+    raw_v = Decimal(str(raw_market_val))
+    graded_v = Decimal(str(graded_market_val))
+    svc = (service or "PCGS").upper().strip()
+    tier_name = (tier or "ECONOMY").upper().strip()
+
+    fee_usd = Decimal("25.00")
+    ship_usd = Decimal("15.00")
+
+    try:
+        from apps.catalog.models import StaticGradingReference
+
+        ref = (
+            StaticGradingReference.objects.filter(
+                record_kind=StaticGradingReference.RecordKind.FEE_SCHEDULE,
+                grading_service=svc,
+            )
+            .filter(ref_key__icontains=tier_name.lower())
+            .first()
+        )
+        if not ref:
+            ref = StaticGradingReference.objects.filter(
+                record_kind=StaticGradingReference.RecordKind.FEE_SCHEDULE,
+                grading_service=svc,
+            ).first()
+        if ref:
+            if ref.fee_usd is not None:
+                fee_usd = ref.fee_usd
+            if ref.shipping_buffer_usd is not None:
+                ship_usd = ref.shipping_buffer_usd
+    except Exception as exc:
+        logger.debug("Fee schedule lookup failed: %s", exc)
+
+    if shipping_buffer is not None:
+        ship_usd = Decimal(str(shipping_buffer))
+
+    total_cost = fee_usd + ship_usd
+    upside = graded_v - raw_v - total_cost
+    return upside.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
 def _get_workspace_secret(workspace: Workspace, provider: str) -> str:
     return resolve_workspace_secret(workspace, provider)
 
@@ -660,7 +745,18 @@ def appraise_item(
             item.estimated_grade_range = ai_raw["estimated_grade_range"]
         if ai_raw.get("estimated_grade_rationale"):
             item.estimated_grade_rationale = ai_raw["estimated_grade_rationale"]
-        if ai_raw.get("grading_upside_usd") is not None:
+        if ai_raw.get("estimated_grade_market_usd") is not None and item.market_value_unit:
+            try:
+                graded_est = Decimal(str(ai_raw["estimated_grade_market_usd"]))
+                target_svc = "PSA" if item.category == "CARD" else ("PMG" if item.category == "PAPER" else "PCGS")
+                item.grading_upside_usd = compute_grading_roi_usd(
+                    raw_market_val=item.market_value_unit,
+                    graded_market_val=graded_est,
+                    service=target_svc,
+                )
+            except Exception as exc:
+                logger.debug("Computed grading ROI error: %s", exc)
+        elif ai_raw.get("grading_upside_usd") is not None:
             try:
                 item.grading_upside_usd = Decimal(str(ai_raw["grading_upside_usd"])).quantize(Decimal("0.01"))
             except Exception as exc:

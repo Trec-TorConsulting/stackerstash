@@ -439,3 +439,32 @@ class ItemPhoto(models.Model):
 
     def __str__(self) -> str:
         return f"{self.item.title} [{self.label}]"
+
+
+# ---------------------------------------------------------------------------
+# Re-export Static Reference Models for Guru & Offline Cache
+# ---------------------------------------------------------------------------
+from .reference_models import (  # noqa: E402
+    ReferenceSyncLog,
+    StaticBanknoteSpec,
+    StaticCardSpec,
+    StaticGradingReference,
+    StaticMarketBaseline,
+    StaticNumismaticSpec,
+)
+
+__all__ = [
+    "TROY_OZ_GRAMS",
+    "AVDP_OZ_GRAMS",
+    "KG_GRAMS",
+    "compute_fine_troy_oz",
+    "Container",
+    "CollectionItem",
+    "ItemPhoto",
+    "StaticNumismaticSpec",
+    "StaticBanknoteSpec",
+    "StaticCardSpec",
+    "StaticGradingReference",
+    "StaticMarketBaseline",
+    "ReferenceSyncLog",
+]

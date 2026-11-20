@@ -120,6 +120,44 @@ def test_uncategorized_fallback(workspace):
     assert res.sort_subcategory == "Uncategorized"
 
 
+def test_auto_sort_static_and_unmatched_edges(workspace):
+    # 1. Lines 317 and 348: slab without static match & series country hint
+    with patch("apps.catalog.auto_sort.match_static_reference", return_value=None):
+        slab_item = CollectionItem(
+            workspace=workspace,
+            category=CollectionItem.Category.SLAB,
+            title="Non-matching slab token",
+        )
+        assert classify_item_deterministic(slab_item).sort_category == "COIN"
+
+        series_hint_item = CollectionItem(
+            workspace=workspace,
+            category=CollectionItem.Category.COIN,
+            title="Unknown Series Lot",
+            series="kangaroo",
+        )
+        assert classify_item_deterministic(series_hint_item).sort_subcategory == "Australia"
+
+    # 2. Lines 405-406 (CARD in Tier 0) and 411-412 (BAR in Tier 0)
+    card_mock = {
+        "candidate": {"category": "CARD", "series": "Pokémon Base Set"},
+    }
+    with patch("apps.catalog.auto_sort.match_static_reference", return_value=card_mock):
+        card_item = CollectionItem(workspace=workspace, title="Charizard Card")
+        res_card = classify_item_deterministic(card_item)
+        assert res_card.sort_category == "CARD"
+        assert res_card.sort_subcategory == "Pokémon Base Set"
+
+    bar_mock = {
+        "candidate": {"category": "BAR", "mint_or_refiner": "Engelhard"},
+    }
+    with patch("apps.catalog.auto_sort.match_static_reference", return_value=bar_mock):
+        bar_item = CollectionItem(workspace=workspace, title="Vintage Bar")
+        res_bar = classify_item_deterministic(bar_item)
+        assert res_bar.sort_category == "BAR"
+        assert res_bar.sort_subcategory == "Engelhard"
+
+
 @pytest.mark.django_db
 def test_local_ollama_fallback_and_override_protection(workspace):
     cred = ProviderCredential(
@@ -460,4 +498,15 @@ def test_auto_sort_remaining_categories_fallbacks_tasks_and_dispatch():
         workspace=ws, title="Pinned Coin", category="COIN", sort_override=True
     )
     enqueue_item_auto_sort(pinned)
+
+    # Static match with PAPER candidate (lines 408-409)
+    with patch("apps.catalog.auto_sort.match_static_reference", return_value={"candidate": {"category": "PAPER", "country": "United States"}}):
+        paper_res = classify_item_deterministic(CollectionItem(title="1928 $1 Note", category="PAPER"))
+        assert paper_res.sort_category == CollectionItem.SortCategory.PAPER
+        assert paper_res.sort_subcategory == "United States"
+
+    with patch("apps.catalog.auto_sort.match_static_reference", return_value={"candidate": {"category": "PAPER"}}):
+        paper_res2 = classify_item_deterministic(CollectionItem(title="1928 $1 Note", category="PAPER"))
+        assert paper_res2.sort_category == CollectionItem.SortCategory.PAPER
+        assert paper_res2.sort_subcategory == "United States"
 

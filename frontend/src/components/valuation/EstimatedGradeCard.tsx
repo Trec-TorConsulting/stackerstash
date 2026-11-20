@@ -9,7 +9,7 @@ interface EstimatedGradeCardProps {
   isSaving?: boolean;
 }
 
-const RAW_GRADEABLE_CATEGORIES = new Set(["COIN", "PAPER", "FLIPPER", "ROUND"]);
+const RAW_GRADEABLE_CATEGORIES = new Set(["COIN", "PAPER", "FLIPPER", "ROUND", "CARD"]);
 
 export function EstimatedGradeCard({ item, onSaveGrade, isSaving }: EstimatedGradeCardProps) {
   const [editing, setEditing] = useState(false);
@@ -128,7 +128,7 @@ export function EstimatedGradeCard({ item, onSaveGrade, isSaving }: EstimatedGra
             {upside > 0 ? (
               <>
                 <strong>Grading ROI Positive (+{formatUsd(upside)} est. net upside):</strong>{" "}
-                Professional certification (PCGS/NGC/PMG/CACG) may add net value after grading fees.
+                Professional certification (PCGS/NGC/PMG/CACG/PSA) may add net value after fee schedules and shipping buffers.
               </>
             ) : (
               <>
@@ -136,6 +136,19 @@ export function EstimatedGradeCard({ item, onSaveGrade, isSaving }: EstimatedGra
                 Typical third-party grading &amp; shipping fees likely exceed the value jump at this grade.
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {item.category === "CARD" && (
+        <div className="rounded-xl p-3 bg-slate-950 border border-slate-800 text-xs text-slate-300 space-y-1">
+          <div className="font-semibold text-slate-200">Official Card Centering Rubrics:</div>
+          <div className="flex flex-wrap gap-2 text-[11px] text-slate-400 font-mono">
+            <span>PSA 10: 55/45–60/40 front, 75/25 back</span>
+            <span>•</span>
+            <span>BGS 9.5+: 50/50–55/45</span>
+            <span>•</span>
+            <span>CGC 10: 50/50</span>
           </div>
         </div>
       )}

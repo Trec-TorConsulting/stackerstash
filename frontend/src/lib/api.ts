@@ -969,5 +969,53 @@ export const api = {
         body: JSON.stringify(payload),
       }
     ),
+  lookupReference: (q: string, opts?: { category?: string; year?: string }) => {
+    const params = new URLSearchParams({ q });
+    if (opts?.category) params.set("category", opts.category);
+    if (opts?.year) params.set("year", opts.year);
+    return apiFetch<any>(`/catalog/reference/lookup?${params.toString()}`);
+  },
+  analyzeSerial: (serial_number: string) =>
+    apiFetch<any>("/catalog/reference/analyze-serial", {
+      method: "POST",
+      body: JSON.stringify({ serial_number }),
+    }),
+  getReferenceStorageFit: (params?: {
+    item_type?: string;
+    diameter_mm?: number;
+    thickness_mm?: number;
+    point_thickness?: number;
+  }) => {
+    const sp = new URLSearchParams();
+    if (params?.item_type) sp.set("item_type", params.item_type);
+    if (params?.diameter_mm !== undefined) sp.set("diameter_mm", String(params.diameter_mm));
+    if (params?.thickness_mm !== undefined) sp.set("thickness_mm", String(params.thickness_mm));
+    if (params?.point_thickness !== undefined) sp.set("point_thickness", String(params.point_thickness));
+    return apiFetch<any>(`/catalog/reference/storage-fit?${sp.toString()}`);
+  },
+  getGradingRoi: (params: {
+    raw_value: number;
+    graded_value: number;
+    service?: string;
+    tier?: string;
+  }) => {
+    const sp = new URLSearchParams({
+      raw_value: String(params.raw_value),
+      graded_value: String(params.graded_value),
+    });
+    if (params.service) sp.set("service", params.service);
+    if (params.tier) sp.set("tier", params.tier);
+    return apiFetch<any>(`/catalog/reference/grading-roi?${sp.toString()}`);
+  },
+  getGlossaryTerm: (term: string) =>
+    apiFetch<any>(`/catalog/reference/glossary?term=${encodeURIComponent(term)}`),
+  getMarketBaselines: (params?: { kind?: string; symbol?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.kind) sp.set("kind", params.kind);
+    if (params?.symbol) sp.set("symbol", params.symbol);
+    return apiFetch<any[]>(`/catalog/reference/market-baselines?${sp.toString()}`);
+  },
+  getReferenceSyncStatus: () =>
+    apiFetch<any[]>("/catalog/reference/sync-status"),
 };
 

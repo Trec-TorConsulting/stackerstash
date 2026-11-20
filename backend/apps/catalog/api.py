@@ -38,9 +38,11 @@ from .importer import (
 )
 from .models import CollectionItem, Container, ItemPhoto
 from .presets import ITEM_PRESETS
+from .reference_api import reference_router
 
 logger = logging.getLogger(__name__)
 catalog_router = Router(tags=["Catalog"], auth=WorkspaceAuth())
+catalog_router.add_router("/reference", reference_router)
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 _SIGNED_DECIMAL_RE = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)$")
 _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
