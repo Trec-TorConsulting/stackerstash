@@ -188,12 +188,12 @@ READY_CHECK_REDIS = os.getenv("READY_CHECK_REDIS", "false" if DEBUG else "true")
 # JWT config
 JWT_ACCESS_TTL_SECONDS = int(os.getenv("JWT_ACCESS_TTL_SECONDS", "86400"))
 
-# Self-hosted Ollama SSRF allowlist (empty in production unless explicitly set)
+# Self-hosted Ollama SSRF allowlist (includes common local/cluster defaults or explicit OLLAMA_ALLOWED_HOSTS)
 OLLAMA_ALLOWED_HOSTS = [
     h.strip().lower()
     for h in os.getenv(
         "OLLAMA_ALLOWED_HOSTS",
-        "ollama.local,localhost,127.0.0.1" if DEBUG else "",
+        "ollama.local,localhost,127.0.0.1,ollama.ollama.svc.cluster.local",
     ).split(",")
     if h.strip()
 ]

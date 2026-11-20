@@ -299,14 +299,30 @@ def validate_ollama_url(raw_url: str) -> str:
         raise ValueError("OLLAMA_URL must not contain embedded credentials.")
 
     hostname = parsed.hostname.strip().lower()
-    if hostname in _BLOCKED_OLLAMA_EXACT_HOSTS or hostname.endswith(_BLOCKED_OLLAMA_HOST_SUFFIXES):
+
+    # Always block cloud metadata endpoints
+    if (
+        hostname in {"169.254.169.254", "100.100.100.200", "metadata.google.internal", "metadata"}
+        or hostname.endswith(".metadata")
+    ):
         raise ValueError(f"Blocked internal or metadata host for OLLAMA_URL: {hostname}")
 
     allowed_hosts = {
         h.strip().lower()
-        for h in getattr(settings, "OLLAMA_ALLOWED_HOSTS", ["ollama.local", "localhost", "127.0.0.1"])
+        for h in getattr(
+            settings,
+            "OLLAMA_ALLOWED_HOSTS",
+            ["ollama.local", "localhost", "127.0.0.1", "ollama.ollama.svc.cluster.local"],
+        )
         if h.strip()
     }
+
+    # If the host is explicitly allowlisted by cluster operator or settings, permit it
+    if hostname in allowed_hosts:
+        return cleaned
+
+    if hostname in _BLOCKED_OLLAMA_EXACT_HOSTS or hostname.endswith(_BLOCKED_OLLAMA_HOST_SUFFIXES):
+        raise ValueError(f"Blocked internal or metadata host for OLLAMA_URL: {hostname}")
     try:
         ip = ipaddress.ip_address(hostname.split("%", 1)[0])
     except ValueError:

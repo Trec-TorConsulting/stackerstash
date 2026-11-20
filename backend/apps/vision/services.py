@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import logging
+import os
 import re
 import time
 from decimal import ROUND_HALF_UP, Decimal
@@ -35,11 +36,24 @@ GEMINI_VISION_MODELS: tuple[str, ...] = (
     "gemini-2.5-flash-lite",
 )
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+GROQ_VISION_MODELS: tuple[str, ...] = (
+    "llama-3.2-11b-vision-preview",
+    "llama-3.2-90b-vision-preview",
+)
+GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "llama-3.2-11b-vision-preview")
 GROQ_TEXT_MODEL = "llama-3.3-70b-versatile"
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_VISION_MODEL = "qwen/qwen2.5-vl-72b-instruct:free"
-OPENROUTER_TEXT_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
+OPENROUTER_VISION_MODELS: tuple[str, ...] = (
+    "qwen/qwen2.5-vl-72b-instruct",
+    "qwen/qwen2.5-vl-72b-instruct:free",
+    "openrouter/free",
+)
+OPENROUTER_VISION_MODEL = os.getenv("OPENROUTER_VISION_MODEL", "qwen/qwen2.5-vl-72b-instruct")
+OPENROUTER_TEXT_MODELS: tuple[str, ...] = (
+    "meta-llama/llama-3.3-70b-instruct",
+    "meta-llama/llama-3.3-70b-instruct:free",
+)
+OPENROUTER_TEXT_MODEL = os.getenv("OPENROUTER_TEXT_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
 
 IDENTIFICATION_PROMPT = """You are an expert numismatist, paper-currency specialist, trading-card authenticator, and precious-metals bullion appraiser.
 Analyze the provided image(s) of a collectible or bullion item (which may be a coin, paper banknote, bar/ingot such as Geiger or 1kg copper, round, coin flip, trading/TCG/sports card, or PCGS/NGC/PMG/CACG/ANACS/PSA/BGS/CGC/SGC/TAG graded slab).
@@ -986,43 +1000,57 @@ def identify_images(
     if groq_key:
         remaining = deadline - time.monotonic()
         if remaining >= 5.0:
-            try:
-                res = _call_openai_compat_chat(
-                    GROQ_CHAT_URL,
-                    groq_key,
-                    GROQ_VISION_MODEL,
-                    prompt,
-                    images=compact_vision_images,
-                    timeout=min(25.0, remaining),
-                )
-                return _record_vision_success(
-                    workspace, "GROQ", res, images, barcode_hint, intake_mode
-                )
-            except Exception as exc:
-                err_msg = _sanitize_error_message(str(exc))
-                logger.warning("Groq vision failed, checking next fallback: %s", err_msg)
-                provider_errors.append(f"Groq: {err_msg}")
+            groq_models = (
+                (GROQ_VISION_MODEL,) + tuple(m for m in GROQ_VISION_MODELS if m != GROQ_VISION_MODEL)
+                if GROQ_VISION_MODEL in GROQ_VISION_MODELS
+                else (GROQ_VISION_MODEL,) + GROQ_VISION_MODELS
+            )
+            for g_model in groq_models:
+                try:
+                    res = _call_openai_compat_chat(
+                        GROQ_CHAT_URL,
+                        groq_key,
+                        g_model,
+                        prompt,
+                        images=compact_vision_images,
+                        timeout=min(25.0, remaining),
+                    )
+                    return _record_vision_success(
+                        workspace, "GROQ", res, images, barcode_hint, intake_mode
+                    )
+                except Exception as exc:
+                    err_msg = _sanitize_error_message(str(exc))
+                    logger.warning("Groq vision model %s failed: %s", g_model, err_msg)
+                    if g_model == groq_models[-1]:
+                        provider_errors.append(f"Groq: {err_msg}")
 
     if openrouter_key:
         remaining = deadline - time.monotonic()
         if remaining >= 5.0:
-            try:
-                res = _call_openai_compat_chat(
-                    OPENROUTER_CHAT_URL,
-                    openrouter_key,
-                    OPENROUTER_VISION_MODEL,
-                    prompt,
-                    images=compact_vision_images,
-                    extra_headers={"HTTP-Referer": "https://stackerstash.com", "X-Title": "Stackers Stash"},
-                    timeout=min(25.0, remaining),
-                )
-                return _record_vision_success(
-                    workspace, "OPENROUTER", res, images, barcode_hint, intake_mode
-                )
-            except Exception as exc:
-                err_msg = _sanitize_error_message(str(exc))
-                logger.warning("OpenRouter vision failed, checking Ollama fallback: %s", err_msg)
-                provider_errors.append(f"OpenRouter: {err_msg}")
+            openrouter_models = (
+                (OPENROUTER_VISION_MODEL,) + tuple(m for m in OPENROUTER_VISION_MODELS if m != OPENROUTER_VISION_MODEL)
+                if OPENROUTER_VISION_MODEL in OPENROUTER_VISION_MODELS
+                else (OPENROUTER_VISION_MODEL,) + OPENROUTER_VISION_MODELS
+            )
+            for o_model in openrouter_models:
+                try:
+                    res = _call_openai_compat_chat(
+                        OPENROUTER_CHAT_URL,
+                        openrouter_key,
+                        o_model,
+                        prompt,
+                        images=compact_vision_images,
+                        extra_headers={"HTTP-Referer": "https://stackerstash.com", "X-Title": "Stackers Stash"},
+                        timeout=min(25.0, remaining),
+                    )
+                    return _record_vision_success(
+                        workspace, "OPENROUTER", res, images, barcode_hint, intake_mode
+                    )
+                except Exception as exc:
+                    err_msg = _sanitize_error_message(str(exc))
+                    logger.warning("OpenRouter vision model %s failed: %s", o_model, err_msg)
+                    if o_model == openrouter_models[-1]:
+                        provider_errors.append(f"OpenRouter: {err_msg}")
 
     if ollama_url:
         remaining = deadline - time.monotonic()
@@ -1488,43 +1516,61 @@ def estimate_item_value_with_ai(
     )
 
     if groq_key and deadline - time.monotonic() >= 4.0:
-        try:
-            model = GROQ_VISION_MODEL if raw_images_for_compat else GROQ_TEXT_MODEL
-            res = _call_openai_compat_chat(
-                GROQ_CHAT_URL,
-                groq_key,
-                model,
-                prompt,
-                images=raw_images_for_compat,
-                timeout=min(25.0, deadline - time.monotonic()),
-            )
-            val, normalized = _normalize_ai_appraisal(
-                res["parsed"], photo_inspected, is_raw_gradeable=is_raw_gradeable
-            )
-            if val is not None:
-                return val, normalized
-        except Exception as exc:
-            logger.warning("Groq AI appraisal failed: %s", _sanitize_error_message(str(exc)))
+        groq_appraisal_models = (
+            (GROQ_VISION_MODEL,) + tuple(m for m in GROQ_VISION_MODELS if m != GROQ_VISION_MODEL)
+            if raw_images_for_compat
+            else (GROQ_TEXT_MODEL,)
+        )
+        for g_model in groq_appraisal_models:
+            try:
+                res = _call_openai_compat_chat(
+                    GROQ_CHAT_URL,
+                    groq_key,
+                    g_model,
+                    prompt,
+                    images=raw_images_for_compat,
+                    timeout=min(25.0, deadline - time.monotonic()),
+                )
+                val, normalized = _normalize_ai_appraisal(
+                    res["parsed"], photo_inspected, is_raw_gradeable=is_raw_gradeable
+                )
+                if val is not None:
+                    return val, normalized
+                break
+            except Exception as exc:
+                logger.warning(
+                    "Groq AI appraisal (%s) failed: %s", g_model, _sanitize_error_message(str(exc))
+                )
 
     if openrouter_key and deadline - time.monotonic() >= 4.0:
-        try:
-            model = OPENROUTER_VISION_MODEL if raw_images_for_compat else OPENROUTER_TEXT_MODEL
-            res = _call_openai_compat_chat(
-                OPENROUTER_CHAT_URL,
-                openrouter_key,
-                model,
-                prompt,
-                images=raw_images_for_compat,
-                extra_headers={"HTTP-Referer": "https://stackerstash.com", "X-Title": "Stackers Stash"},
-                timeout=min(25.0, deadline - time.monotonic()),
-            )
-            val, normalized = _normalize_ai_appraisal(
-                res["parsed"], photo_inspected, is_raw_gradeable=is_raw_gradeable
-            )
-            if val is not None:
-                return val, normalized
-        except Exception as exc:
-            logger.warning("OpenRouter AI appraisal failed: %s", _sanitize_error_message(str(exc)))
+        openrouter_appraisal_models = (
+            (OPENROUTER_VISION_MODEL,) + tuple(m for m in OPENROUTER_VISION_MODELS if m != OPENROUTER_VISION_MODEL)
+            if raw_images_for_compat
+            else (OPENROUTER_TEXT_MODEL,)
+        )
+        for o_model in openrouter_appraisal_models:
+            try:
+                res = _call_openai_compat_chat(
+                    OPENROUTER_CHAT_URL,
+                    openrouter_key,
+                    o_model,
+                    prompt,
+                    images=raw_images_for_compat,
+                    extra_headers={"HTTP-Referer": "https://stackerstash.com", "X-Title": "Stackers Stash"},
+                    timeout=min(25.0, deadline - time.monotonic()),
+                )
+                val, normalized = _normalize_ai_appraisal(
+                    res["parsed"], photo_inspected, is_raw_gradeable=is_raw_gradeable
+                )
+                if val is not None:
+                    return val, normalized
+                break
+            except Exception as exc:
+                logger.warning(
+                    "OpenRouter AI appraisal (%s) failed: %s",
+                    o_model,
+                    _sanitize_error_message(str(exc)),
+                )
 
     if ollama_url and deadline - time.monotonic() >= 4.0:
         try:
