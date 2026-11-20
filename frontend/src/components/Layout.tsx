@@ -86,7 +86,7 @@ export function Layout({ user, onLogout, onSwitchWorkspace }: LayoutProps) {
   const pendingInvites = pendingInvitesQuery.data ?? [];
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col md:flex-row">
+    <div className="min-h-screen min-h-dvh bg-slate-950 text-slate-100 flex flex-col md:flex-row">
       {/* Desktop Sidebar */}
       <aside className="no-print hidden md:flex md:w-64 md:flex-col md:border-r md:border-slate-800/80 md:bg-slate-900/60 p-4 justify-between">
         <div>
@@ -144,7 +144,7 @@ export function Layout({ user, onLogout, onSwitchWorkspace }: LayoutProps) {
       </aside>
 
       {/* Mobile Top Bar */}
-      <header className="no-print md:hidden flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30">
+      <header className="no-print md:hidden flex items-center justify-between gap-2 px-4 py-3 pt-[calc(0.75rem+env(safe-area-inset-top,0px))] border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30">
         <BrandLogo size="sm" />
         <div className="flex items-center gap-2">
           <VaultSwitcher user={user} onSwitchWorkspace={onSwitchWorkspace} compact />
@@ -218,13 +218,16 @@ export function Layout({ user, onLogout, onSwitchWorkspace }: LayoutProps) {
             <Outlet />
           </WorkspaceProvider>
         </main>
-        <div className="pb-16 md:pb-0">
+        <div className="pb-[calc(4.5rem+env(safe-area-inset-bottom,0px))] md:pb-0">
           <SiteFooter compact />
         </div>
       </div>
 
       {/* Mobile Bottom Nav */}
-      <nav className="no-print md:hidden fixed bottom-0 inset-x-0 bg-slate-900/95 backdrop-blur border-t border-slate-800 flex justify-around py-2 z-40">
+      <nav
+        className="no-print md:hidden fixed bottom-0 inset-x-0 bg-slate-900/95 backdrop-blur border-t border-slate-800 flex justify-around pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] px-[env(safe-area-inset-left,0px)] z-40 transform translate-z-0 will-change-transform"
+        style={{ WebkitTransform: "translateZ(0)" }}
+      >
         {navItems.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
