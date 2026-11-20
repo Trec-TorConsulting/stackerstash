@@ -1,13 +1,53 @@
+import io
+import re
+from django.http import HttpResponse
 from ninja import File, Form, Router, UploadedFile
 from ninja.errors import HttpError
+from PIL import Image, ImageOps
+from pillow_heif import register_heif_opener
 
 from apps.accounts.auth import WorkspaceAuth, require_editor
 
 from .services import _infer_image_mime, identify_images
 
+register_heif_opener()
+
 vision_router = Router(tags=["Vision"], auth=WorkspaceAuth())
 MAX_VISION_FILES = 4
 MAX_VISION_FILE_BYTES = 10 * 1024 * 1024
+
+
+@vision_router.post("/convert-image")
+def convert_image(request, file: UploadedFile = File(...)):
+    require_editor(request)
+    file.seek(0)
+    raw_bytes = file.read(MAX_VISION_FILE_BYTES + 1)
+    if not raw_bytes or len(raw_bytes) > MAX_VISION_FILE_BYTES:
+        raise HttpError(400, "Image file must be non-empty and at most 10 MB.")
+
+    try:
+        with Image.open(io.BytesIO(raw_bytes)) as opened:
+            img = ImageOps.exif_transpose(opened)
+            if max(img.size) > 2048:
+                img.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
+            if img.mode in {"RGBA", "LA", "P"}:
+                rgba = img.convert("RGBA")
+                bg = Image.new("RGB", rgba.size, (255, 255, 255))
+                bg.paste(rgba, mask=rgba.split()[-1])
+                img = bg
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+
+            out = io.BytesIO()
+            img.save(out, format="JPEG", quality=90, optimize=True)
+            jpeg_bytes = out.getvalue()
+    except Exception as exc:
+        raise HttpError(400, f"Could not decode image format: {exc}")
+
+    response = HttpResponse(jpeg_bytes, content_type="image/jpeg")
+    base_name = re.sub(r"\.[^.]+$", "", getattr(file, "name", "") or "converted") or "converted"
+    response["Content-Disposition"] = f'inline; filename="{base_name}.jpg"'
+    return response
 
 
 @vision_router.post("/identify")

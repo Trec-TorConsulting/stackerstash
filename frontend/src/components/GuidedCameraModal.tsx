@@ -26,7 +26,9 @@ import {
   canvasToOptimizedBlob,
   computeCoverCropRect,
   computeSubjectCropRect,
+  convertHeicToJpeg,
   decodeImageBitmapUpright,
+  isHeicFile,
   normalizeImageFileForUpload,
   rotateImageFile90,
 } from '../lib/imageUtils';
@@ -673,7 +675,8 @@ export function GuidedCameraModal({
     const rawFile = e.target.files?.[0];
     e.target.value = '';
     if (!rawFile) return;
-    const normalized = await normalizeImageFileForUpload(rawFile, 1600, 0.82);
+    const file = isHeicFile(rawFile) ? await convertHeicToJpeg(rawFile) : rawFile;
+    const normalized = await normalizeImageFileForUpload(file, 1600, 0.82);
     setShowCropper(false);
     setPendingReviewFile(normalized);
   };

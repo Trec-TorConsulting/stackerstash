@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 from decimal import Decimal
 
@@ -7,6 +8,7 @@ import httpx
 import pytest
 import respx
 from django.core.files.uploadedfile import SimpleUploadedFile
+from PIL import Image
 
 from apps.accounts.models import ProviderCredential
 from apps.catalog.models import CollectionItem
@@ -1095,6 +1097,83 @@ def test_infer_image_mime_and_vision_heic_support(api_client, user_a):
     data = resp.json()
     assert data["provider_used"] == "GEMINI"
     assert data["candidate"]["title"] == "1881-S Morgan Silver Dollar"
+
+
+@pytest.mark.django_db
+def test_convert_image_endpoint(api_client, user_a):
+    _, ws, token = user_a
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    # 1. Convert HEIF to JPEG (also tests downscaling when > 2048)
+    heif_buf = io.BytesIO()
+    Image.new("RGB", (2500, 1500), (200, 100, 50)).save(heif_buf, format="HEIF")
+    heif_file = SimpleUploadedFile("card.heic", heif_buf.getvalue(), content_type="application/octet-stream")
+
+    resp = api_client.post("/api/v1/vision/convert-image", data={"file": heif_file}, **headers)
+    assert resp.status_code == 200
+    assert resp["Content-Type"] == "image/jpeg"
+    assert resp["Content-Disposition"] == 'inline; filename="card.jpg"'
+    with Image.open(io.BytesIO(resp.content)) as out_img:
+        assert out_img.format == "JPEG"
+        assert max(out_img.size) <= 2048
+
+    # 2. Convert RGBA PNG with transparency
+    rgba_buf = io.BytesIO()
+    Image.new("RGBA", (100, 100), (10, 20, 30, 128)).save(rgba_buf, format="PNG")
+    rgba_file = SimpleUploadedFile("transparent.png", rgba_buf.getvalue(), content_type="image/png")
+
+    resp_rgba = api_client.post("/api/v1/vision/convert-image", data={"file": rgba_file}, **headers)
+    assert resp_rgba.status_code == 200
+    assert resp_rgba["Content-Type"] == "image/jpeg"
+
+    # 3. Non-RGB image mode (e.g. Grayscale 'L')
+    gray_buf = io.BytesIO()
+    Image.new("L", (80, 80), 128).save(gray_buf, format="PNG")
+    gray_file = SimpleUploadedFile("gray.png", gray_buf.getvalue(), content_type="image/png")
+    resp_gray = api_client.post("/api/v1/vision/convert-image", data={"file": gray_file}, **headers)
+    assert resp_gray.status_code == 200
+    assert resp_gray["Content-Type"] == "image/jpeg"
+
+    # 4. Empty file -> 400
+    empty_file = SimpleUploadedFile("empty.heic", b"", content_type="application/octet-stream")
+    resp_empty = api_client.post("/api/v1/vision/convert-image", data={"file": empty_file}, **headers)
+    assert resp_empty.status_code == 400
+
+    # 4b. Oversized file -> 400
+    oversized = SimpleUploadedFile("big.heic", b"x" * (10 * 1024 * 1024 + 5), content_type="application/octet-stream")
+    resp_oversized = api_client.post("/api/v1/vision/convert-image", data={"file": oversized}, **headers)
+    assert resp_oversized.status_code == 400
+
+    # 5. Invalid image bytes -> 400
+    corrupt_file = SimpleUploadedFile("bad.heic", b"not-a-real-heic-file", content_type="application/octet-stream")
+    resp_bad = api_client.post("/api/v1/vision/convert-image", data={"file": corrupt_file}, **headers)
+    assert resp_bad.status_code == 400
+    assert "Could not decode image format" in resp_bad.json()["detail"]
+
+    # 6. Fallback filename when name has no base prefix
+    heif_buf_noname = io.BytesIO()
+    Image.new("RGB", (50, 50), (10, 10, 10)).save(heif_buf_noname, format="HEIF")
+    noname_file = SimpleUploadedFile(".heic", heif_buf_noname.getvalue(), content_type="application/octet-stream")
+    resp_noname = api_client.post("/api/v1/vision/convert-image", data={"file": noname_file}, **headers)
+    assert resp_noname.status_code == 200
+    assert resp_noname["Content-Disposition"] == 'inline; filename="converted.jpg"'
+
+    # 7. Identify endpoint validation branches (empty file, >4 files)
+    resp_id_empty = api_client.post(
+        "/api/v1/vision/identify",
+        data={"files": [empty_file]},
+        **headers,
+    )
+    assert resp_id_empty.status_code == 400
+
+    five_files = [SimpleUploadedFile(f"f{i}.jpg", b"fake", content_type="image/jpeg") for i in range(5)]
+    resp_id_too_many = api_client.post(
+        "/api/v1/vision/identify",
+        data={"files": five_files},
+        **headers,
+    )
+    assert resp_id_too_many.status_code == 400
+
 
 
 

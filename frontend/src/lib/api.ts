@@ -835,6 +835,17 @@ export const api = {
   deleteContainer: (id: string) =>
     apiFetch<void>(`/catalog/containers/${id}`, { method: "DELETE" }),
 
+  convertImageToJpeg: async (file: File | Blob, filename = "photo.jpg"): Promise<File> => {
+    const form = new FormData();
+    const rawName = "name" in file && typeof file.name === "string" ? file.name : filename;
+    const uploadFile =
+      file instanceof File ? file : new File([file], rawName, { type: file.type || "image/heic" });
+    form.append("file", uploadFile);
+    const blob = await apiFetchBlob("/vision/convert-image", { method: "POST", body: form });
+    const baseName = rawName.replace(/\.[^.]+$/, "") || "photo";
+    return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
+  },
+
   identifyImages: (
     files: File[],
     barcodeHint?: string,
