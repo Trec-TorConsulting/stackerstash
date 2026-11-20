@@ -406,6 +406,35 @@ describe("ScanAddPage full coverage", () => {
       target: { value: "morgan, silver" },
     });
 
+    // Test category-scoped fields in ScanAddPage
+    // Switch to CARD: card fields appear, bullion and denomination are hidden
+    fireEvent.change(screen.getByLabelText("Category"), { target: { value: "CARD" } });
+    expect(screen.getByLabelText("Card Game")).toBeInTheDocument();
+    expect(screen.getByLabelText("Set Name")).toBeInTheDocument();
+    expect(screen.getByLabelText("Card #")).toBeInTheDocument();
+    expect(screen.getByLabelText("Rarity")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Denomination")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Metal Type")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Card Game"), { target: { value: "Pokemon" } });
+    fireEvent.change(screen.getByLabelText("Set Name"), { target: { value: "151" } });
+    fireEvent.change(screen.getByLabelText("Set Code"), { target: { value: "MEW" } });
+    fireEvent.change(screen.getByLabelText("Card #"), { target: { value: "151/165" } });
+    fireEvent.change(screen.getByLabelText("Rarity"), { target: { value: "Illustration Rare" } });
+    fireEvent.change(screen.getByLabelText("Finish"), { target: { value: "Holo" } });
+    fireEvent.change(screen.getByLabelText("Edition"), { target: { value: "Standard" } });
+    fireEvent.change(screen.getByLabelText("Raw Condition"), { target: { value: "NM" } });
+
+    // Switch to PAPER: card fields hidden, denomination shown, metal type shown if not NONE, hides when NONE
+    fireEvent.change(screen.getByLabelText("Category"), { target: { value: "PAPER" } });
+    expect(screen.queryByLabelText("Card Game")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Denomination")).toBeInTheDocument();
+    expect(screen.getByLabelText("Metal Type")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Metal Type"), { target: { value: "NONE" } });
+    expect(screen.queryByLabelText("Metal Type")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("+ Add Precious Metal Content (e.g. Goldback)"));
+    expect(screen.getByLabelText("Metal Type")).toBeInTheDocument();
+
     toBlobSpy.mockRestore();
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: origMediaDevices });
   }, 10000);

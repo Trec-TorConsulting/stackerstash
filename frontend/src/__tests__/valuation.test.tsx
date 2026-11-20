@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { AppraisalProgressBanner } from "../components/valuation/AppraisalProgressBanner";
+import { BanknoteSpecsCard } from "../components/valuation/BanknoteSpecsCard";
 import { CardSpecsCard } from "../components/valuation/CardSpecsCard";
 import { CollectibilityThesisCard } from "../components/valuation/CollectibilityThesisCard";
 import { EstimatedGradeCard } from "../components/valuation/EstimatedGradeCard";
@@ -124,10 +125,36 @@ describe("Valuation & Specs UI Components", () => {
     expect(screen.getByText("Multimodal AI Appraisal")).toBeInTheDocument();
   });
 
-  it("renders CollectibilityThesisCard with raw grading upside tip", () => {
-    render(<CollectibilityThesisCard item={SAMPLE_ITEM} />);
+  it("renders CollectibilityThesisCard with raw grading upside tip contextualized by asset class", () => {
+    const { unmount } = render(<CollectibilityThesisCard item={SAMPLE_ITEM} />);
     expect(screen.getByText("Key Date / Scarce Collectible")).toBeInTheDocument();
-    expect(screen.getByText(/Grading Upside Tip/i)).toBeInTheDocument();
+    expect(screen.getByText(/PCGS\/NGC\/CACG/i)).toBeInTheDocument();
+    unmount();
+
+    const cardItem: CollectionItem = {
+      ...SAMPLE_ITEM,
+      category: "CARD",
+      is_card_item: true,
+      card_game: "Pokémon",
+      grading_service: "NONE",
+      collectibility_tier: undefined,
+      hold_outlook: undefined,
+    };
+    const { unmount: unmountCard } = render(<CollectibilityThesisCard item={cardItem} />);
+    expect(screen.getByText("TCG / Sports Collectible")).toBeInTheDocument();
+    expect(screen.getByText(/PSA\/BGS\/CGC\/TAG/i)).toBeInTheDocument();
+    unmountCard();
+
+    const noteItem: CollectionItem = {
+      ...SAMPLE_ITEM,
+      category: "PAPER",
+      grading_service: "NONE",
+      collectibility_tier: undefined,
+      hold_outlook: undefined,
+    };
+    render(<CollectibilityThesisCard item={noteItem} />);
+    expect(screen.getByText("Paper Currency Collectible")).toBeInTheDocument();
+    expect(screen.getByText(/PMG \/ PCGS Banknote/i)).toBeInTheDocument();
   });
 
   it("renders NumismaticSpecsCard and allows inline spec editing", async () => {
@@ -341,6 +368,128 @@ describe("Valuation & Specs UI Components", () => {
       );
     });
   });
+
+  it("renders BanknoteSpecsCard with fancy serial badges and supports inline edit", async () => {
+    const banknoteItem: CollectionItem = {
+      ...SAMPLE_ITEM,
+      category: "PAPER",
+      title: "1934 $20 Federal Reserve Note Star Note",
+      country: "United States",
+      denomination: "$20",
+      year: "1934",
+      series: "Federal Reserve Note",
+      mint_or_refiner: "New York (B2)",
+      serial_number: "B01234567*",
+      grading_service: "PMG",
+      grade: "Gem Uncirculated 66 EPQ",
+      catalog_numbers: { Fr: "2054-B", Pick: "P-415" },
+      attributes: {
+        paper_quality: "EPQ",
+        signatures: "Julian / Morgenthau",
+      },
+    };
+
+    const onSaveSpecs = vi.fn().mockResolvedValue(undefined);
+    const { unmount } = render(<BanknoteSpecsCard item={banknoteItem} onSaveSpecs={onSaveSpecs} />);
+
+    expect(screen.getByText("Banknote Specifications")).toBeInTheDocument();
+    expect(screen.getByText("Fancy Serial:")).toBeInTheDocument();
+    expect(screen.getByText("Star Note ★")).toBeInTheDocument();
+    expect(screen.getByText("$20")).toBeInTheDocument();
+    expect(screen.getByText("New York (B2)")).toBeInTheDocument();
+    expect(screen.getByText("B01234567*")).toBeInTheDocument();
+    expect(screen.getByText("Julian / Morgenthau")).toBeInTheDocument();
+    expect(screen.getByText("EPQ")).toBeInTheDocument();
+    expect(screen.getByText(/Standard PMG Holder/i)).toBeInTheDocument();
+    expect(screen.getByText("Third-Party Certified Note")).toBeInTheDocument();
+
+    // Test Cancel buttons (header and footer)
+    fireEvent.click(screen.getByRole("button", { name: /Edit Specs/i }));
+    fireEvent.click(screen.getAllByRole("button", { name: /Cancel/i })[0]);
+    fireEvent.click(screen.getByRole("button", { name: /Edit Specs/i }));
+    fireEvent.click(screen.getAllByRole("button", { name: /Cancel/i })[1]);
+
+    // Reopen and edit ALL inputs
+    fireEvent.click(screen.getByRole("button", { name: /Edit Specs/i }));
+    fireEvent.change(screen.getByPlaceholderText("e.g. United States"), { target: { value: "US" } });
+    fireEvent.change(screen.getByPlaceholderText("e.g. $20, $100"), { target: { value: "$50" } });
+    fireEvent.change(screen.getByPlaceholderText("e.g. 1934, 2017A"), { target: { value: "1928" } });
+    fireEvent.change(screen.getByPlaceholderText("e.g. Federal Reserve Note, Silver Certificate"), {
+      target: { value: "Gold Certificate" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("e.g. New York (B2), Chicago (G7)"), {
+      target: { value: "Chicago (G7)" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("e.g. B12345678*, B12344321A"), {
+      target: { value: "B88888888A" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("e.g. Fr. 2054-B"), { target: { value: "Fr. 2400" } });
+    fireEvent.change(screen.getByPlaceholderText("e.g. P-415"), { target: { value: "P-420" } });
+    fireEvent.change(screen.getByPlaceholderText("e.g. Julian / Morgenthau"), {
+      target: { value: "Woods / Mellon" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("e.g. EPQ, PPQ, Standard"), {
+      target: { value: "PPQ" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Save Specifications/i }));
+
+    await waitFor(() => {
+      expect(onSaveSpecs).toHaveBeenCalledWith(
+        expect.objectContaining({
+          country: "US",
+          denomination: "$50",
+          year: "1928",
+          series: "Gold Certificate",
+          mint_or_refiner: "Chicago (G7)",
+          serial_number: "B88888888A",
+          catalog_numbers: expect.objectContaining({ Fr: "Fr. 2400", Pick: "P-420" }),
+          attributes: expect.objectContaining({ signatures: "Woods / Mellon", paper_quality: "PPQ" }),
+        }),
+      );
+    });
+    unmount();
+
+    // Test clearing fields (deleting catalog/signatures/paper_quality) + specs provenance + raw unslabbed
+    const rawNote: CollectionItem = {
+      ...SAMPLE_ITEM,
+      category: "PAPER",
+      grading_service: "NONE",
+      grade: "",
+      country: "United States",
+      denomination: "$1",
+      year: "",
+      series: "",
+      mint_or_refiner: "",
+      serial_number: "",
+      catalog_numbers: {},
+      specs_provenance: { country: "USER", denomination: "STATIC_CATALOG" },
+      attributes: {
+        specs: {
+          district: "B2",
+          signatures: "Julian / Morgenthau",
+          storage_fit: { holder_recommendation: "Custom Sized Sleeve" },
+        },
+      },
+    };
+    const onSaveClear = vi.fn().mockResolvedValue(undefined);
+    const { unmount: unmountRaw, rerender } = render(
+      <BanknoteSpecsCard item={rawNote} onSaveSpecs={onSaveClear} isSaving={true} />,
+    );
+    expect(screen.getByText("Custom Sized Sleeve")).toBeInTheDocument();
+    expect(screen.getByText("USER")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Edit Specs/i }));
+    expect(screen.getByRole("button", { name: /Save Specifications/i })).toBeDisabled();
+    rerender(<BanknoteSpecsCard item={rawNote} onSaveSpecs={onSaveClear} isSaving={false} />);
+    expect(screen.getByRole("button", { name: /Save Specifications/i })).not.toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /Save Specifications/i }));
+    await waitFor(() => expect(onSaveClear).toHaveBeenCalled());
+    unmountRaw();
+
+    // Test without onSaveSpecs (read-only view)
+    render(<BanknoteSpecsCard item={rawNote} />);
+    expect(screen.queryByRole("button", { name: /Edit Specs/i })).not.toBeInTheDocument();
+  });
 });
 
 
@@ -489,5 +638,82 @@ describe("Valuation freshness and lock indicators", () => {
         }),
       ),
     );
+
+    // 6. BanknoteSpecsCard comprehensive branches (treasurer, register, slab designations, catalog fallbacks, PMG/PCGS holders)
+    const onSaveBanknote = vi.fn().mockResolvedValue(undefined);
+    const bankItem1: CollectionItem = {
+      ...SAMPLE_ITEM,
+      category: "PAPER",
+      grading_service: "PCGS_BANKNOTE",
+      grade: "",
+      mint_or_refiner: "",
+      serial_number: "",
+      specs_provenance: { country: "THIRD_PARTY" },
+      catalog_numbers: {
+        friedberg: "Fr. 123",
+        pick: "P-456",
+      },
+      attributes: {
+        district: "Richmond (E5)",
+        serial_number: "E12344321A",
+        treasurer: "A. W. Mellon",
+        register: "Harley V. Speelman",
+        slab_designation: "EPQ",
+        storage_fit: { holder_recommendation: "Direct Mylar Sleeve" },
+      },
+    };
+    const { container: bankContainer, unmount: unmountBank1 } = render(
+      <BanknoteSpecsCard item={bankItem1} onSaveSpecs={onSaveBanknote} />,
+    );
+    expect(screen.getByText("PCGS_BANKNOTE")).toBeInTheDocument();
+    expect(screen.getByText("Richmond (E5)")).toBeInTheDocument();
+    expect(screen.getByText("A. W. Mellon / Harley V. Speelman")).toBeInTheDocument();
+    expect(screen.getByText("EPQ")).toBeInTheDocument();
+    expect(screen.getByText("THIRD_PARTY")).toBeInTheDocument();
+
+    // Form cancel from form footer button
+    fireEvent.click(bankContainer.querySelector("button")!);
+    const cancelBtn = bankContainer.querySelector("button[type='button']")!;
+    fireEvent.click(cancelBtn);
+
+    unmountBank1();
+
+    // Banknote with treasurer only (no register), PPQ in grade, fallback catalog numbers
+    const bankItem2: CollectionItem = {
+      ...SAMPLE_ITEM,
+      category: "PAPER",
+      grading_service: "PMG",
+      grade: "Choice About New 58 PPQ",
+      mint_or_refiner: "",
+      serial_number: "",
+      catalog_numbers: {},
+      attributes: {
+        treasurer: "Treasurer Only",
+        friedberg_number: "Fr. 999",
+        pick_number: "P-888",
+      },
+    };
+    render(<BanknoteSpecsCard item={bankItem2} />);
+    expect(screen.getByText("Treasurer Only")).toBeInTheDocument();
+    expect(screen.getByText("PPQ")).toBeInTheDocument();
+    expect(screen.getByText(/Standard PMG Holder/i)).toBeInTheDocument();
+
+    // Bare banknote without attributes and without catalog numbers
+    const bareBanknote: CollectionItem = {
+      ...SAMPLE_ITEM,
+      category: "PAPER",
+      grading_service: "NONE",
+      grade: "Choice Unc 64 EPQ",
+      attributes: undefined as unknown as Record<string, unknown>,
+      catalog_numbers: undefined,
+    };
+    const onSaveBare = vi.fn().mockResolvedValue(undefined);
+    const { container: bareContainer } = render(
+      <BanknoteSpecsCard item={bareBanknote} onSaveSpecs={onSaveBare} />,
+    );
+    expect(screen.getByText(/Standard Banknote Toploader/i)).toBeInTheDocument();
+    fireEvent.click(bareContainer.querySelector("button")!);
+    fireEvent.submit(bareContainer.querySelector("form")!);
+    await waitFor(() => expect(onSaveBare).toHaveBeenCalled());
   });
 });

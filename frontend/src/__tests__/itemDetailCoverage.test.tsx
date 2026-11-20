@@ -412,24 +412,31 @@ describe("ItemDetailPage full coverage", () => {
     fireEvent.change(screen.getByDisplayValue("1999 Charizard Holo"), {
       target: { value: "Charizard Updated" },
     });
+
+    fireEvent.change(screen.getByPlaceholderText("e.g. 1934, 2017A"), { target: { value: "1998" } });
+    fireEvent.change(screen.getByPlaceholderText("e.g. United States"), { target: { value: "US" } });
+    fireEvent.change(screen.getByPlaceholderText("e.g. $100, $1"), { target: { value: "Card" } });
+    fireEvent.change(screen.getByPlaceholderText(/Federal Reserve/i), { target: { value: "Base 2" } });
+    fireEvent.change(screen.getByPlaceholderText(/BEP, New York Fed/i), { target: { value: "WotC Co" } });
+    fireEvent.click(screen.getByText("+ Add Precious Metal Content (e.g. Goldback)"));
+    fireEvent.change(screen.getByLabelText("Metal Type"), { target: { value: "GOLD" } });
+    fireEvent.change(screen.getByLabelText("Weight"), { target: { value: "1" } });
+    fireEvent.change(screen.getByLabelText("Unit"), { target: { value: "G" } });
+    fireEvent.change(screen.getByLabelText("Purity"), { target: { value: "0.999" } });
+
+    // Switch category to CARD and verify category-scoped inputs
     fireEvent.change(screen.getByDisplayValue("Paper Currency"), { target: { value: "CARD" } });
+    expect(screen.queryByPlaceholderText("e.g. $100, $1")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Metal Type")).not.toBeInTheDocument();
+
     fireEvent.change(screen.getByLabelText("Quantity"), { target: { value: "2" } });
     fireEvent.change(screen.getByDisplayValue("In Collection"), { target: { value: "SOLD" } });
     fireEvent.change(screen.getByDisplayValue("Safe"), { target: { value: "c-2" } });
     fireEvent.change(screen.getByLabelText("Primary Sort Group"), { target: { value: "PAPER" } });
     fireEvent.change(screen.getByLabelText("Sub-Category"), { target: { value: "Vintage" } });
-    fireEvent.change(screen.getByPlaceholderText("e.g. 2017A, 1921"), { target: { value: "1998" } });
-    fireEvent.change(screen.getByPlaceholderText("e.g. United States"), { target: { value: "US" } });
-    fireEvent.change(screen.getByPlaceholderText("e.g. $100, $1"), { target: { value: "Card" } });
-    fireEvent.change(screen.getByPlaceholderText(/Federal Reserve/i), { target: { value: "Base 2" } });
-    fireEvent.change(screen.getByPlaceholderText(/U.S. Mint/i), { target: { value: "WotC Co" } });
     fireEvent.change(screen.getByLabelText("Purchase Date"), { target: { value: "2024-02-02" } });
     fireEvent.change(screen.getByLabelText("Sold Price / Total ($)"), { target: { value: "9000" } });
     fireEvent.change(screen.getByLabelText("Sold Date"), { target: { value: "2025-01-01" } });
-    fireEvent.change(screen.getByLabelText("Metal Type"), { target: { value: "GOLD" } });
-    fireEvent.change(screen.getByLabelText("Weight"), { target: { value: "1" } });
-    fireEvent.change(screen.getByLabelText("Unit"), { target: { value: "G" } });
-    fireEvent.change(screen.getByLabelText("Purity"), { target: { value: "0.999" } });
     fireEvent.change(screen.getByPlaceholderText("e.g. LCS, APMEX"), { target: { value: "Goldin" } });
     fireEvent.change(screen.getByDisplayValue("8000.00"), { target: { value: "8500.00" } });
     fireEvent.change(screen.getByLabelText("Tags (comma-separated)"), {

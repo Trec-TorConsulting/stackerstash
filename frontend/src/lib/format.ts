@@ -40,12 +40,13 @@ export const SORT_CATEGORY_LABELS: Record<string, string> = {
 export const SORT_CATEGORY_ORDER: string[] = ["COIN", "PAPER", "BAR", "ROUND", "CARD", "OTHER"];
 
 export const CARD_GRADING_SERVICES = new Set(["PSA", "BGS", "CGC", "SGC", "TAG"]);
+export const BANKNOTE_GRADING_SERVICES = new Set(["PMG", "PCGS_BANKNOTE"]);
 
 export const GRADING_SERVICE_OPTIONS = [
   { value: "NONE", label: "Raw / Ungraded" },
   { value: "PCGS", label: "PCGS" },
   { value: "NGC", label: "NGC" },
-  { value: "PMG", label: "PMG" },
+  { value: "PMG", label: "PMG (Banknotes)" },
   { value: "PCGS_BANKNOTE", label: "PCGS Banknote" },
   { value: "CACG", label: "CACG" },
   { value: "ANACS", label: "ANACS" },
@@ -82,6 +83,116 @@ export function isCardItem(
   if (item.grading_service && CARD_GRADING_SERVICES.has(item.grading_service)) return true;
   const attrGame = item.attributes && typeof item.attributes === "object" ? item.attributes.card_game : undefined;
   return Boolean(String(item.card_game || attrGame || "").trim());
+}
+
+export function isBanknoteItem(
+  item: {
+    category?: string | null;
+    sort_category?: string | null;
+    grading_service?: string | null;
+    attributes?: Record<string, unknown> | null;
+  } | null | undefined,
+): boolean {
+  if (!item) return false;
+  if (item.category === "PAPER" || item.sort_category === "PAPER") return true;
+  if (item.grading_service && BANKNOTE_GRADING_SERVICES.has(item.grading_service)) return true;
+  const attrs = item.attributes && typeof item.attributes === "object" ? item.attributes : undefined;
+  if (
+    attrs &&
+    (attrs.banknote_attributes ||
+      attrs.friedberg_number ||
+      attrs.pick_number ||
+      attrs.fancy_serial ||
+      attrs.issuing_bank ||
+      attrs.paper_quality)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function isBullionItem(
+  item: {
+    category?: string | null;
+    sort_category?: string | null;
+    metal_type?: string | null;
+  } | null | undefined,
+): boolean {
+  if (!item) return false;
+  if (item.category === "BAR" || item.sort_category === "BAR") return true;
+  if (item.category === "ROUND" || item.sort_category === "ROUND") return true;
+  if (item.category === "COIN" && item.metal_type && item.metal_type !== "NONE") return true;
+  return false;
+}
+
+export function hasPreciousMetal(
+  item: {
+    metal_type?: string | null;
+    fine_troy_oz?: string | number | null;
+    weight_value?: string | number | null;
+  } | null | undefined,
+): boolean {
+  if (!item || !item.metal_type || item.metal_type === "NONE") return false;
+  const weight = Number(item.fine_troy_oz ?? item.weight_value ?? 0);
+  return weight > 0;
+}
+
+export interface FancySerialInfo {
+  isFancy: boolean;
+  classification: string | null;
+  badges: string[];
+}
+
+export function detectFancySerial(serial: string | null | undefined): FancySerialInfo | null {
+  if (!serial || typeof serial !== "string") return null;
+  const raw = serial.trim();
+  if (!raw) return null;
+
+  const badges: string[] = [];
+  if (/[*★]/i.test(raw)) {
+    badges.push("Star Note ★");
+  }
+
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length >= 4) {
+    const uniqueDigits = new Set(digits);
+    if (uniqueDigits.size === 1) {
+      badges.push("Solid");
+    } else if (digits === digits.split("").reverse().join("")) {
+      badges.push("Radar");
+    }
+
+    if (
+      (digits.length % 2 === 0 &&
+        digits.slice(0, digits.length / 2) === digits.slice(digits.length / 2)) ||
+      (digits.length === 8 && digits.slice(0, 2).repeat(4) === digits)
+    ) {
+      if (!badges.includes("Solid")) {
+        badges.push("Repeater");
+      }
+    }
+
+    if ("0123456789".includes(digits) || "9876543210".includes(digits)) {
+      badges.push("Ladder");
+    }
+
+    const num = parseInt(digits, 10);
+    if (num > 0 && num <= 100) {
+      badges.push(`Low Serial (#${num})`);
+    }
+
+    if (uniqueDigits.size === 2 && !badges.includes("Solid")) {
+      badges.push("Binary");
+    }
+  }
+
+  if (badges.length === 0) return null;
+
+  return {
+    isFancy: true,
+    classification: badges[0],
+    badges,
+  };
 }
 
 export const METAL_LABELS: Record<string, string> = {

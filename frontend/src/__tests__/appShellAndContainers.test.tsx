@@ -11,7 +11,15 @@ import { ToastProvider, useToast } from "../components/ToastProvider";
 import { VaultSwitcher } from "../components/VaultSwitcher";
 import * as apiModule from "../lib/api";
 import { buildCompLinks } from "../lib/compLinks";
-import { formatOz, formatUsd, isCardItem } from "../lib/format";
+import {
+  detectFancySerial,
+  formatOz,
+  formatUsd,
+  hasPreciousMetal,
+  isBanknoteItem,
+  isBullionItem,
+  isCardItem,
+} from "../lib/format";
 import * as imageUtils from "../lib/imageUtils";
 import { cacheItemSnapshot, clearOfflineCache, getCachedItemSnapshot } from "../lib/offlineCache";
 import {
@@ -89,6 +97,45 @@ describe("core utilities, offlineCache, format, compLinks, workspaceContext", ()
     expect(isCardItem({ sort_category: "CARD" })).toBe(true);
     expect(isCardItem({ attributes: { card_game: "Pokemon" } })).toBe(true);
     expect(isCardItem({ category: "COIN" })).toBe(false);
+
+    expect(isBanknoteItem(null)).toBe(false);
+    expect(isBanknoteItem({ category: "PAPER" })).toBe(true);
+    expect(isBanknoteItem({ sort_category: "PAPER" })).toBe(true);
+    expect(isBanknoteItem({ grading_service: "PMG" })).toBe(true);
+    expect(isBanknoteItem({ grading_service: "PCGS_BANKNOTE" })).toBe(true);
+    expect(isBanknoteItem({ attributes: { friedberg_number: "Fr. 1934" } })).toBe(true);
+    expect(isBanknoteItem({ category: "COIN" })).toBe(false);
+
+    expect(isBullionItem(null)).toBe(false);
+    expect(isBullionItem({ category: "BAR" })).toBe(true);
+    expect(isBullionItem({ sort_category: "BAR" })).toBe(true);
+    expect(isBullionItem({ category: "ROUND" })).toBe(true);
+    expect(isBullionItem({ category: "COIN", metal_type: "GOLD" })).toBe(true);
+    expect(isBullionItem({ category: "COIN", metal_type: "NONE" })).toBe(false);
+    expect(isBullionItem({ category: "PAPER" })).toBe(false);
+
+    expect(hasPreciousMetal(null)).toBe(false);
+    expect(hasPreciousMetal({ metal_type: "NONE" })).toBe(false);
+    expect(hasPreciousMetal({ metal_type: "GOLD", fine_troy_oz: "0" })).toBe(false);
+    expect(hasPreciousMetal({ metal_type: "GOLD", fine_troy_oz: "1.0000" })).toBe(true);
+    expect(hasPreciousMetal({ metal_type: "SILVER", weight_value: "10.0" })).toBe(true);
+    expect(hasPreciousMetal({ metal_type: "GOLD", fine_troy_oz: null, weight_value: "1.0" })).toBe(true);
+    expect(hasPreciousMetal({ metal_type: "GOLD", fine_troy_oz: null, weight_value: null })).toBe(false);
+
+    expect(detectFancySerial(null)).toBeNull();
+    expect(detectFancySerial("")).toBeNull();
+    expect(detectFancySerial("   ")).toBeNull();
+    expect(detectFancySerial("123")).toBeNull();
+    expect(detectFancySerial("111")).toBeNull();
+    expect(detectFancySerial("A38291045B")).toBeNull();
+    expect(detectFancySerial("B12345678*")?.badges).toContain("Star Note ★");
+    expect(detectFancySerial("★12345678A")?.badges).toContain("Star Note ★");
+    expect(detectFancySerial("88888888")?.badges).toContain("Solid");
+    expect(detectFancySerial("12344321")?.badges).toContain("Radar");
+    expect(detectFancySerial("12341234")?.badges).toContain("Repeater");
+    expect(detectFancySerial("12345678")?.badges).toContain("Ladder");
+    expect(detectFancySerial("00000007")?.badges).toContain("Low Serial (#7)");
+    expect(detectFancySerial("10011001")?.badges).toContain("Binary");
 
     const cardLinks = buildCompLinks({
       title: "Charizard",

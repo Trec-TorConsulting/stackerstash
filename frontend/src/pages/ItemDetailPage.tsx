@@ -42,6 +42,9 @@ import {
   STATUS_LABELS,
   formatOz,
   formatUsd,
+  hasPreciousMetal,
+  isBanknoteItem,
+  isBullionItem,
   isCardItem,
 } from "../lib/format";
 import {
@@ -53,6 +56,7 @@ import {
 } from "../lib/imageUtils";
 import { cacheItemSnapshot, getCachedItemSnapshot } from "../lib/offlineCache";
 import { AppraisalProgressBanner } from "../components/valuation/AppraisalProgressBanner";
+import { BanknoteSpecsCard } from "../components/valuation/BanknoteSpecsCard";
 import { CardSpecsCard } from "../components/valuation/CardSpecsCard";
 import { CollectibilityThesisCard } from "../components/valuation/CollectibilityThesisCard";
 import { EstimatedGradeCard } from "../components/valuation/EstimatedGradeCard";
@@ -771,7 +775,7 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
               </div>
               <div className="text-xs text-slate-500 mt-1">Source: {item.valuation_source}</div>
             </div>
-            {item.category === "CARD" || Boolean(item.attributes?.card_game) ? (
+            {isCardItem(item) ? (
               <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
                 <div className="text-xs text-slate-400">Grade / Condition</div>
                 <div className="text-2xl font-mono font-bold text-slate-100 mt-1">
@@ -785,6 +789,20 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
                       item.attributes?.rarity ||
                       (item.serial_number ? `Serial: ${item.serial_number}` : "Trading Card")
                   )}
+                </div>
+              </div>
+            ) : isBanknoteItem(item) && !hasPreciousMetal(item) ? (
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+                <div className="text-xs text-slate-400">Grade / Serial</div>
+                <div className="text-2xl font-mono font-bold text-slate-100 mt-1">
+                  {item.grading_service !== "NONE" && item.grade
+                    ? `${item.grading_service} ${item.grade}`
+                    : String(item.estimated_grade || item.grade || "Raw")}
+                </div>
+                <div className="text-xs text-slate-500 mt-1 truncate">
+                  {item.serial_number
+                    ? `Serial: ${item.serial_number}`
+                    : item.series || "Paper Currency"}
                 </div>
               </div>
             ) : (
@@ -828,7 +846,15 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
             </div>
             {item.year && (
               <div className="flex justify-between">
-                <span className="text-slate-400">Year / Series Date</span>
+                <span className="text-slate-400">
+                  {isCardItem(item)
+                    ? "Release Year"
+                    : isBanknoteItem(item)
+                      ? "Series / Year"
+                      : item.category === "BAR"
+                        ? "Production Year / Vintage"
+                        : "Year / Mint Date"}
+                </span>
                 <span className="font-mono">{item.year}</span>
               </div>
             )}
@@ -838,7 +864,10 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
                 <span>{item.country}</span>
               </div>
             )}
-            {item.denomination && (
+            {item.denomination &&
+              (item.category === "COIN" ||
+                isBanknoteItem(item) ||
+                (item.category !== "CARD" && item.category !== "BAR" && item.category !== "ROUND")) && (
               <div className="flex justify-between">
                 <span className="text-slate-400">Denomination</span>
                 <span className="font-mono">{item.denomination}</span>
@@ -852,7 +881,13 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
             )}
             {item.mint_or_refiner && (
               <div className="flex justify-between">
-                <span className="text-slate-400">Mint / Refiner</span>
+                <span className="text-slate-400">
+                  {isCardItem(item)
+                    ? "Manufacturer / Publisher"
+                    : isBanknoteItem(item)
+                      ? "Issuing Bank / Printer"
+                      : "Mint / Refiner"}
+                </span>
                 <span>{item.mint_or_refiner}</span>
               </div>
             )}
@@ -884,12 +919,14 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
                 )}
               </div>
             </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400">Metal &amp; Fine Weight</span>
-              <span className="font-mono">
-                {METAL_LABELS[item.metal_type]} ({formatOz(Number(item.fine_troy_oz) * item.quantity)})
-              </span>
-            </div>
+            {(hasPreciousMetal(item) || isBullionItem(item)) && (
+              <div className="flex justify-between">
+                <span className="text-slate-400">Metal &amp; Fine Weight</span>
+                <span className="font-mono">
+                  {METAL_LABELS[item.metal_type]} ({formatOz(Number(item.fine_troy_oz) * item.quantity)})
+                </span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span className="text-slate-400">Cost Basis</span>
               <span className="font-mono">{formatUsd(item.purchase_price)}</span>
@@ -1210,11 +1247,25 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-400 mb-1">Year / Series Date</label>
+                  <label className="block text-xs text-slate-400 mb-1">
+                    {editForm.category === "CARD"
+                      ? "Release Year"
+                      : editForm.category === "PAPER"
+                        ? "Series / Year Date"
+                        : editForm.category === "BAR"
+                          ? "Production Year / Vintage"
+                          : "Year / Mint Date"}
+                  </label>
                   <input
                     value={editForm.year}
                     onChange={(e) => setEditForm({ ...editForm, year: e.target.value })}
-                    placeholder="e.g. 2017A, 1921"
+                    placeholder={
+                      editForm.category === "CARD"
+                        ? "e.g. 1999, 2023"
+                        : editForm.category === "PAPER"
+                          ? "e.g. 1934, 2017A"
+                          : "e.g. 2017A, 1921"
+                    }
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm font-mono"
                   />
                 </div>
@@ -1227,30 +1278,52 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
                   />
                 </div>
+                {editForm.category !== "CARD" &&
+                  editForm.category !== "BAR" &&
+                  editForm.category !== "ROUND" && (
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">Denomination</label>
+                      <input
+                        value={editForm.denomination}
+                        onChange={(e) => setEditForm({ ...editForm, denomination: e.target.value })}
+                        placeholder="e.g. $100, $1"
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                      />
+                    </div>
+                  )}
+                {editForm.category !== "BAR" && editForm.category !== "ROUND" && (
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Series</label>
+                    <input
+                      value={editForm.series}
+                      onChange={(e) => setEditForm({ ...editForm, series: e.target.value })}
+                      placeholder={
+                        editForm.category === "CARD"
+                          ? "e.g. Base Set, Sun & Moon"
+                          : "e.g. Federal Reserve Note, Morgan Dollar"
+                      }
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                    />
+                  </div>
+                )}
                 <div>
-                  <label className="block text-xs text-slate-400 mb-1">Denomination</label>
-                  <input
-                    value={editForm.denomination}
-                    onChange={(e) => setEditForm({ ...editForm, denomination: e.target.value })}
-                    placeholder="e.g. $100, $1"
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">Series</label>
-                  <input
-                    value={editForm.series}
-                    onChange={(e) => setEditForm({ ...editForm, series: e.target.value })}
-                    placeholder="e.g. Federal Reserve Note, Morgan Dollar"
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">Mint / Refiner</label>
+                  <label className="block text-xs text-slate-400 mb-1">
+                    {editForm.category === "CARD"
+                      ? "Manufacturer / Publisher"
+                      : editForm.category === "PAPER"
+                        ? "Issuing Bank / Printer"
+                        : "Mint / Refiner"}
+                  </label>
                   <input
                     value={editForm.mint_or_refiner}
                     onChange={(e) => setEditForm({ ...editForm, mint_or_refiner: e.target.value })}
-                    placeholder="e.g. U.S. Mint, BEP, Geiger"
+                    placeholder={
+                      editForm.category === "CARD"
+                        ? "e.g. WotC, Nintendo, Topps"
+                        : editForm.category === "PAPER"
+                          ? "e.g. BEP, New York Fed"
+                          : "e.g. U.S. Mint, BEP, Geiger"
+                    }
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
                   />
                 </div>
@@ -1304,67 +1377,91 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
                   />
                 </div>
-                <div>
-                  <label htmlFor="edit-metal-type" className="block text-xs text-slate-400 mb-1">
-                    Metal Type
-                  </label>
-                  <select
-                    id="edit-metal-type"
-                    value={editForm.metal_type}
-                    onChange={(e) => setEditForm({ ...editForm, metal_type: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
-                  >
-                    {Object.entries(METAL_LABELS).map(([k, v]) => (
-                      <option key={k} value={k}>
-                        {v}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <label htmlFor="edit-weight-value" className="block text-xs text-slate-400 mb-1">
-                      Weight
-                    </label>
-                    <input
-                      id="edit-weight-value"
-                      type="number"
-                      step="0.0001"
-                      value={editForm.weight_value}
-                      onChange={(e) => setEditForm({ ...editForm, weight_value: e.target.value })}
-                      className="w-full px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="edit-weight-unit" className="block text-xs text-slate-400 mb-1">
-                      Unit
-                    </label>
-                    <select
-                      id="edit-weight-unit"
-                      value={editForm.weight_unit}
-                      onChange={(e) => setEditForm({ ...editForm, weight_unit: e.target.value })}
-                      className="w-full px-2 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                {editForm.category !== "CARD" &&
+                  (editForm.category !== "PAPER" || editForm.metal_type !== "NONE") && (
+                    <>
+                      <div>
+                        <label htmlFor="edit-metal-type" className="block text-xs text-slate-400 mb-1">
+                          Metal Type
+                        </label>
+                        <select
+                          id="edit-metal-type"
+                          value={editForm.metal_type}
+                          onChange={(e) => setEditForm({ ...editForm, metal_type: e.target.value })}
+                          className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                        >
+                          {Object.entries(METAL_LABELS).map(([k, v]) => (
+                            <option key={k} value={k}>
+                              {v}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <label htmlFor="edit-weight-value" className="block text-xs text-slate-400 mb-1">
+                            Weight
+                          </label>
+                          <input
+                            id="edit-weight-value"
+                            type="number"
+                            step="0.0001"
+                            value={editForm.weight_value}
+                            onChange={(e) => setEditForm({ ...editForm, weight_value: e.target.value })}
+                            className="w-full px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="edit-weight-unit" className="block text-xs text-slate-400 mb-1">
+                            Unit
+                          </label>
+                          <select
+                            id="edit-weight-unit"
+                            value={editForm.weight_unit}
+                            onChange={(e) => setEditForm({ ...editForm, weight_unit: e.target.value })}
+                            className="w-full px-2 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                          >
+                            <option value="OZ_T">ozt</option>
+                            <option value="G">g</option>
+                            <option value="KG">kg</option>
+                            <option value="OZ_AVDP">oz</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label htmlFor="edit-purity" className="block text-xs text-slate-400 mb-1">
+                            Purity
+                          </label>
+                          <input
+                            id="edit-purity"
+                            type="number"
+                            step="0.0001"
+                            value={editForm.purity}
+                            onChange={(e) => setEditForm({ ...editForm, purity: e.target.value })}
+                            className="w-full px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
+                {editForm.category === "PAPER" && editForm.metal_type === "NONE" && (
+                  <div className="sm:col-span-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEditForm({
+                          ...editForm,
+                          metal_type: "GOLD",
+                          weight_value: "0.001",
+                          weight_unit: "OZ_T",
+                          purity: "0.999000",
+                        })
+                      }
+                      className="text-xs text-amber-400 hover:text-amber-300 transition"
                     >
-                      <option value="OZ_T">ozt</option>
-                      <option value="G">g</option>
-                      <option value="KG">kg</option>
-                      <option value="OZ_AVDP">oz</option>
-                    </select>
+                      + Add Precious Metal Content (e.g. Goldback)
+                    </button>
                   </div>
-                  <div>
-                    <label htmlFor="edit-purity" className="block text-xs text-slate-400 mb-1">
-                      Purity
-                    </label>
-                    <input
-                      id="edit-purity"
-                      type="number"
-                      step="0.0001"
-                      value={editForm.purity}
-                      onChange={(e) => setEditForm({ ...editForm, purity: e.target.value })}
-                      className="w-full px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm"
-                    />
-                  </div>
-                </div>
+                )}
                 <div>
                   <label className="block text-xs text-slate-400 mb-1">Vendor</label>
                   <input
@@ -1557,6 +1654,18 @@ export function ItemDetailPage({ activeWorkspace }: { activeWorkspace?: UserWork
         </div>
         {isCardItem(item) ? (
           <CardSpecsCard
+            item={item}
+            isSaving={updateMut.isPending}
+            onSaveSpecs={
+              canEdit
+                ? async (patch) => {
+                    await updateMut.mutateAsync(patch);
+                  }
+                : undefined
+            }
+          />
+        ) : isBanknoteItem(item) ? (
+          <BanknoteSpecsCard
             item={item}
             isSaving={updateMut.isPending}
             onSaveSpecs={

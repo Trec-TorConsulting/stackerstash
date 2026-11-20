@@ -216,4 +216,102 @@ describe("ItemDetailPage slab removal & quantity updates", () => {
     expect(await screen.findByText(/Not found in this vault/i)).toBeInTheDocument();
     expect(screen.queryByText("Secret Vault Item")).not.toBeInTheDocument();
   });
+
+  it("tailors banknote item details by suppressing metal metrics and displaying Grade/Serial hero and BanknoteSpecsCard", async () => {
+    const banknoteItem = makeItem({
+      category: "PAPER",
+      title: "1934 $20 Federal Reserve Note",
+      country: "United States",
+      year: "1934",
+      denomination: "$20",
+      series: "Federal Reserve Note",
+      mint_or_refiner: "New York Fed",
+      metal_type: "NONE",
+      fine_troy_oz: "0",
+      total_melt_value: "0.00",
+      collector_premium_total: "0.00",
+      serial_number: "B01234567*",
+      grading_service: "PMG",
+      grade: "Gem Uncirculated 66 EPQ",
+    });
+
+    renderItemDetail(banknoteItem);
+
+    expect(await screen.findByText("1934 $20 Federal Reserve Note")).toBeInTheDocument();
+    expect(screen.getByText("Grade / Serial")).toBeInTheDocument();
+    expect(screen.getAllByText("PMG Gem Uncirculated 66 EPQ").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Serial: B01234567*")).toBeInTheDocument();
+    expect(screen.queryByText("Melt Value")).not.toBeInTheDocument();
+    expect(screen.queryByText("Metal & Fine Weight")).not.toBeInTheDocument();
+
+    expect(screen.getByText("Series / Year")).toBeInTheDocument();
+    expect(screen.getByText("Issuing Bank / Printer")).toBeInTheDocument();
+    expect(screen.getByText("Denomination")).toBeInTheDocument();
+    expect(screen.getByText("Banknote Specifications")).toBeInTheDocument();
+    expect(screen.queryByText("Numismatic Specifications")).not.toBeInTheDocument();
+
+    const updateSpy = vi.spyOn(api, "updateItem").mockResolvedValue(banknoteItem);
+    fireEvent.click(screen.getByRole("button", { name: /Edit Specs/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Save Specifications/i }));
+    await waitFor(() => expect(updateSpy).toHaveBeenCalled());
+  });
+
+  it("tailors card item details by hiding denomination and metal weight", async () => {
+    const cardItem = makeItem({
+      category: "CARD",
+      title: "1999 Charizard 1st Edition",
+      country: "United States",
+      year: "1999",
+      denomination: "$0",
+      series: "Base Set",
+      mint_or_refiner: "Wizards of the Coast",
+      metal_type: "NONE",
+      fine_troy_oz: "0",
+      total_melt_value: "0.00",
+      is_card_item: true,
+      card_game: "Pokémon",
+      grading_service: "PSA",
+      grade: "10",
+      attributes: { card_game: "Pokémon" },
+    });
+
+    renderItemDetail(cardItem);
+
+    expect(await screen.findByText("1999 Charizard 1st Edition")).toBeInTheDocument();
+    expect(screen.getByText("Grade / Condition")).toBeInTheDocument();
+    expect(screen.queryByText("Melt Value")).not.toBeInTheDocument();
+    expect(screen.queryByText("Metal & Fine Weight")).not.toBeInTheDocument();
+    expect(screen.queryByText("Denomination")).not.toBeInTheDocument();
+    expect(screen.getByText("Release Year")).toBeInTheDocument();
+    expect(screen.getByText("Manufacturer / Publisher")).toBeInTheDocument();
+    expect(screen.getByText("Card Specifications")).toBeInTheDocument();
+  });
+
+  it("displays live melt value and metal weight for bullion bar while hiding denomination", async () => {
+    const barItem = makeItem({
+      category: "BAR",
+      title: "10 oz Silver Bar",
+      country: "Switzerland",
+      year: "2022",
+      denomination: "",
+      series: "",
+      mint_or_refiner: "PAMP Suisse",
+      metal_type: "SILVER",
+      fine_troy_oz: "10.0000",
+      total_melt_value: "300.00",
+      collector_premium_total: "25.00",
+      grading_service: "NONE",
+      grade: "",
+    });
+
+    renderItemDetail(barItem);
+
+    expect(await screen.findByText("10 oz Silver Bar")).toBeInTheDocument();
+    expect(screen.getByText("Melt Value")).toBeInTheDocument();
+    expect(screen.getByText("Metal & Fine Weight")).toBeInTheDocument();
+    expect(screen.queryByText("Denomination")).not.toBeInTheDocument();
+    expect(screen.getByText("Production Year / Vintage")).toBeInTheDocument();
+    expect(screen.getByText("Mint / Refiner")).toBeInTheDocument();
+    expect(screen.getByText("Numismatic Specifications")).toBeInTheDocument();
+  });
 });
