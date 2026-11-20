@@ -64,24 +64,8 @@ export async function convertHeicToJpeg(file: File | Blob, quality = 0.92): Prom
     return file instanceof File ? file : new File([file], "converted.jpg", { type: "image/jpeg" });
   }
 
-  // 1. Try fast in-browser conversion via heic2any
-  try {
-    const heic2anyModule = await import("heic2any");
-    const heic2any = heic2anyModule.default || heic2anyModule;
-    const result = await heic2any({
-      blob: file,
-      toType: "image/jpeg",
-      quality,
-    });
-    const blob = Array.isArray(result) ? result[0] : result;
-    const rawName = "name" in file && typeof file.name === "string" ? file.name : "photo.jpg";
-    const baseName = rawName.replace(/\.(heic|heif|hif)$/i, "") || "photo";
-    return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
-  } catch (err) {
-    console.warn("Client-side HEIC conversion failed, falling back to server:", err);
-  }
-
-  // 2. Authoritative server-side conversion fallback via backend pillow-heif
+  // 1. Primary: Authoritative server-side conversion via backend pillow-heif
+  // Fast, handles 24MP-48MP modern iPhone HEIC formats without browser memory crashes or CSP EvalErrors
   try {
     const { api } = await import("./api");
     const rawName = "name" in file && typeof file.name === "string" ? file.name : "photo.heic";
@@ -90,7 +74,29 @@ export async function convertHeicToJpeg(file: File | Blob, quality = 0.92): Prom
       return converted;
     }
   } catch (serverErr) {
-    console.warn("Server-side HEIC conversion fallback failed:", serverErr);
+    console.warn("Server-side HEIC conversion failed, falling back to client:", serverErr);
+  }
+
+  // 2. Client fallback (e.g. offline PWA mode) protected with a strict 3s timeout
+  try {
+    const heic2anyModule = await import("heic2any");
+    const heic2any = heic2anyModule.default || heic2anyModule;
+    const result = await Promise.race([
+      heic2any({
+        blob: file,
+        toType: "image/jpeg",
+        quality,
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("heic2any conversion timed out")), 3000)
+      ),
+    ]);
+    const blob = Array.isArray(result) ? result[0] : result;
+    const rawName = "name" in file && typeof file.name === "string" ? file.name : "photo.jpg";
+    const baseName = rawName.replace(/\.(heic|heif|hif)$/i, "") || "photo";
+    return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
+  } catch (err) {
+    console.warn("Client-side HEIC conversion fallback failed:", err);
   }
 
   return file instanceof File ? file : new File([file], "photo.heic", { type: "image/heic" });
